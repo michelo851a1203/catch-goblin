@@ -13,6 +13,8 @@
 ![Vite](https://img.shields.io/badge/Vite-8-646cff?logo=vite&logoColor=white)
 ![No Backend](https://img.shields.io/badge/後端-不需要-brightgreen)
 
+### [🎮 線上試玩 → michelo851a1203.github.io/catch-goblin](https://michelo851a1203.github.io/catch-goblin/)
+
 <img src="docs/screenshots/select.jpg" alt="選角畫面" width="820" />
 
 </div>
@@ -177,8 +179,8 @@
 
 ```bash
 # 1. 下載專案
-git clone https://github.com/<your-username>/goblin-game.git
-cd goblin-game
+git clone https://github.com/michelo851a1203/catch-goblin.git
+cd catch-goblin
 
 # 2. 安裝套件
 bun install        # 或 npm install
@@ -196,7 +198,14 @@ bun run build      # 輸出到 dist/
 bun run preview    # 本機預覽打包結果
 ```
 
-`dist/` 是純靜態檔案，可以直接部署到 GitHub Pages、Vercel、Netlify 等平台。
+`dist/` 是純靜態檔案，可以直接部署到任何靜態網站平台。
+
+### 🌐 部署到 GitHub Pages
+
+推送到 `main` 分支後，[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) 會自動打包並部署。
+第一次使用前，請到 repo 的 **Settings → Pages → Build and deployment → Source** 選擇 **GitHub Actions**。
+
+> 部署時會用 `BASE_PATH=/<repo 名稱>/` 打包，讓資源路徑對應 GitHub Pages 的子路徑；本機開發不受影響。
 
 ### 🧪 測試用網址參數
 
