@@ -1,15 +1,157 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant-TW">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>精靈與哥布林</title>
+    <title>快逃啊！哥布林女精靈來山洞了｜免費 3D 瀏覽器鬼抓人遊戲</title>
+    <meta name="description" content="免下載、免安裝的 3D 非對稱鬼抓人網頁遊戲。扮演手持豎琴的女精靈，在 10 分鐘內抓光 8 隻哥布林；或化身機靈的哥布林，和夥伴躲進山洞、互相救援撐到最後！薩爾達風卡通渲染，打開瀏覽器就能玩。" />
+    <meta name="keywords" content="快逃啊哥布林女精靈來山洞了, 精靈與哥布林, 哥布林遊戲, 女精靈, 鬼抓人, 非對稱遊戲, 網頁遊戲, 瀏覽器遊戲, 免費小遊戲, 3D 遊戲, Three.js 遊戲, Elf and Goblins" />
+    <meta name="author" content="MichaelHo" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta name="theme-color" content="#1c4434" />
+    <link rel="canonical" href="https://michelo851a1203.github.io/catch-goblin/" />
+
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="alternate" type="text/markdown" title="LLM 摘要" href="/llms.txt" />
+
+    <!-- Open Graph：Facebook / LINE / Discord / Threads 等分享預覽 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="快逃啊！哥布林女精靈來山洞了" />
+    <meta property="og:locale" content="zh_TW" />
+    <meta property="og:url" content="https://michelo851a1203.github.io/catch-goblin/" />
+    <meta property="og:title" content="快逃啊！哥布林女精靈來山洞了" />
+    <meta property="og:description" content="1 位女精靈 vs 8 隻哥布林的 3D 鬼抓人！精靈要在 10 分鐘內抓光哥布林，哥布林要靠團隊合作撐到最後。免下載，瀏覽器直接玩。" />
+    <meta property="og:image" content="https://michelo851a1203.github.io/catch-goblin/og-image.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="遊戲封面：快逃啊！哥布林女精靈來山洞了，女精靈與哥布林角色卡" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="快逃啊！哥布林女精靈來山洞了" />
+    <meta name="twitter:description" content="1 位女精靈 vs 8 隻哥布林的 3D 鬼抓人！免下載，瀏覽器直接玩。" />
+    <meta name="twitter:image" content="https://michelo851a1203.github.io/catch-goblin/og-image.jpg" />
+    <meta name="twitter:image:alt" content="遊戲封面：快逃啊！哥布林女精靈來山洞了，女精靈與哥布林角色卡" />
+
+    <!-- 結構化資料：讓搜尋引擎與 AI 助理理解這是什麼遊戲（內容需與下方 #app 內的介紹一致） -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://michelo851a1203.github.io/catch-goblin/#website",
+            "url": "https://michelo851a1203.github.io/catch-goblin/",
+            "name": "快逃啊！哥布林女精靈來山洞了",
+            "alternateName": ["精靈與哥布林", "Elf & Goblins"],
+            "inLanguage": "zh-Hant-TW"
+          },
+          {
+            "@type": ["VideoGame", "WebApplication"],
+            "@id": "https://michelo851a1203.github.io/catch-goblin/#game",
+            "name": "快逃啊！哥布林女精靈來山洞了",
+            "alternateName": ["精靈與哥布林", "Elf & Goblins"],
+            "description": "免費、免安裝的 3D 非對稱鬼抓人瀏覽器遊戲。1 位女精靈要在 10 分鐘內把 8 隻哥布林全部抓進牢籠；哥布林則要躲進山洞、互相救援，只要有一隻撐到時間結束就獲勝。",
+            "url": "https://michelo851a1203.github.io/catch-goblin/",
+            "image": "https://michelo851a1203.github.io/catch-goblin/og-image.jpg",
+            "genre": ["非對稱遊戲", "鬼抓人", "休閒", "動作"],
+            "gamePlatform": "Web browser",
+            "applicationCategory": "GameApplication",
+            "operatingSystem": "Windows, macOS, Linux（需支援 WebGL 2 的瀏覽器）",
+            "playMode": "SinglePlayer",
+            "numberOfPlayers": { "@type": "QuantitativeValue", "value": 1 },
+            "inLanguage": "zh-Hant-TW",
+            "isAccessibleForFree": true,
+            "offers": { "@type": "Offer", "price": 0, "priceCurrency": "TWD", "availability": "https://schema.org/InStock" },
+            "author": { "@type": "Person", "name": "MichaelHo", "url": "https://github.com/michelo851a1203" },
+            "codeRepository": "https://github.com/michelo851a1203/catch-goblin",
+            "isPartOf": { "@id": "https://michelo851a1203.github.io/catch-goblin/#website" }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://michelo851a1203.github.io/catch-goblin/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "「快逃啊！哥布林女精靈來山洞了」是什麼遊戲？",
+                "acceptedAnswer": { "@type": "Answer", "text": "一款在瀏覽器上就能玩的 3D 非對稱鬼抓人遊戲。玩家可以選擇扮演 1 位女精靈去抓哥布林，或扮演 8 隻哥布林中的 1 隻（其餘由 AI 控制）想辦法逃過 10 分鐘。" }
+              },
+              {
+                "@type": "Question",
+                "name": "需要下載或付費嗎？",
+                "acceptedAnswer": { "@type": "Answer", "text": "完全免費，不需下載或註冊。用支援 WebGL 2 的電腦瀏覽器（Chrome、Edge、Firefox、Safari 最新版）打開網址就能直接遊玩。" }
+              },
+              {
+                "@type": "Question",
+                "name": "怎麼樣才算獲勝？",
+                "acceptedAnswer": { "@type": "Answer", "text": "女精靈要在 10 分鐘內把所有哥布林抓進草原中央的牢籠；只要時間結束時還有任何一隻哥布林沒被抓到，就是哥布林獲勝。" }
+              },
+              {
+                "@type": "Question",
+                "name": "女精靈和哥布林各有哪些技能？",
+                "acceptedAnswer": { "@type": "Answer", "text": "女精靈有凝視（定身）、彈奏豎琴（吸引哥布林）、打暈與捕獲；哥布林有加速衝刺、攪局救出被打包的同伴、整場限用一次的大招掙脫，以及精靈闖進山洞時會警告的哥布林雷達。" }
+              },
+              {
+                "@type": "Question",
+                "name": "要怎麼操作？手機可以玩嗎？",
+                "acceptedAnswer": { "@type": "Answer", "text": "使用 WASD 移動、滑鼠拖曳或方向鍵轉動視角、Q / E / F / R 等按鍵施放技能。目前需要鍵盤操作，建議使用電腦遊玩。" }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Noto+Serif+TC:wght@400;700;900&display=swap" rel="stylesheet" />
+    <style>
+      /* 遊戲 JS 載入前顯示的介紹（也是給不執行 JS 的搜尋引擎 / AI 爬蟲讀的內容），Vue 掛載後會被取代 */
+      html { background: #0b1411; }
+      .intro { max-width: 720px; margin: 0 auto; padding: 18vh 16px 48px; color: #d6c9a6; font-family: 'Noto Serif TC', serif; line-height: 1.7; }
+      .intro h1 { color: #fff3d6; font-size: clamp(24px, 5vw, 44px); margin: 0 0 8px; text-align: center; }
+      .intro .tagline { text-align: center; margin: 0 0 24px; }
+      .intro .loading { text-align: center; color: #c9b27a; letter-spacing: 0.3em; margin-bottom: 40vh; }
+      .intro h2 { color: #fff3d6; font-size: 20px; margin: 32px 0 8px; }
+      .intro dt { color: #fff3d6; font-weight: 700; margin-top: 12px; }
+      .intro dd { margin: 0; }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main class="intro">
+        <h1>快逃啊！哥布林女精靈來山洞了</h1>
+        <p class="tagline">免費 3D 非對稱鬼抓人・1 位女精靈 vs 8 隻哥布林・瀏覽器直接玩</p>
+        <p class="loading">遊戲載入中…</p>
+
+        <section>
+          <h2>遊戲介紹</h2>
+          <p>在一望無際的大草原上散落著好幾座哥布林山洞。某天，一位手持豎琴的女精靈來到草原，開始了她的狩獵。你可以扮演女精靈，在 10 分鐘內把 8 隻哥布林全部抓進牢籠；也可以化身其中一隻哥布林，和 AI 夥伴一起躲進山洞、互相救援，只要有任何一隻撐到時間結束就獲勝。</p>
+          <p>遊戲以 Three.js 打造薩爾達風卡通渲染，所有角色與場景都是程式即時生成，免下載、免註冊、完全免費。</p>
+        </section>
+
+        <section>
+          <h2>角色與技能</h2>
+          <p><strong>女精靈</strong>：移動速度較快。凝視（Q）射出愛心眼神定身哥布林 2 秒；彈奏樂器（E）吸引範圍內的哥布林並讓捕獲時間減半；打暈（F）與捕獲（R）把哥布林裝進麻袋送進牢籠。</p>
+          <p><strong>哥布林</strong>：數量多、有山洞可躲。加速（Shift / Q）短暫衝刺；攪局（F）打斷精靈的捕獲救出同伴；大招・掙脫（R）整場限用一次；哥布林雷達會在精靈闖進山洞時發出警告。</p>
+        </section>
+
+        <section>
+          <h2>常見問題</h2>
+          <dl>
+            <dt>這是什麼遊戲？</dt>
+            <dd>一款在瀏覽器上就能玩的 3D 非對稱鬼抓人遊戲，可以扮演女精靈或哥布林。</dd>
+            <dt>需要下載或付費嗎？</dt>
+            <dd>完全免費，不需下載或註冊，用支援 WebGL 2 的電腦瀏覽器（Chrome、Edge、Firefox、Safari 最新版）就能玩。</dd>
+            <dt>怎麼樣才算獲勝？</dt>
+            <dd>精靈要在 10 分鐘內抓光所有哥布林；時間結束時還有哥布林沒被抓到，就是哥布林獲勝。</dd>
+            <dt>要怎麼操作？手機可以玩嗎？</dt>
+            <dd>WASD 移動、滑鼠拖曳或方向鍵轉視角、Q / E / F / R 施放技能。目前需要鍵盤操作，建議使用電腦遊玩。</dd>
+          </dl>
+        </section>
+      </main>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

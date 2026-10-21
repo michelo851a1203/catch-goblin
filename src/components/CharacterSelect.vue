@@ -79,7 +79,7 @@ function back() {
     <div class="glow"></div>
     <header>
       <p class="eyebrow">— 草原上的捉迷藏 —</p>
-      <h1 data-text="精靈與哥布林">精靈與哥布林</h1>
+      <h1 data-text="快逃啊！哥布林女精靈來山洞了">快逃啊！哥布林女精靈來山洞了</h1>
       <p class="lead">選擇你的陣營</p>
     </header>
 
@@ -191,7 +191,7 @@ header {
   margin: 0;
 }
 h1 {
-  font-size: clamp(32px, 5vw, 56px);
+  font-size: clamp(22px, 4.6vw, 54px);
   margin: 4px 0;
   color: #fff3d6;
   letter-spacing: 0.15em;
@@ -491,6 +491,9 @@ footer {
   gap: 8px;
 }
 @media (max-width: 640px) {
+  h1 {
+    letter-spacing: 0.06em;
+  }
   .fairy-dust {
   position: absolute;
   left: 50%;
