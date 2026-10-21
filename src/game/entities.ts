@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { CONFIG } from './config'
 import { createElf, createGoblin, type CharacterModel, type Pose } from './models'
+import { ElfCharacter } from './elf/ElfCharacter'
 import { makeSprite } from './toon'
 
 export class Actor {
@@ -138,9 +139,13 @@ export class Elf extends Actor {
     dest: null as THREE.Vector3 | null,
   }
   fx: { bar: ReturnType<typeof barSprites>; stunned: THREE.Sprite }
+  // GLB 綁骨角色；載入完成前（或失敗時）顯示程序化的 createElf()
+  readonly character: ElfCharacter
 
   constructor() {
-    super(createElf(), CONFIG.elf.radius)
+    const character = new ElfCharacter({ fallback: createElf() })
+    super(character, CONFIG.elf.radius)
+    this.character = character
     const bar = barSprites()
     bar.group.position.y = 2.25
     const stunned = makeSprite('💥', 0.6, { w: 128, h: 128, font: 90 })

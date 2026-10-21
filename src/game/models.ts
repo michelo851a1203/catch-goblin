@@ -173,22 +173,22 @@ class Ribbon {
   }
 }
 
-// 漸細且向後彎的髮束
-function lockGeo(len: number, r: number, bend: number, wave = 0) {
+// 漸細且向後彎的髮束（wave 為左右波浪幅度，phase 讓每束波浪錯開）
+function lockGeo(len: number, r: number, bend: number, wave = 0, phase = 0) {
   const pts: THREE.Vector2[] = []
-  const n = 10
+  const n = 14
   for (let i = 0; i <= n; i++) {
     const t = i / n
-    const rad = r * Math.sin(Math.min(1, t * 3 + 0.25) * Math.PI * 0.5) * (1 - t * 0.82)
-    pts.push(new THREE.Vector2(Math.max(0.002, rad), -t * len))
+    const rad = r * Math.sin(Math.min(1, t * 3 + 0.25) * Math.PI * 0.5) * (1 - t * 0.86)
+    pts.push(new THREE.Vector2(Math.max(0.0015, rad), -t * len))
   }
-  const g = new THREE.LatheGeometry(pts, 8)
+  const g = new THREE.LatheGeometry(pts, 10)
   const p = g.attributes.position
   for (let i = 0; i < p.count; i++) {
     const y = p.getY(i)
     const t = -y / len
     p.setZ(i, p.getZ(i) - bend * t * t)
-    p.setX(i, p.getX(i) + Math.sin(t * Math.PI * 2) * wave)
+    p.setX(i, p.getX(i) + Math.sin(t * Math.PI * 2.2 + phase) * wave * Math.min(1, t * 2))
   }
   g.scale(1, 1, 0.6)
   g.computeVertexNormals()
@@ -680,6 +680,9 @@ export function createElf(): CharacterModel {
   const root = new THREE.Group()
   const body = pivot(0, 0, 0, root)
   const skin = toon(C.elfSkin)
+  // 手臂與肩膀描邊細一點，避免看起來像木偶關節
+  const skinArm = toon(C.elfSkin, { emissive: 0x1a120c })
+  skinArm.userData.outlineParameters = { thickness: 0.0025, color: [0.35, 0.22, 0.16], alpha: 1, visible: true }
   const hairA = toon(C.elfHair, { emissive: 0x3a2c0c })
   // 細髮束不描邊，避免變成黑色線條
   const lockA = toon(C.elfHair, { emissive: 0x3a2c0c, outline: false })
@@ -766,14 +769,44 @@ export function createElf(): CharacterModel {
   sheer.mesh.rotation.y = Math.PI
   waist.add(sheer.mesh)
 
-  // 上身
+  // 上身：露肩白紗禮服（胸口以上是肌膚、領口有荷葉邊）
   const chest = pivot(0, 0.98, 0, body)
   const bodicePts = [
-    [0.13, 0], [0.12, 0.08], [0.14, 0.2], [0.155, 0.28], [0.145, 0.34], [0.09, 0.38], [0.04, 0.4],
+    [0.13, 0], [0.12, 0.08], [0.14, 0.2], [0.156, 0.27], [0.158, 0.295], [0.152, 0.3],
   ].map(([x, y]) => new THREE.Vector2(x, y))
-  const bodice = mesh(new THREE.LatheGeometry(bodicePts, 18), toon(C.gown))
+  const bodice = mesh(new THREE.LatheGeometry(bodicePts, 24), toon(C.gown))
   bodice.scale.z = 0.82
   chest.add(bodice)
+  const torsoPts = [
+    [0.148, 0.26], [0.153, 0.3], [0.15, 0.33], [0.125, 0.365], [0.08, 0.395], [0.045, 0.42],
+  ]
+  const torsoR = (y: number) => {
+    for (let i = 1; i < torsoPts.length; i++) {
+      const [r0, y0] = torsoPts[i - 1], [r1, y1] = torsoPts[i]
+      if (y <= y1) return r0 + ((r1 - r0) * (y - y0)) / (y1 - y0)
+    }
+    return torsoPts[torsoPts.length - 1][0]
+  }
+  const torso = mesh(new THREE.LatheGeometry(torsoPts.map(([x, y]) => new THREE.Vector2(x, y)), 24), skin)
+  torso.scale.z = 0.82
+  chest.add(torso)
+  // 領口荷葉邊
+  const frillGeo = new THREE.TorusGeometry(0.157, 0.012, 6, 40)
+  {
+    const p = frillGeo.attributes.position
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i)
+      const a = Math.atan2(y, x)
+      const k = 1 + Math.sin(a * 22) * 0.025
+      p.setXY(i, x * k, y * k)
+    }
+    frillGeo.rotateX(Math.PI / 2)
+    frillGeo.computeVertexNormals()
+  }
+  const frill = mesh(frillGeo, toon(C.gown))
+  frill.position.y = 0.293
+  frill.scale.z = 0.84
+  chest.add(frill)
   const corsetPts = [[0.133, 0.0], [0.124, 0.08], [0.143, 0.2]].map(([x, y]) => new THREE.Vector2(x, y))
   const corset = mesh(new THREE.LatheGeometry(corsetPts, 12, -0.7, 1.4), toon(C.gownGreen, { side: THREE.DoubleSide }))
   corset.scale.z = 0.84
@@ -783,197 +816,313 @@ export function createElf(): CharacterModel {
     lace.position.set(0, 0.03 + k * 0.045, 0.114 + k * 0.004)
     chest.add(lace)
   }
-  // 胸前的金色裝飾與寶石墜飾
-  const collarCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-0.1, 0.36, 0.02),
-    new THREE.Vector3(-0.05, 0.3, 0.09),
-    new THREE.Vector3(0, 0.27, 0.105),
-    new THREE.Vector3(0.05, 0.3, 0.09),
-    new THREE.Vector3(0.1, 0.36, 0.02),
-  ])
-  chest.add(mesh(new THREE.TubeGeometry(collarCurve, 20, 0.007, 4, false), gold, false))
-  const pendant = mesh(new THREE.OctahedronGeometry(0.022), gemMat)
-  pendant.position.set(0, 0.255, 0.11)
+  // 貼著鎖骨的金項鍊與寶石墜飾
+  const collarCurve = new THREE.CatmullRomCurve3(
+    Array.from({ length: 13 }, (_, i) => {
+      const a = (-0.5 + i / 12) * 2.3
+      const y = 0.338 + 0.05 * Math.pow(a / 1.15, 2)
+      const r = torsoR(y) + 0.004
+      return new THREE.Vector3(Math.sin(a) * r, y, Math.cos(a) * r * 0.82)
+    }),
+  )
+  chest.add(mesh(new THREE.TubeGeometry(collarCurve, 30, 0.0045, 4, false), gold, false))
+  const pendant = mesh(new THREE.OctahedronGeometry(0.018), gemMat)
+  pendant.position.set(0, 0.318, torsoR(0.318) * 0.82 + 0.008)
   pendant.scale.y = 1.4
   chest.add(pendant)
-  const neck = mesh(new THREE.CylinderGeometry(0.04, 0.048, 0.12, 8), skin)
+  const neck = mesh(new THREE.CylinderGeometry(0.034, 0.042, 0.12, 12), skin)
   neck.position.y = 0.43
   chest.add(neck)
-  for (const s of [-1, 1]) {
-    const sh = mesh(new THREE.SphereGeometry(0.05, 8, 6), skin)
-    sh.position.set(0.13 * s, 0.35, 0)
-    chest.add(sh)
-  }
 
-  // 手臂與紗袖
+  // 手臂與紗袖：肩到手腕是一體成形的蒙皮網格，手肘彎曲時不會有接縫
+  const armProfile: THREE.Vector2[] = []
+  const ARM_LEN = 0.49
+  for (let i = 0; i <= 40; i++) {
+    const y = 0.034 - (i / 40) * (ARM_LEN + 0.034)
+    let r: number
+    if (y > 0.012) r = 0.031 * Math.sqrt(Math.max(0, 1 - Math.pow((y - 0.012) / 0.022, 2)))
+    else if (y > -0.25) r = 0.031 - ((0.012 - y) / 0.262) * 0.01 // 上臂漸細
+    else if (y > -0.34) r = 0.021 + Math.sin(((-0.25 - y) / 0.09) * Math.PI * 0.5) * 0.002 // 前臂
+    else if (y > -0.47) r = 0.023 - ((-0.34 - y) / 0.13) * 0.008 // 收到手腕
+    else r = 0.015 * Math.sqrt(Math.max(0, 1 - Math.pow((-0.47 - y) / 0.02, 2)))
+    armProfile.push(new THREE.Vector2(Math.max(0.001, r), y))
+  }
+  const armGeo = new THREE.LatheGeometry(armProfile.reverse(), 14) // 由下往上排列，法線才會朝外
+  {
+    const p = armGeo.attributes.position
+    const idx: number[] = [], w: number[] = []
+    for (let i = 0; i < p.count; i++) {
+      const y = p.getY(i)
+      const k = THREE.MathUtils.smoothstep(-y, 0.21, 0.29)
+      idx.push(0, 1, 0, 0)
+      w.push(1 - k, k, 0, 0)
+    }
+    armGeo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4))
+    armGeo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(w, 4))
+  }
   const arms: { sh: THREE.Group; elbow: THREE.Group; hand: THREE.Group; sleeve: Ribbon }[] = []
+  const armMeshes: { m: THREE.SkinnedMesh; bones: THREE.Bone[] }[] = []
   const sleeveMat = toon(0xffffff, { side: THREE.DoubleSide, transparent: true, opacity: 0.55, outline: false })
+  const puffMat = toon(C.gown)
   for (const s of [-1, 1]) {
-    const sh = pivot(0.165 * s, 0.34, 0, chest)
-    sh.add(capsule(0.032, 0.2, skin))
+    const sh = pivot(0.162 * s, 0.335, 0, chest)
     const elbow = pivot(0, -0.25, 0, sh)
-    elbow.add(capsule(0.028, 0.18, skin))
-    const armlet = mesh(new THREE.TorusGeometry(0.036, 0.008, 4, 12), gold, false)
+    const bones = [new THREE.Bone(), new THREE.Bone()]
+    sh.add(bones[0])
+    elbow.add(bones[1])
+    const arm = new THREE.SkinnedMesh(armGeo, skinArm)
+    arm.castShadow = true
+    sh.add(arm)
+    armMeshes.push({ m: arm, bones })
+    // 落肩的荷葉袖口
+    const puff = mesh(new THREE.TorusGeometry(0.036, 0.013, 6, 16), puffMat)
+    puff.rotation.x = Math.PI / 2
+    puff.position.y = -0.045
+    sh.add(puff)
+    const armlet = mesh(new THREE.TorusGeometry(0.03, 0.006, 4, 12), gold, false)
     armlet.rotation.x = Math.PI / 2
-    armlet.position.y = -0.06
+    armlet.position.y = -0.14
     sh.add(armlet)
-    const bracelet = mesh(new THREE.TorusGeometry(0.031, 0.008, 4, 12), gold, false)
+    const bracelet = mesh(new THREE.TorusGeometry(0.02, 0.006, 4, 12), gold, false)
     bracelet.rotation.x = Math.PI / 2
-    bracelet.position.y = -0.19
+    bracelet.position.y = -0.2
     elbow.add(bracelet)
     const hand = pivot(0, -0.23, 0, elbow)
-    const palm = mesh(new THREE.SphereGeometry(0.035, 8, 6), skin)
+    const palm = mesh(new THREE.SphereGeometry(0.027, 10, 8), skinArm)
     palm.scale.set(0.8, 1.2, 0.5)
     palm.position.y = -0.03
     hand.add(palm)
-    const fingers = mesh(new THREE.CapsuleGeometry(0.022, 0.04, 2, 6), skin)
+    const fingers = mesh(new THREE.CapsuleGeometry(0.017, 0.045, 2, 8), skinArm)
     fingers.scale.z = 0.5
     fingers.position.y = -0.08
     hand.add(fingers)
     const sleeve = new Ribbon(0.2, 0.55, sleeveMat, 8, -0.4)
-    sleeve.mesh.position.set(0, -0.02, -0.03)
+    sleeve.mesh.position.set(0, -0.05, -0.03)
     sleeve.mesh.rotation.y = Math.PI / 2
     sh.add(sleeve.mesh)
     arms.push({ sh, elbow, hand, sleeve })
   }
+  // 綁定骨架（此時手臂是自然下垂的靜止姿勢）
+  root.updateMatrixWorld(true)
+  for (const a of armMeshes) a.m.bind(new THREE.Skeleton(a.bones))
 
   // 頭
   const head = pivot(0, 0.56, 0.01, chest)
   head.scale.setScalar(1.12)
-  const faceGeo = new THREE.SphereGeometry(0.125, 20, 16)
+  // 臉型：鵝蛋臉、尖下巴（onFace 用同一組係數把五官貼到臉上）
+  const FR = 0.125, FX = 0.86, FY = 1.1, FZ = 0.95
+  const chinK = (py: number) => (py < 0 ? 1 - Math.pow(-py / FR, 1.7) * 0.4 : 1)
+  const chinZ = (py: number) => (py < 0 ? 1 - (-py / FR) * 0.14 : 1)
+  const faceGeo = new THREE.SphereGeometry(FR, 32, 24)
   {
     const p = faceGeo.attributes.position
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), y = p.getY(i), z = p.getZ(i)
-      const chin = y < 0 ? 1 - (-y / 0.125) * 0.28 : 1 // 尖下巴
-      p.setXYZ(i, x * 0.92 * chin, y * 1.08, z * 0.96 * (y < 0 ? 1 - (-y / 0.125) * 0.1 : 1))
+      p.setXYZ(i, x * FX * chinK(y), y * FY, z * FZ * chinZ(y))
     }
     faceGeo.computeVertexNormals()
   }
-  head.add(mesh(faceGeo, skin))
-  const lids: THREE.Mesh[] = []
+  // 臉用較柔和的色階，避免下半臉出現一大塊陰影
+  const faceGrad = new THREE.DataTexture(new Uint8Array([215, 238, 255]), 3, 1, THREE.RedFormat)
+  faceGrad.minFilter = faceGrad.magFilter = THREE.NearestFilter
+  faceGrad.needsUpdate = true
+  const faceSkin = new THREE.MeshToonMaterial({ color: C.elfSkin, emissive: 0x3a2418, gradientMap: faceGrad })
+  faceSkin.userData.outlineParameters = { thickness: 0.004, color: [0.08, 0.06, 0.05], alpha: 1, visible: true }
+  head.add(mesh(faceGeo, faceSkin))
+  // 把扁平的五官貼片放到臉的 (x, y) 位置，並沿著法線朝外
+  const onFace = (x: number, y: number, lift = 0.0015) => {
+    const py = y / FY
+    const px = x / (FX * chinK(py))
+    const pz = Math.sqrt(Math.max(0, FR * FR - px * px - py * py))
+    const n = new THREE.Vector3(px / FX, py / FY, pz / FZ).normalize()
+    const g = new THREE.Group()
+    g.position.set(x, y, pz * FZ * chinZ(py)).addScaledVector(n, lift)
+    g.rotation.set(-Math.asin(n.y), Math.atan2(n.x, n.z), 0, 'YXZ')
+    head.add(g)
+    return g
+  }
+  // 扁平貼片：沿臉部曲率微彎，避免邊緣浮起
+  const decal = (shape: THREE.Shape | THREE.BufferGeometry, mat: THREE.Material, z = 0) => {
+    const g = shape instanceof THREE.Shape ? new THREE.ShapeGeometry(shape, 16) : shape
+    const p = g.attributes.position
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i)
+      p.setZ(i, z - (x * x + y * y) / (2 * FR * 0.95))
+    }
+    g.computeVertexNormals()
+    const m = mesh(g, mat, false)
+    m.renderOrder = 1
+    return m
+  }
+  const ellipse = (rx: number, ry: number, cx = 0, cy = 0) => {
+    const s = new THREE.Shape()
+    s.absellipse(cx, cy, rx, ry, 0, Math.PI * 2, false, 0)
+    return s
+  }
+  // 兩條曲線圍成的月牙形（睫毛、眉毛、嘴角用）
+  const crescent = (pts: THREE.Vector2[], thick: (t: number) => number) => {
+    const n = pts.length - 1
+    const s = new THREE.Shape()
+    pts.forEach((p, i) => (i ? s.lineTo(p.x, p.y + thick(i / n)) : s.moveTo(p.x, p.y + thick(0))))
+    for (let i = n; i >= 0; i--) s.lineTo(pts[i].x, pts[i].y)
+    return s
+  }
+  const flat = (c: number, extra: THREE.MeshToonMaterialParameters = {}) =>
+    toon(c, { outline: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, ...extra })
+
+  // 眼睛：杏仁眼、漸層虹膜、雙高光、上揚睫毛（+x 為眼尾）
+  const EW = 0.0255, EH = 0.022, EB = 0.015
+  const eyeTop = new THREE.CubicBezierCurve(new THREE.Vector2(-EW, 0.002), new THREE.Vector2(-EW * 0.55, EH * 1.25), new THREE.Vector2(EW * 0.55, EH * 1.2), new THREE.Vector2(EW, EH * 0.25))
+  const eyeBot = new THREE.CubicBezierCurve(new THREE.Vector2(EW, EH * 0.25), new THREE.Vector2(EW * 0.75, -EB * 1.2), new THREE.Vector2(-EW * 0.65, -EB * 1.25), new THREE.Vector2(-EW, 0.002))
+  const whiteShape = new THREE.Shape()
+  whiteShape.moveTo(-EW, 0.002)
+  whiteShape.bezierCurveTo(eyeTop.v1.x, eyeTop.v1.y, eyeTop.v2.x, eyeTop.v2.y, eyeTop.v3.x, eyeTop.v3.y)
+  whiteShape.bezierCurveTo(eyeBot.v1.x, eyeBot.v1.y, eyeBot.v2.x, eyeBot.v2.y, eyeBot.v3.x, eyeBot.v3.y)
+  const lashPts = eyeTop.getPoints(16)
+  lashPts.push(new THREE.Vector2(EW * 1.25, EH * 0.6)) // 眼尾上揚
+  const lashShape = crescent(lashPts, (t) => 0.0015 + Math.pow(t, 1.4) * 0.0055 - (t > 0.97 ? 0.006 : 0))
+  const lowLash = crescent(eyeBot.getPoints(10).slice(0, 5), (t) => 0.0018 * (1 - t))
+  const eyeL = toon(0xffffff, { outline: false, side: THREE.DoubleSide, emissive: 0x404040 })
+  const eyes: { inner: THREE.Group; lash: THREE.Mesh }[] = []
   for (const s of [-1, 1]) {
-    const eye = pivot(0.044 * s, 0.002, 0.103, head)
-    eye.rotation.y = 0.18 * s
-    const white = mesh(new THREE.SphereGeometry(0.026, 12, 8), toon(0xffffff, { outline: false }))
-    white.scale.set(1.25, 0.95, 0.45)
-    eye.add(white)
-    const iris = mesh(new THREE.SphereGeometry(0.018, 12, 8), toon(C.elfIris, { outline: false, emissive: 0x0a2a1a }))
-    iris.scale.set(1, 1.15, 0.35)
-    iris.position.z = 0.009
-    eye.add(iris)
-    const pupil = mesh(new THREE.SphereGeometry(0.009, 8, 6), toon(0x112018, { outline: false }))
-    pupil.scale.set(1, 1.2, 0.3)
-    pupil.position.z = 0.014
-    eye.add(pupil)
-    const hi = mesh(new THREE.SphereGeometry(0.005, 6, 4), toon(0xffffff, { outline: false, emissive: 0xffffff }))
-    hi.position.set(-0.006, 0.007, 0.017)
-    eye.add(hi)
-    const lid = mesh(new THREE.SphereGeometry(0.029, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), skin)
-    lid.scale.set(1.25, 1, 0.55)
-    eye.add(lid)
-    lids.push(lid)
-    const lash = mesh(new THREE.TorusGeometry(0.03, 0.0045, 3, 12, Math.PI), toon(C.lash, { outline: false }))
-    lash.position.set(0, 0.002, 0.008)
-    lash.scale.set(1.15, 0.85, 1)
-    eye.add(lash)
-    const wing = mesh(new THREE.ConeGeometry(0.004, 0.02, 3), toon(C.lash, { outline: false }))
-    wing.position.set(0.036 * s, 0.006, 0.006)
-    wing.rotation.z = -1.1 * s
-    eye.add(wing)
-    const brow = mesh(new THREE.TorusGeometry(0.03, 0.0035, 3, 10, Math.PI * 0.7), toon(0xc9a060, { outline: false }))
-    brow.position.set(0.046 * s, 0.048, 0.108)
-    brow.rotation.z = Math.PI * 0.15 + (s > 0 ? -0.15 : 0.15)
-    head.add(brow)
-    const blush = mesh(new THREE.SphereGeometry(0.02, 6, 4), toon(0xf7a5ad, { outline: false, transparent: true, opacity: 0.55 }))
-    blush.position.set(0.065 * s, -0.035, 0.09)
-    blush.scale.set(1.4, 0.6, 0.3)
-    head.add(blush)
-    // 精靈耳
-    const ep = pivot(0.106 * s, -0.012, -0.005, head)
+    const eye = onFace(0.043 * s, 0.004)
+    const sideG = new THREE.Group()
+    sideG.scale.x = s
+    eye.add(sideG)
+    const inner = new THREE.Group()
+    sideG.add(inner)
+    inner.add(decal(whiteShape, eyeL))
+    inner.add(decal(ellipse(0.0165, 0.019, 0.001, 0.001), flat(0x1d4a33), 0.0006))
+    inner.add(decal(ellipse(0.0135, 0.0145, 0.001, -0.002), flat(C.elfIris), 0.0011))
+    inner.add(decal(ellipse(0.009, 0.0055, 0.001, -0.0095), flat(0x8fdcae), 0.0015))
+    inner.add(decal(ellipse(0.0065, 0.0085, 0.001, 0.002), flat(0x0e2418), 0.0019))
+    inner.add(decal(ellipse(0.0052, 0.0058, -0.0055, 0.008), flat(0xffffff, { emissive: 0xffffff }), 0.0024))
+    inner.add(decal(ellipse(0.0024, 0.0024, 0.0065, -0.0065), flat(0xffffff, { emissive: 0xffffff }), 0.0024))
+    const lash = decal(lashShape, flat(C.lash), 0.003)
+    sideG.add(lash)
+    sideG.add(decal(lowLash, flat(0x9a6a4a), 0.003))
+    eyes.push({ inner, lash })
+    // 細眉：柔和弧度
+    const brow = onFace(0.046 * s, 0.044)
+    brow.scale.x = s
+    const browCurve = new THREE.QuadraticBezierCurve(new THREE.Vector2(-0.024, -0.002), new THREE.Vector2(0.0, 0.007), new THREE.Vector2(0.024, -0.003))
+    brow.add(decal(crescent(browCurve.getPoints(12), (t) => 0.0028 * Math.sin(Math.PI * (0.15 + t * 0.85))), flat(0xb98a4e)))
+    // 腮紅
+    const blush = onFace(0.058 * s, -0.03)
+    blush.add(decal(ellipse(0.014, 0.0065), flat(0xf59aa6, { transparent: true, opacity: 0.4, depthWrite: false })))
+    // 精靈耳：細長、往斜上方延伸
+    const ep = pivot(0.1 * s, -0.002, -0.01, head)
     ep.scale.x = s
-    ep.rotation.set(0, -0.75, 0.22)
-    ep.add(mesh(elfEarGeo(0.17, 0.06), skin))
-    const earInner = mesh(elfEarGeo(0.12, 0.035), toon(0xf4b8b0, { outline: false }))
-    earInner.position.set(0.015, 0, 0.012)
+    ep.rotation.set(0, -0.6, 0.42)
+    ep.add(mesh(elfEarGeo(0.13, 0.046), skin))
+    const earInner = mesh(elfEarGeo(0.09, 0.027), toon(0xf4b8b0, { outline: false }))
+    earInner.position.set(0.014, 0, 0.011)
     ep.add(earInner)
-    const earring = mesh(new THREE.OctahedronGeometry(0.012), gemMat, false)
-    earring.position.set(0.01, -0.04, 0.01)
+    const earring = mesh(new THREE.OctahedronGeometry(0.011), gemMat, false)
+    earring.position.set(0.012, -0.034, 0.01)
     ep.add(earring)
   }
-  const noseM = mesh(new THREE.SphereGeometry(0.012, 6, 5), skin)
-  noseM.position.set(0, -0.025, 0.122)
-  noseM.scale.set(0.8, 1, 1)
-  head.add(noseM)
-  const mouthG = pivot(0, -0.062, 0.108, head)
-  for (const y of [0.004, -0.005]) {
-    const lip = mesh(new THREE.SphereGeometry(0.016, 8, 6), toon(C.lips, { outline: false }))
-    lip.scale.set(1.5, 0.45, 0.45)
-    lip.position.y = y
-    mouthG.add(lip)
-  }
+  // 小巧的鼻子：只畫一點陰影與高光，不做立體球
+  const nose = onFace(0.003, -0.03)
+  nose.add(decal(crescent(new THREE.QuadraticBezierCurve(new THREE.Vector2(-0.004, 0), new THREE.Vector2(0.001, -0.003), new THREE.Vector2(0.005, 0.0015)).getPoints(6), () => 0.0016), flat(0xe0a088)))
+  // 嘴：微笑的唇線 + 淡粉下唇；唱歌 / 驚嚇時張口
+  const mouthG = onFace(0, -0.066)
+  const smile = new THREE.QuadraticBezierCurve(new THREE.Vector2(-0.014, 0.0015), new THREE.Vector2(0, -0.0045), new THREE.Vector2(0.014, 0.0015))
+  mouthG.add(decal(crescent(smile.getPoints(12), (t) => 0.0024 * Math.sin(Math.PI * t) + 0.0006), flat(0xc4566a), 0.0008))
+  mouthG.add(decal(ellipse(0.008, 0.003, 0, -0.0065), flat(C.lips, { transparent: true, opacity: 0.7, depthWrite: false })))
+  const mouthOpen = decal(ellipse(0.0085, 0.0075, 0, -0.004), flat(0x9c3a4c), 0.0012)
+  mouthOpen.scale.y = 0.01
+  mouthG.add(mouthOpen)
 
   // 頭髮
   const hairRoot = pivot(0, 0, 0, head)
-  const cap = mesh(new THREE.SphereGeometry(0.138, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.6), hairA)
-  cap.position.set(0, 0.012, -0.012)
-  cap.rotation.x = -0.35
-  cap.scale.set(1.04, 1, 1.05)
+  const cap = mesh(new THREE.SphereGeometry(0.138, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.56), hairA)
+  cap.position.set(0, 0.014, -0.014)
+  cap.rotation.x = -0.38
+  cap.scale.set(0.97, 1, 1.04)
   hairRoot.add(cap)
-  const backCap = mesh(new THREE.SphereGeometry(0.14, 16, 10), hairA)
-  backCap.position.set(0, -0.01, -0.035)
-  backCap.scale.set(1.03, 1.02, 0.92)
+  const backCap = mesh(new THREE.SphereGeometry(0.142, 24, 16), hairA)
+  backCap.position.set(0, -0.012, -0.04)
+  backCap.scale.set(0.96, 1.03, 0.92)
   hairRoot.add(backCap)
-  // 瀏海
-  for (let k = 0; k < 6; k++) {
-    const side = k < 3 ? -1 : 1
-    const kk = k % 3
-    const lp = pivot(side * (0.02 + kk * 0.035), 0.11 - kk * 0.012, 0.085 - kk * 0.012, hairRoot)
-    lp.rotation.set(-0.5, 0, side * (0.12 + kk * 0.22))
-    lp.add(mesh(lockGeo(0.11 + kk * 0.025, 0.038, -0.05, 0.008), kk % 2 ? lockB : lockA))
+  // 髮頂的光澤環（天使環）
+  const shineGeo = new THREE.TorusGeometry(0.1065, 0.0045, 4, 40, 2.0)
+  shineGeo.rotateZ(Math.PI / 2 - 1.05)
+  shineGeo.rotateX(Math.PI / 2)
+  const shine = mesh(shineGeo, toon(0xfff4cf, { outline: false, emissive: 0x6a5a30 }), false)
+  shine.position.y = 0.088
+  cap.add(shine)
+  // 瀏海：多束細髮，由中分往兩側撥
+  for (let k = 0; k < 11; k++) {
+    const u = (k + 0.5) / 11 - 0.5 // -0.5..0.5
+    const side = Math.sign(u)
+    const a = u * 2.3
+    const lp = pivot(Math.sin(a) * 0.112, 0.112 - Math.abs(u) * 0.05, Math.cos(a) * 0.118 - 0.012, hairRoot)
+    lp.rotation.set(-0.42 + Math.abs(u) * 0.3, a * 0.9, side * (0.25 + Math.abs(u) * 0.55))
+    const len = 0.055 + Math.pow(Math.abs(u), 1.5) * 0.34 + srand() * 0.012
+    lp.add(mesh(lockGeo(len, 0.022 + srand() * 0.006, -0.03, 0.006, srand() * 6), k % 3 ? lockA : lockB))
   }
-  // 臉側髮束
+  // 臉側髮束：耳前垂到胸前的長髮，以及耳後的細束
   const sideLocks: THREE.Group[] = []
   for (const s of [-1, 1]) {
-    const lp = pivot(0.105 * s, 0.03, 0.035, hairRoot)
-    lp.add(mesh(lockGeo(0.55, 0.04, -0.04, 0.02), lockA))
-    lp.rotation.z = 0.08 * s
-    sideLocks.push(lp)
+    for (let k = 0; k < 3; k++) {
+      const lp = pivot((0.092 + k * 0.012) * s, 0.035 - k * 0.006, 0.05 - k * 0.04, hairRoot)
+      const len = 0.5 + k * 0.08
+      lp.add(mesh(lockGeo(len, 0.03 - k * 0.003, -0.06 + k * 0.05, 0.018, k * 2 + (s > 0 ? 1 : 0)), k === 1 ? lockB : lockA))
+      lp.rotation.set(0, 0, (0.06 + k * 0.05) * s)
+      sideLocks.push(lp)
+    }
   }
-  // 背後長髮（每束都有彈簧擺動）
+  // 背後長髮：內外兩層、細髮束各自有彈簧擺動與波浪
   const backLocks: { g: THREE.Group; base: number; vel: number; ang: number; side: number }[] = []
-  for (let k = 0; k < 9; k++) {
-    const a = ((k - 4) / 4) * 1.15
-    const lp = pivot(Math.sin(a) * 0.11, 0.02 - Math.abs(k - 4) * 0.008, -0.05 - Math.cos(a) * 0.07, hairRoot)
-    const len = 0.78 - Math.abs(k - 4) * 0.045
-    lp.add(mesh(lockGeo(len, 0.065, 0.12 + srand() * 0.05, 0.03), k % 2 ? lockB : lockA))
-    lp.rotation.set(0.12, a * 0.3, Math.sin(a) * 0.12)
-    backLocks.push({ g: lp, base: 0.12 + Math.abs(k - 4) * 0.02, vel: 0, ang: 0, side: Math.sin(a) })
+  const layers = [
+    { n: 9, spread: 1.0, r: 0.06, len: 0.86, z: -0.03, y: 0.0 },
+    { n: 15, spread: 1.4, r: 0.042, len: 0.78, z: 0.0, y: 0.03 },
+  ]
+  for (const Ly of layers) {
+    for (let k = 0; k < Ly.n; k++) {
+      const u = (k / (Ly.n - 1)) * 2 - 1
+      const a = u * Ly.spread
+      const lp = pivot(Math.sin(a) * 0.125, Ly.y - Math.abs(u) * 0.03, -0.045 + Ly.z - Math.cos(a) * 0.08, hairRoot)
+      const len = Ly.len - Math.abs(u) * 0.16 + srand() * 0.06
+      lp.add(mesh(lockGeo(len, Ly.r * (0.85 + srand() * 0.3), 0.1 + srand() * 0.06, 0.022 + srand() * 0.012, srand() * 6), (k + Ly.n) % 3 ? lockA : lockB))
+      lp.rotation.set(0.12, a * 0.3, Math.sin(a) * 0.14)
+      backLocks.push({ g: lp, base: 0.1 + Math.abs(u) * 0.12, vel: 0, ang: 0, side: Math.sin(a) })
+    }
   }
   // 頭冠與花
   const tiaraCurve = new THREE.CatmullRomCurve3(
     Array.from({ length: 9 }, (_, i) => {
       const a = (-0.5 + i / 8) * Math.PI * 0.95
-      return new THREE.Vector3(Math.sin(a) * 0.142, 0.075 + Math.cos(a) * 0.02, Math.cos(a) * 0.135 - 0.01)
+      return new THREE.Vector3(Math.sin(a) * 0.144, 0.1 + Math.cos(a) * 0.012, Math.cos(a) * 0.137 - 0.016)
     }),
   )
-  hairRoot.add(mesh(new THREE.TubeGeometry(tiaraCurve, 30, 0.007, 4, false), gold, false))
-  for (let i = 0; i < 7; i++) {
-    const a = (-0.5 + i / 6) * Math.PI * 0.9
-    const leaf = mesh(new THREE.ConeGeometry(0.012, 0.045 - Math.abs(i - 3) * 0.006, 4), gold, false)
-    leaf.position.set(Math.sin(a) * 0.145, 0.1 + Math.cos(a) * 0.02, Math.cos(a) * 0.138 - 0.01)
-    leaf.rotation.set(-0.4 * Math.cos(a), 0, -a * 0.4)
+  hairRoot.add(mesh(new THREE.TubeGeometry(tiaraCurve, 30, 0.0055, 4, false), gold, false))
+  // 細緻的金葉（取代原本的尖刺）
+  const leafShape = new THREE.Shape()
+  leafShape.moveTo(0, 0)
+  leafShape.quadraticCurveTo(0.012, 0.016, 0, 0.034)
+  leafShape.quadraticCurveTo(-0.012, 0.016, 0, 0)
+  const leafGeo = new THREE.ShapeGeometry(leafShape, 6)
+  const leafMat = toon(C.gold, { emissive: 0x2a1f00, side: THREE.DoubleSide, outline: false })
+  for (let i = 0; i < 9; i++) {
+    const a = (-0.5 + i / 8) * Math.PI * 0.85
+    const leaf = mesh(leafGeo, leafMat, false)
+    leaf.position.set(Math.sin(a) * 0.146, 0.104 + Math.cos(a) * 0.012, Math.cos(a) * 0.139 - 0.016)
+    leaf.rotation.set(-0.35, a, (i % 2 ? 0.5 : -0.5) * (i === 4 ? 0 : 1))
+    leaf.scale.setScalar(1 - Math.abs(i - 4) * 0.07)
     hairRoot.add(leaf)
   }
-  const crown = mesh(new THREE.OctahedronGeometry(0.018), gemMat)
-  crown.position.set(0, 0.105, 0.135)
+  const crown = mesh(new THREE.OctahedronGeometry(0.016), gemMat)
+  crown.position.set(0, 0.118, 0.128)
   crown.scale.y = 1.5
   hairRoot.add(crown)
   for (const [x, y, z, sc] of [
-    [0.12, 0.06, 0.02, 1.3],
-    [0.135, 0.0, -0.04, 1.0],
-    [0.1, 0.1, -0.03, 0.9],
-    [-0.13, 0.05, 0.0, 1.1],
+    [0.12, 0.07, 0.02, 1.3],
+    [0.135, 0.01, -0.04, 1.0],
+    [0.1, 0.11, -0.03, 0.9],
+    [-0.13, 0.06, 0.0, 1.1],
+    [-0.11, 0.1, -0.05, 0.8],
   ]) {
     const f = flower(sc)
     f.position.set(x, y, z)
@@ -1135,9 +1284,15 @@ export function createElf(): CharacterModel {
         blinkT = 2.5 + Math.random() * 3
       }
       blink = Math.max(0, blink - dt * 8)
-      const closed = pose === 'play' ? 1.1 : pose === 'cast' ? -0.2 : pose === 'stunned' ? 0.9 : -0.9
-      lids.forEach((l) => (l.rotation.x = closed + Math.sin(blink * Math.PI) * 2.0))
-      mouthG.scale.set(1, pose === 'play' ? 1.6 + Math.sin(t * 3) * 0.3 : pose === 'stunned' ? 2 : 1, 1)
+      const open = Math.max(0.06, (pose === 'play' ? 0.06 : pose === 'cast' ? 0.8 : pose === 'stunned' ? 0.3 : 1) - Math.sin(blink * Math.PI))
+      for (const e of eyes) {
+        // 由上往下闔眼：眼睛內容壓扁，睫毛跟著下移成一道弧線
+        e.inner.scale.y = open
+        e.inner.position.y = -0.008 * (1 - open)
+        e.lash.position.y = -0.024 * (1 - open)
+        e.lash.scale.y = 0.55 + 0.45 * open
+      }
+      mouthOpen.scale.y = pose === 'play' ? 0.55 + Math.sin(t * 3) * 0.25 : pose === 'stunned' ? 1 : 0.01
     },
   }
 }

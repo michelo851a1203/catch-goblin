@@ -26,3 +26,7 @@ dist-ssr
 .claude
 .vscode
 .mcp.json
+
+# Blender 自動備份
+*.blend1
+elf-preview.html

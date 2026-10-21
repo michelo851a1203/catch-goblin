@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import { ElfMagicFx } from './elf/ElfMagicFx'
 import { CONFIG, type Role } from './config'
 import { Actor, Elf, Goblin } from './entities'
 import { GAP_HALF, World } from './world'
@@ -103,6 +105,8 @@ export class Game {
   private hudTimer = 0
   private toastId = 0
   fx: FxSystem
+  elfFx: ElfMagicFx
+  private envMap: THREE.Texture
   private staff: ReturnType<FxSystem['createStaff']>
   private shake = 0
   private keys = new Set<string>()
@@ -164,11 +168,19 @@ export class Game {
     this.fx.fires = this.world.fires
     this.fx.caves = this.world.caves
     this.staff = this.fx.createStaff()
+    this.elfFx = new ElfMagicFx(this.scene, this.fx)
+    // 環境光反射只影響 PBR 材質（GLB 精靈），場景其他卡通材質不受影響
+    const pmrem = new THREE.PMREMGenerator(this.renderer)
+    this.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    pmrem.dispose()
+    this.scene.environment = this.envMap
+    this.scene.environmentIntensity = 0.55
 
     // 精靈：在草原中央、牢籠旁
     this.elf = new Elf()
     this.elf.pos.set(0, 0, 7)
     this.elf.isPlayer = role === 'elf'
+    this.elf.character.setCamera(this.camera)
     this.scene.add(this.elf.root)
 
     // 哥布林：分散在各個山洞，玩家在第一個洞
@@ -225,6 +237,9 @@ export class Game {
     for (const [t, n, f] of this.listeners) t.removeEventListener(n, f)
     if (document.pointerLockElement) document.exitPointerLock()
     this.fx.dispose()
+    this.elfFx.dispose()
+    this.elf.character.dispose()
+    this.envMap.dispose()
     this.staff.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
@@ -363,6 +378,7 @@ export class Game {
       }
     }
     this.fx.gazeBeam(origin, dir, len, hitPos, len < G.range - 0.5)
+    this.elfFx.gaze(elf.pos, dir)
     if (hits && this.playerGoblin?.rooted) this.shake = Math.max(this.shake, 0.25)
     sfx.gaze()
     if (hits && this.playerGoblin && this.playerGoblin.rooted > 0) this.toast('你被精靈的眼神定住了！', 'bad')
@@ -377,6 +393,7 @@ export class Game {
     elf.model.setHarp?.(true)
     this.fx.ring(elf.pos, CONFIG.elf.music.radius, 0xffe9a0, 1.4, 0.05)
     this.fx.sparkles(elf.pos, 20, 0xffe6a0, 0.6, 2.5, 1.2)
+    this.elfFx.musicStart(elf.pos)
     if (this.role === 'goblin') this.toast('🎵 精靈開始彈奏豎琴……小心被吸引！', 'warn')
     return true
   }
@@ -419,6 +436,7 @@ export class Game {
     best.dashT = 0
     sfx.stun()
     this.fx.starBurst(best.pos)
+    this.elfFx.stun(best.pos)
     this.fx.pow(best.pos, '咚！', '#ffd23f')
     if (best.isPlayer || this.role === 'elf') this.shake = Math.max(this.shake, best.isPlayer ? 0.45 : 0.2)
     if (best.isPlayer) this.toast('你被打暈了！', 'bad')
@@ -449,7 +467,8 @@ export class Game {
     elf.packing = { g: best, t: 0, total }
     this.fx.dust(best.pos.x, best.pos.z, 10, 1.4)
     this.fx.sparkles(best.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
-    elf.yaw = Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
+    this.elfFx.capture(best.pos)
+    elf.yaw =Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
     if (best.isPlayer) this.toast(best.ultUsed ? '你正在被打包！快叫隊友來救！' : '你正在被打包！按 R 使用大招掙脫！', 'bad')
     else if (this.role === 'goblin') this.toast(`${best.name} 正在被打包！靠近精靈按 F 攪局！`, 'warn')
     return true
@@ -730,6 +749,7 @@ export class Game {
         }
       }
       if (Math.floor(elf.channel / 1.2) !== Math.floor((elf.channel - dt) / 1.2)) this.fx.ring(elf.pos, M.radius, 0xffe9a0, 1.4, 0.05)
+      this.elfFx.musicTick(dt, elf.pos, M.radius)
       if (elf.channel >= M.maxChannel) this.elfStopMusic()
     }
 
@@ -741,7 +761,12 @@ export class Game {
       if (Math.floor(p.t * 4) !== Math.floor((p.t - dt) * 4)) sfx.pack()
       if (p.t >= p.total) this.completeCapture()
     }
-    if (hud.phase === 'over') return
+    if (hud.phase === 'over') {
+      // 結算畫面時精靈仍要動（勝利動作）
+      elf.model.animate(dt, 0, 'normal')
+      this.elfFx.update(dt)
+      return
+    }
 
     // 操控 / AI
     if (playing) {
@@ -787,6 +812,8 @@ export class Game {
     elf.model.animate(dt, elf.moveAmt, elf.pose)
     this.staff.update(dt, elf.channel >= 0, elf.pos)
     for (let k = 0; k < this.fx.rate('elftrail', 2 + elf.moveAmt * 14, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xfff0b0 : 0xc8f0ff, 0.2 + Math.random() * 1.4)
+    this.elfFx.ambient(dt, elf.pos, elf.moveAmt)
+    this.elfFx.update(dt)
     if (elf.packing) for (let k = 0; k < this.fx.rate('pack', 10, dt); k++) this.fx.dust(elf.packing.g.pos.x, elf.packing.g.pos.z, 1, 0.5, 0xc8a870)
     elf.fx.stunned.visible = elf.stagger > 0
     const eb = elf.fx.bar
@@ -971,6 +998,7 @@ export class Game {
     if (this.hud.phase === 'over') return
     this.hud.phase = 'over'
     this.elfStopMusic()
+    if (winner === 'elf') this.elf.character.setVictory(true)
     const captured = this.goblins.filter((g) => g.captured).length
     const won = winner === this.role
     if (won) sfx.win()

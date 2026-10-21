@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "validate:elf": "node tools/validate-glb.mjs public/models/elf/elf.glb --expect-anims Idle,Walk,Run,Play,Cast,Strike,Capture,Victory,Stunned --expect-nodes prop_harp,ElfMesh_LOD0,ElfMesh_LOD1"
   },
   "dependencies": {
     "shaders": "^4.0.4",
@@ -20,6 +22,7 @@
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.3",
     "vite": "^8.3.4",
+    "vitest": "3.2.4",
     "vue-tsc": "^3.3.13"
   }
 }
