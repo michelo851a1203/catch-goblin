@@ -79,7 +79,7 @@ function back() {
     <div class="glow"></div>
     <header>
       <p class="eyebrow">— 草原上的捉迷藏 —</p>
-      <h1 data-text="快逃啊！哥布林女精靈來山洞了">快逃啊！哥布林女精靈來山洞了</h1>
+      <h1 data-text="快逃啊，哥布林！女精靈來山洞了">快逃啊，哥布林！女精靈來山洞了</h1>
       <p class="lead">選擇你的陣營</p>
     </header>
 
