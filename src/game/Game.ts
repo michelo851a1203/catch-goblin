@@ -10,9 +10,11 @@ import { updateElfAI, updateGoblinAI } from './ai'
 import { sfx } from './audio'
 import { FxSystem } from './fx/Effects'
 import { CELL } from './fx/atlas'
+import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 
 export interface SkillView {
   key: string
+  code: string
   name: string
   icon: string
   cd: number
@@ -110,6 +112,7 @@ export class Game {
   private staff: ReturnType<FxSystem['createStaff']>
   private shake = 0
   private keys = new Set<string>()
+  private binds = loadKeybinds()
   private camYaw = 0
   private camPitch = 0.35
   private camDist = 7
@@ -312,18 +315,24 @@ export class Game {
   onAction(code: string) {
     if (this.hud.phase !== 'play') return
     sfx.unlock()
+    // 數字鍵與滑鼠是固定的備用鍵，但若玩家把該鍵綁給其他動作則以自訂為準
+    const bound = [...Object.values(this.binds.move), ...Object.values(this.role === 'elf' ? this.binds.elf : this.binds.goblin)]
+    const free = !bound.some((b) => sameKey(b, code))
+    const hit = (key: string, ...alt: string[]) => sameKey(key, code) || (free && alt.includes(code))
     if (this.role === 'elf') {
-      if (code === 'KeyQ' || code === 'Digit1') this.elfGaze(this.camForward())
-      else if (code === 'KeyE' || code === 'Digit2') this.elf.channel >= 0 ? this.elfStopMusic() : this.elfStartMusic()
-      else if (code === 'KeyF' || code === 'Digit3' || code === 'Mouse0') this.elfStun()
-      else if (code === 'KeyR' || code === 'Digit4' || code === 'Mouse2') this.elfStartCapture()
+      const b = this.binds.elf
+      if (hit(b.gaze, 'Digit1')) this.elfGaze(this.camForward())
+      else if (hit(b.music, 'Digit2')) this.elf.channel >= 0 ? this.elfStopMusic() : this.elfStartMusic()
+      else if (hit(b.stun, 'Digit3', 'Mouse0')) this.elfStun()
+      else if (hit(b.capture, 'Digit4', 'Mouse2')) this.elfStartCapture()
     } else {
       const g = this.playerGoblin!
+      const b = this.binds.goblin
       if (code === 'Tab' && g.captured) this.spectateIdx++
       if (g.captured) return
-      if (code === 'ShiftLeft' || code === 'ShiftRight' || code === 'KeyQ' || code === 'Digit1') this.goblinDash(g)
-      else if (code === 'KeyF' || code === 'Digit2' || code === 'Mouse0') this.goblinInterfere(g)
-      else if (code === 'KeyR' || code === 'Digit3') this.goblinUlt(g)
+      if (hit(b.dash, 'Digit1')) this.goblinDash(g)
+      else if (hit(b.interfere, 'Digit2', 'Mouse0')) this.goblinInterfere(g)
+      else if (hit(b.ult, 'Digit3')) this.goblinUlt(g)
     }
   }
 
@@ -333,13 +342,17 @@ export class Game {
 
   private readMove(out: THREE.Vector3) {
     const k = this.keys
+    const m = this.binds.move
+    const down = (code: string) => [...k].some((c) => sameKey(c, code))
+    // 方向鍵：未被自訂使用時，↑↓ 前後移動、←→ 轉動視角
+    const arrowFree = (code: string) => !Object.values(m).includes(code) && k.has(code)
     let f = 0, r = 0
-    if (k.has('KeyW') || k.has('ArrowUp')) f += 1
-    if (k.has('KeyS') || k.has('ArrowDown')) f -= 1
-    if (k.has('KeyD')) r += 1
-    if (k.has('KeyA')) r -= 1
-    if (k.has('ArrowLeft')) this.camYaw += 0.04
-    if (k.has('ArrowRight')) this.camYaw -= 0.04
+    if (down(m.up) || arrowFree('ArrowUp')) f += 1
+    if (down(m.down) || arrowFree('ArrowDown')) f -= 1
+    if (down(m.right)) r += 1
+    if (down(m.left)) r -= 1
+    if (arrowFree('ArrowLeft')) this.camYaw += 0.04
+    if (arrowFree('ArrowRight')) this.camYaw -= 0.04
     const sy = Math.sin(this.camYaw), cy = Math.cos(this.camYaw)
     out.set(-sy * f + cy * r, 0, -cy * f - sy * r)
     if (out.lengthSq() > 1) out.normalize()
@@ -469,8 +482,8 @@ export class Game {
     this.fx.sparkles(best.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
     this.elfFx.capture(best.pos)
     elf.yaw =Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
-    if (best.isPlayer) this.toast(best.ultUsed ? '你正在被打包！快叫隊友來救！' : '你正在被打包！按 R 使用大招掙脫！', 'bad')
-    else if (this.role === 'goblin') this.toast(`${best.name} 正在被打包！靠近精靈按 F 攪局！`, 'warn')
+    if (best.isPlayer) this.toast(best.ultUsed ? '你正在被打包！快叫隊友來救！' : `你正在被打包！按 ${keyLabel(this.binds.goblin.ult)} 使用大招掙脫！`, 'bad')
+    else if (this.role === 'goblin') this.toast(`${best.name} 正在被打包！靠近精靈按 ${keyLabel(this.binds.goblin.interfere)} 攪局！`, 'warn')
     return true
   }
 
@@ -1026,19 +1039,20 @@ export class Game {
     const elf = this.elf
     if (this.role === 'elf') {
       const E = CONFIG.elf
+      const b = this.binds.elf
       h.skills = [
-        { key: 'Q', name: '凝視', icon: '💗', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
-        { key: 'E', name: elf.channel >= 0 ? '停止彈奏' : '彈奏樂器', icon: '🎵', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
-        { key: 'F', name: '打暈', icon: '💫', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
-        { key: 'R', name: '捕獲', icon: '🎒', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
+        { key: keyLabel(b.gaze), code: b.gaze, name: '凝視', icon: '💗', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
+        { key: keyLabel(b.music), code: b.music, name: elf.channel >= 0 ? '停止彈奏' : '彈奏樂器', icon: '🎵', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
+        { key: keyLabel(b.stun), code: b.stun, name: '打暈', icon: '💫', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
+        { key: keyLabel(b.capture), code: b.capture, name: '捕獲', icon: '🎒', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
       ]
       h.radar = false
       const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < E.capture.range)
       if (elf.stagger > 0) h.hint = '被哥布林干擾了！'
       else if (elf.packing) h.hint = ''
-      else if (elf.channel >= 0) h.hint = '彈奏中……移動或再按 E 解除'
-      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = '按 R 捕獲暈眩的哥布林！'
-      else if (near.length && elf.cd.stun <= 0) h.hint = '按 F（或左鍵）打暈！'
+      else if (elf.channel >= 0) h.hint = `彈奏中……移動或再按 ${keyLabel(b.music)} 解除`
+      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = `按 ${keyLabel(b.capture)} 捕獲暈眩的哥布林！`
+      else if (near.length && elf.cd.stun <= 0) h.hint = `按 ${keyLabel(b.stun)}（或左鍵）打暈！`
       else h.hint = ''
       h.progress = elf.packing ? elf.packing.t / elf.packing.total : -1
       h.progressLabel = elf.packing ? `打包 ${elf.packing.g.name} 中……` : ''
@@ -1046,18 +1060,19 @@ export class Game {
     } else {
       const g = this.playerGoblin!
       const G = CONFIG.goblin
+      const b = this.binds.goblin
       h.skills = [
-        { key: 'Shift', name: '加速', icon: '💨', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
-        { key: 'F', name: '攪局', icon: '🤜', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
-        { key: 'R', name: '大招・掙脫', icon: '💥', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
+        { key: keyLabel(b.dash), code: b.dash, name: '加速', icon: '💨', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
+        { key: keyLabel(b.interfere), code: b.interfere, name: '攪局', icon: '🤜', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
+        { key: keyLabel(b.ult), code: b.ult, name: '大招・掙脫', icon: '💥', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
       ]
       h.radar = !g.captured && g.zone >= 0 && g.zone === elf.zone
       if (g.captured) h.hint = ''
-      else if (g.held) h.hint = g.ultUsed ? '大招已用完……等待隊友攪局！' : '按 R 發動大招掙脫！'
+      else if (g.held) h.hint = g.ultUsed ? '大招已用完……等待隊友攪局！' : `按 ${keyLabel(b.ult)} 發動大招掙脫！`
       else if (g.stun > 0) h.hint = '暈眩中……'
       else if (g.rooted > 0) h.hint = '被凝視定身中！'
       else if (g.attract > 0) h.hint = '被琴聲吸引中……'
-      else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = '按 F 攪局，救出同伴！'
+      else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = `按 ${keyLabel(b.interfere)} 攪局，救出同伴！`
       else if (elf.packing && d2(g.pos, elf.pos) < 30) h.hint = `${elf.packing.g.name} 正在被打包，快去攪局！`
       else h.hint = ''
       h.progress = g.held && elf.packing ? elf.packing.t / elf.packing.total : -1

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.png'
 import goblinArt from '../assets/art/goblin-card.png'
 import type { Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
+import { keyLabel, loadKeybinds } from '../keybinds'
+import KeybindSettings from './KeybindSettings.vue'
 
 const emit = defineEmits<{ start: [role: Role] }>()
 
@@ -14,6 +16,12 @@ const offsets = ref<Record<Role, number>>({ elf: 0, goblin: 0 })
 const stage = ref<HTMLElement | null>(null)
 const cardEls = ref<Record<string, HTMLElement | null>>({})
 const stats = loadStats()
+const binds = ref(loadKeybinds())
+const showSettings = ref(false)
+const moveKeys = computed(() => {
+  const m = binds.value.move
+  return [m.up, m.left, m.down, m.right].map(keyLabel).join(' ')
+})
 // 進場動畫：掛載後下一幀才加上 class，讓 CSS transition 生效
 const entered = ref(false)
 onMounted(() => requestAnimationFrame(() => (entered.value = true)))
@@ -25,7 +33,7 @@ const cards: {
   art: string
   tagline: string
   goal: string
-  skills: { icon: string; key: string; name: string; desc: string }[]
+  skills: { icon: string; key: () => string; name: string; desc: string }[]
 }[] = [
   {
     role: 'elf',
@@ -35,10 +43,10 @@ const cards: {
     tagline: '以琴聲與凝視狩獵的森林守護者',
     goal: '在 10 分鐘內捕獲所有哥布林',
     skills: [
-      { icon: '💗', key: 'Q', name: '凝視', desc: '射出愛心眼神射線，被看到的哥布林定身 2 秒' },
-      { icon: '🎵', key: 'E', name: '彈奏樂器', desc: '原地彈奏，範圍內哥布林被吸引 3 秒，10 秒內更容易被捕獲' },
-      { icon: '💫', key: 'F', name: '打暈', desc: '近距離立即打暈哥布林 2 秒' },
-      { icon: '🎒', key: 'R', name: '捕獲', desc: '把暈眩的哥布林打包，3 秒後完成捕獲' },
+      { icon: '💗', key: () => keyLabel(binds.value.elf.gaze), name: '凝視', desc: '射出愛心眼神射線，被看到的哥布林定身 2 秒' },
+      { icon: '🎵', key: () => keyLabel(binds.value.elf.music), name: '彈奏樂器', desc: '原地彈奏，範圍內哥布林被吸引 3 秒，10 秒內更容易被捕獲' },
+      { icon: '💫', key: () => keyLabel(binds.value.elf.stun), name: '打暈', desc: '近距離立即打暈哥布林 2 秒' },
+      { icon: '🎒', key: () => keyLabel(binds.value.elf.capture), name: '捕獲', desc: '把暈眩的哥布林打包，3 秒後完成捕獲' },
     ],
   },
   {
@@ -49,10 +57,10 @@ const cards: {
     tagline: '群居在山洞裡、機靈又膽小的小傢伙',
     goal: '和夥伴們一起撐過 10 分鐘',
     skills: [
-      { icon: '💨', key: 'Shift', name: '加速', desc: '短時間衝刺 2 秒，冷卻 10 秒' },
-      { icon: '🤜', key: 'F', name: '攪局', desc: '衝到正在打包的精靈身旁，救出被抓的同伴' },
-      { icon: '💥', key: 'R', name: '大招・掙脫', desc: '被打包時掙脫束縛，整場只能用一次' },
-      { icon: '📡', key: '被動', name: '哥布林雷達', desc: '精靈進入你所在的山洞時，頭上會跳出警告' },
+      { icon: '💨', key: () => keyLabel(binds.value.goblin.dash), name: '加速', desc: '短時間衝刺 2 秒，冷卻 10 秒' },
+      { icon: '🤜', key: () => keyLabel(binds.value.goblin.interfere), name: '攪局', desc: '衝到正在打包的精靈身旁，救出被抓的同伴' },
+      { icon: '💥', key: () => keyLabel(binds.value.goblin.ult), name: '大招・掙脫', desc: '被打包時掙脫束縛，整場只能用一次' },
+      { icon: '📡', key: () => '被動', name: '哥布林雷達', desc: '精靈進入你所在的山洞時，頭上會跳出警告' },
     ],
   },
 ]
@@ -77,6 +85,16 @@ function back() {
 <template>
   <div class="select" :class="{ entered }">
     <div class="glow"></div>
+    <button class="gear" aria-label="按鍵設定" title="按鍵設定" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="currentColor"
+          fill-rule="evenodd"
+          d="M10.3 2h3.4l.5 2.6c.7.2 1.4.5 2 .9l2.2-1.5 2.4 2.4-1.5 2.2c.4.6.7 1.3.9 2l2.6.5v3.4l-2.6.5c-.2.7-.5 1.4-.9 2l1.5 2.2-2.4 2.4-2.2-1.5c-.6.4-1.3.7-2 .9l-.5 2.6h-3.4l-.5-2.6c-.7-.2-1.4-.5-2-.9l-2.2 1.5-2.4-2.4 1.5-2.2c-.4-.6-.7-1.3-.9-2L2 13.7v-3.4l2.6-.5c.2-.7.5-1.4.9-2L4 5.6 6.4 3.2l2.2 1.5c.6-.4 1.3-.7 2-.9L10.3 2ZM12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Z"
+        />
+      </svg>
+    </button>
+    <KeybindSettings v-if="showSettings" v-model="binds" @close="showSettings = false" />
     <header>
       <p class="eyebrow">— 草原上的捉迷藏 —</p>
       <h1 data-text="快逃啊，哥布林！女精靈來山洞了">快逃啊，哥布林！女精靈來山洞了</h1>
@@ -119,12 +137,12 @@ function back() {
                 <li v-for="s in c.skills" :key="s.name">
                   <span class="icon">{{ s.icon }}</span>
                   <div>
-                    <b>{{ s.name }} <kbd>{{ s.key }}</kbd></b>
+                    <b>{{ s.name }} <kbd>{{ s.key() }}</kbd></b>
                     <small>{{ s.desc }}</small>
                   </div>
                 </li>
               </ul>
-              <p class="controls">WASD 移動・拖曳滑鼠（或雙擊鎖定）轉動視角・滾輪縮放</p>
+              <p class="controls">{{ moveKeys }} 移動・拖曳滑鼠（或雙擊鎖定）轉動視角・滾輪縮放</p>
               <div class="actions">
                 <button class="ghost" @click.stop="back">返回</button>
                 <button class="go" @click.stop="emit('start', c.role)">開始冒險</button>
@@ -156,6 +174,31 @@ function back() {
   background: radial-gradient(ellipse at 50% 30%, #2f5d4a 0%, #14261f 55%, #0b1411 100%);
   color: #f4ead2;
   font-family: 'Noto Serif TC', serif;
+}
+.gear {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid #c9a24e;
+  background: rgba(20, 30, 24, 0.7);
+  color: #e6c878;
+  transition: transform 0.4s, box-shadow 0.3s;
+}
+.gear svg {
+  width: 34px;
+  height: 34px;
+  display: block;
+}
+.gear:hover {
+  transform: rotate(60deg);
+  box-shadow: 0 0 14px rgba(255, 210, 110, 0.45);
 }
 .glow {
   position: absolute;

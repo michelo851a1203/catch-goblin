@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Game, createHudState } from '../game/Game'
 import type { Role } from '../game/config'
 import { recordResult } from '../stats'
+import { keyLabel, loadKeybinds } from '../keybinds'
 
 const props = defineProps<{ role: Role }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
@@ -22,11 +23,11 @@ const clock = computed(() => {
   const t = Math.ceil(hud.timeLeft)
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`
 })
+const mv = loadKeybinds().move
+const moveKeys = [mv.up, mv.left, mv.down, mv.right].map(keyLabel).join('')
 const won = computed(() => hud.result && hud.result.winner === props.role)
-const keyCode: Record<string, string> = { Q: 'KeyQ', E: 'KeyE', F: 'KeyF', R: 'KeyR', Shift: 'ShiftLeft' }
-
-function press(key: string) {
-  game?.onAction(keyCode[key] ?? key)
+function press(code: string) {
+  game?.onAction(code)
 }
 function toggleSpeed() {
   game?.setSpeed(hud.speed === 1 ? 4 : 1)
@@ -74,7 +75,7 @@ function toggleSpeed() {
         :key="s.key"
         class="skill"
         :class="{ active: s.active, cooling: s.cd > 0, off: !s.usable || s.used }"
-        @click="press(s.key)"
+        @click="press(s.code)"
       >
         <span class="ico">{{ s.used ? '✖' : s.icon }}</span>
         <span class="cd" v-if="s.cd > 0" :style="{ height: (s.cd / s.max) * 100 + '%' }"></span>
@@ -89,7 +90,7 @@ function toggleSpeed() {
       <button @click="toggleSpeed">{{ hud.speed === 1 ? '⏩ 快轉 x4' : '▶ 正常速度' }}</button>
     </div>
 
-    <div class="help">WASD 移動・拖曳滑鼠轉視角（雙擊鎖定滑鼠）・滾輪縮放</div>
+    <div class="help">{{ moveKeys }} 移動・拖曳滑鼠轉視角（雙擊鎖定滑鼠）・滾輪縮放</div>
 
     <div v-if="hud.phase === 'countdown'" class="countdown" :key="hud.countdown">{{ hud.countdown }}</div>
 
