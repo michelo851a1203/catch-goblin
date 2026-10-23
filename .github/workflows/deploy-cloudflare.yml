@@ -1,0 +1,42 @@
+name: Deploy Poki build to Cloudflare Pages
+
+# 只監聽 poki 分支；main 分支的 GitHub Pages 部署（deploy.yml）不受影響
+on:
+  push:
+    branches: [poki]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # 手動觸發時若選了其他分支就不執行，避免把非 Poki 版部署上去
+    if: github.ref == 'refs/heads/poki'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # 需要在 repo 的 Settings → Secrets and variables → Actions 設定：
+      #   CLOUDFLARE_API_TOKEN：具有 Cloudflare Pages「Edit」權限的 API token
+      #   CLOUDFLARE_ACCOUNT_ID：Cloudflare 帳號 ID
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=elf-and-goblins --branch=poki
