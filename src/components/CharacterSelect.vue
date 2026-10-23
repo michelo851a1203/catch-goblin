@@ -11,7 +11,7 @@ import KeybindSettings from './KeybindSettings.vue'
 import { locale, setLocale, t } from '../i18n'
 import { touchMode } from '../input/touch'
 
-const emit = defineEmits<{ start: [role: Role] }>()
+const emit = defineEmits<{ start: [role: Role]; multiplayer: [] }>()
 
 const chosen = ref<Role | null>(null)
 const offsets = ref<Record<Role, number>>({ elf: 0, goblin: 0 })
@@ -100,6 +100,7 @@ function back() {
   <div class="select" :class="{ entered, picked: chosen }">
     <div class="glow"></div>
     <button class="lang" :class="{ solo: touchMode }" @click="toggleLocale">{{ t('langSwitch') }}</button>
+    <button class="mp" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpOpen') }}</button>
     <button v-if="!touchMode" class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
@@ -205,7 +206,19 @@ function back() {
   top: calc(16px + env(safe-area-inset-top));
   right: calc(16px + env(safe-area-inset-right));
 }
-.lang:hover {
+.mp {
+  position: absolute;
+  top: calc(16px + env(safe-area-inset-top));
+  left: calc(16px + env(safe-area-inset-left));
+  z-index: 10;
+  padding: 6px 16px;
+  font-size: 14px;
+  background: rgba(20, 30, 24, 0.7);
+  color: #e6c878;
+  border-color: #c9a24e;
+}
+.lang:hover,
+.mp:hover {
   box-shadow: 0 0 14px rgba(255, 210, 110, 0.45);
 }
 .gear {

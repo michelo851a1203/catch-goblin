@@ -17,6 +17,12 @@ export class Actor {
   isPlayer = false
   radius: number
   avoidSide = 1
+  // 多人連線：位置由網路驅動（房主端＝其他真人玩家；加入者端＝自己以外的所有角色）
+  netDriven = false
+  // 加入者端：最近一次房主廣播的位置（t＝收到後經過的秒數，用來短暫推算）
+  net: { x: number; z: number; yaw: number; t: number } | null = null
+  // 房主強制移動角色（掙脫推開、被捕獲）時遞增，操控者看到變化就以房主位置為準
+  corr = 0
 
   constructor(model: CharacterModel, radius: number) {
     this.model = model

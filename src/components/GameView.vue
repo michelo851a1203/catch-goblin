@@ -2,13 +2,14 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Game, createHudState } from '../game/Game'
 import type { Role } from '../game/config'
+import type { NetLink } from '../net/room'
 import { recordResult } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
 import { t } from '../i18n'
 import { touchMode } from '../input/touch'
 import TouchControls from './TouchControls.vue'
 
-const props = defineProps<{ role: Role }>()
+const props = defineProps<{ role: Role; net?: NetLink }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
 
 const host = ref<HTMLDivElement | null>(null)
@@ -17,7 +18,7 @@ const hud = reactive(createHudState(props.role))
 let game: Game | null = null
 
 onMounted(() => {
-  game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner))
+  game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null)
   game.start()
 })
 onBeforeUnmount(() => game?.dispose())
@@ -115,7 +116,8 @@ function toggleSpeed() {
     <div v-if="hud.spectating" class="spectate">
       {{ touchMode ? t('hudSpectatingTouch', { name: hud.spectating }) : t('hudSpectating', { name: hud.spectating }) }}
       <button @click="nextSpectate">{{ t('hudNext') }}</button>
-      <button @click="toggleSpeed">{{ hud.speed === 1 ? t('hudFast') : t('hudNormal') }}</button>
+      <!-- 多人連線不能快轉 -->
+      <button v-if="!net" @click="toggleSpeed">{{ hud.speed === 1 ? t('hudFast') : t('hudNormal') }}</button>
     </div>
 
     <div v-if="!touchMode" class="help">{{ t('hudHelp', { keys: moveKeys }) }}</div>
@@ -128,8 +130,8 @@ function toggleSpeed() {
         <h2>{{ hud.result.title }}</h2>
         <p>{{ hud.result.detail }}</p>
         <div class="actions">
-          <button class="ghost" @click="leave('menu')">{{ t('hudMenu') }}</button>
-          <button class="go" @click="leave('restart')">{{ t('hudAgain') }}</button>
+          <button class="ghost" @click="leave('menu')">{{ net ? t('mpLeave') : t('hudMenu') }}</button>
+          <button class="go" @click="leave('restart')">{{ net ? t('hudBackRoom') : t('hudAgain') }}</button>
         </div>
       </div>
     </div>

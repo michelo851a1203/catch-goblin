@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, shallowRef } from 'vue'
 import CharacterSelect from './components/CharacterSelect.vue'
 import GameView from './components/GameView.vue'
+import RoomSheet from './components/RoomSheet.vue'
 import type { Role } from './game/config'
+import type { NetLink, Room, RoomError } from './net/room'
 import * as poki from './poki'
 import { t } from './i18n'
 
@@ -11,6 +13,12 @@ const q = new URLSearchParams(location.search).get('role')
 const role = ref<Role | null>(q === 'elf' || q === 'goblin' ? q : null)
 const round = ref(0)
 let busy = false
+
+// 多人連線：進入畫面時先顯示 bottom sheet；關閉即為單機模式
+const sheet = ref(!role.value)
+const room = shallowRef<Room | null>(null)
+const link = shallowRef<NetLink | null>(null)
+const roomError = ref<RoomError | null>(null)
 
 onMounted(() => void poki.loadingFinished())
 
@@ -23,11 +31,56 @@ async function newRound(r: Role) {
   role.value = r
   round.value++
 }
+
+function attach(r: Room) {
+  roomError.value = null
+  room.value = r
+  r.onStart = (l) => {
+    link.value = l
+    round.value++
+  }
+  r.onClose = (why) => {
+    room.value = null
+    link.value = null
+    roomError.value = why
+    // 被拒絕 / 房主離開時重新打開 sheet 顯示原因；自己離開則不打開
+    if (why) sheet.value = true
+  }
+}
+
+function closeSheet() {
+  sheet.value = false
+  roomError.value = null
+  room.value?.leave()
+}
+
+function backToRoom() {
+  link.value = null
+  room.value?.backToLobby()
+}
+
+// 多人回合之間不播插頁廣告（會讓玩家不同步），離開房間回到單機時才播
+async function leaveRoom() {
+  room.value?.leave()
+  sheet.value = false
+  await poki.commercialBreak()
+}
 </script>
 
 <template>
-  <CharacterSelect v-if="!role" @start="newRound" />
-  <GameView v-else :key="round" :role="role" @restart="newRound(role)" @menu="role = null" />
+  <GameView
+    v-if="link"
+    :key="'mp' + round"
+    :role="link.me === 'elf' ? 'elf' : 'goblin'"
+    :net="link"
+    @restart="backToRoom"
+    @menu="leaveRoom"
+  />
+  <GameView v-else-if="role" :key="round" :role="role" @restart="newRound(role)" @menu="role = null" />
+  <template v-else>
+    <CharacterSelect @start="newRound" @multiplayer="sheet = true" />
+    <RoomSheet v-if="sheet || room" :room="room" :error="roomError" @close="closeSheet" @room="attach" />
+  </template>
   <div class="rotate">📱↻<span>{{ t('rotate') }}</span></div>
 </template>
 

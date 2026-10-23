@@ -11,9 +11,46 @@ import { sfx } from './audio'
 import { FxSystem } from './fx/Effects'
 import { CELL } from './fx/atlas'
 import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
-import { t } from '../i18n'
+import { t, type TKey } from '../i18n'
 import * as poki from '../poki'
 import { lowPower, touchMode } from '../input/touch'
+import type { Pose } from './models'
+import type { NetLink } from '../net/room'
+import type { Slot } from '../net/assign'
+
+// ── 多人連線 ──
+// 房主執行整場模擬（AI、技能判定、勝負），每 1/15 秒廣播快照；技能等事件即時以可靠通道廣播，
+// 各端再依自己的視角播放特效 / 音效 / 提示（present）。加入者只回傳自己角色的位置與技能請求。
+type V2 = [number, number]
+export type GameEvent =
+  | { e: 'go' }
+  | { e: 'gaze'; o: V2; d: V2; len: number; hits: number[] }
+  | { e: 'music'; on: boolean }
+  | { e: 'miss'; o: V2; yaw: number }
+  | { e: 'stun'; g: number }
+  | { e: 'pack'; g: number }
+  | { e: 'free'; g: number; by: number; ult: boolean }
+  | { e: 'caught'; g: number; from: V2; to: V2; free: number }
+  | { e: 'dash'; g: number }
+  | { e: 'charm'; g: number }
+  | { e: 'say'; s: Slot; k: TKey }
+  | { e: 'left'; n: number }
+  | { e: 'end'; w: Role; c: number; time: number }
+type Act = 'gaze' | 'music' | 'musicStop' | 'stun' | 'capture' | 'dash' | 'interfere' | 'ult'
+interface Snapshot {
+  t: 's'
+  q: number
+  ph: number
+  cd: number
+  el: number
+  du: number
+  pk: number
+  e: number[]
+  g: number[][]
+}
+const PHASES: HudState['phase'][] = ['countdown', 'play', 'over']
+const CAST_POSES: Pose[] = ['normal', 'cast', 'attack']
+const r2 = (v: number) => Math.round(v * 100) / 100
 
 export interface SkillView {
   key: string
@@ -129,7 +166,16 @@ export class Game {
   // 暫停原因（廣告、分頁隱藏）；任一存在就停止更新與繪製
   private pauses = new Set<string>()
   private listeners: [EventTarget, string, EventListener][] = []
-
+  // 多人連線（單機時為 null）；me＝本機操控的角色
+  net: NetLink | null
+  me: Slot
+  private netOff: (() => void)[] = []
+  private evQueue: GameEvent[] = []
+  private netT = 0
+  private seq = 0
+  private lastSeq = -1
+  private musicStopT = 0
+  private bgTimer = 0
 
   constructor(
     container: HTMLElement,
@@ -137,12 +183,15 @@ export class Game {
     role: Role,
     hud: HudState,
     onEnd: (winner: Role, stats: { captured: number; time: number }) => void,
+    net: NetLink | null = null,
   ) {
     this.container = container
     this.minimap = minimap
     this.role = role
     this.hud = hud
     this.onEnd = onEnd
+    this.net = net
+    this.me = net ? net.me : role === 'elf' ? 'elf' : 0
     const fast = new URLSearchParams(location.search).get('fast')
     this.duration = fast ? Number(fast) || 90 : CONFIG.matchDuration
 
@@ -187,7 +236,7 @@ export class Game {
     // 精靈：在草原中央、牢籠旁
     this.elf = new Elf()
     this.elf.pos.set(0, 0, 7)
-    this.elf.isPlayer = role === 'elf'
+    this.elf.isPlayer = this.me === 'elf'
     this.elf.character.setCamera(this.camera)
     this.scene.add(this.elf.root)
 
@@ -204,10 +253,19 @@ export class Game {
       this.goblins.push(g)
       this.scene.add(g.root)
     }
-    if (role === 'goblin') {
-      this.playerGoblin = this.goblins[0]
+    if (this.me !== 'elf') {
+      this.playerGoblin = this.goblins[this.me]
       this.playerGoblin.isPlayer = true
       this.playerGoblin.name = t('you')
+    }
+    if (net) {
+      for (const [slot, n] of net.numbers) if (slot !== 'elf' && slot !== this.me) this.goblins[slot].name = t('playerN', { n })
+      if (net.host) for (const slot of net.peers.values()) this.actorOf(slot).netDriven = true
+      else for (const a of [this.elf, ...this.goblins]) a.netDriven = !a.isPlayer
+      this.netOff.push(
+        net.listen((from, m) => this.onNet(from, m)),
+        net.onLeave((peer) => this.onPeerLeave(peer)),
+      )
     }
 
     this.marker = new THREE.Mesh(
@@ -231,18 +289,26 @@ export class Game {
 
   start() {
     this.clock.start()
+    // 多人連線時不能因為暫停（分頁隱藏、直拿手機）而停止模擬，否則房主會卡住整個房間；只停止本機輸入
     const loop = () => {
       if (this.disposed) return
       this.raf = requestAnimationFrame(loop)
-      const dt = Math.min(this.clock.getDelta(), 0.05)
-      if (!this.pauses.size) this.tick(dt)
+      const dt = Math.min(this.clock.getDelta(), this.net ? 1 : 0.05)
+      if (!this.pauses.size || this.net) this.tick(dt)
     }
     loop()
+    // 背景分頁不會觸發 requestAnimationFrame，改用計時器繼續模擬（瀏覽器約每秒觸發一次，tick 內會切成小步）
+    if (this.net)
+      this.bgTimer = window.setInterval(() => {
+        if (document.hidden && !this.disposed) this.tick(Math.min(this.clock.getDelta(), 1), false)
+      }, 100)
   }
 
   dispose() {
     this.disposed = true
     cancelAnimationFrame(this.raf)
+    clearInterval(this.bgTimer)
+    for (const off of this.netOff) off()
     poki.gameplayStop()
     for (const [t, n, f] of this.listeners) t.removeEventListener(n, f)
     if (document.pointerLockElement) document.exitPointerLock()
@@ -363,21 +429,52 @@ export class Game {
     const bound = [...Object.values(this.binds.move), ...Object.values(this.role === 'elf' ? this.binds.elf : this.binds.goblin)]
     const free = !bound.some((b) => sameKey(b, code))
     const hit = (key: string, ...alt: string[]) => sameKey(key, code) || (free && alt.includes(code))
+    let act: Act | null = null
     if (this.role === 'elf') {
       const b = this.binds.elf
-      if (hit(b.gaze, 'Digit1')) this.elfGaze(this.camForward())
-      else if (hit(b.music, 'Digit2')) this.elf.channel >= 0 ? this.elfStopMusic() : this.elfStartMusic()
-      else if (hit(b.stun, 'Digit3', 'Mouse0')) this.elfStun()
-      else if (hit(b.capture, 'Digit4', 'Mouse2')) this.elfStartCapture()
+      if (hit(b.gaze, 'Digit1')) act = 'gaze'
+      else if (hit(b.music, 'Digit2')) act = 'music'
+      else if (hit(b.stun, 'Digit3', 'Mouse0')) act = 'stun'
+      else if (hit(b.capture, 'Digit4', 'Mouse2')) act = 'capture'
     } else {
       const g = this.playerGoblin!
       const b = this.binds.goblin
       if (code === 'Tab' && g.captured) this.spectateIdx++
       if (g.captured) return
-      if (hit(b.dash, 'Digit1')) this.goblinDash(g)
-      else if (hit(b.interfere, 'Digit2', 'Mouse0')) this.goblinInterfere(g)
-      else if (hit(b.ult, 'Digit3')) this.goblinUlt(g)
+      if (hit(b.dash, 'Digit1')) act = 'dash'
+      else if (hit(b.interfere, 'Digit2', 'Mouse0')) act = 'interfere'
+      else if (hit(b.ult, 'Digit3')) act = 'ult'
     }
+    if (act) this.act(act)
+  }
+
+  // 本機玩家的技能：房主 / 單機直接執行，加入者送給房主判定
+  private act(act: Act) {
+    const d = act === 'gaze' ? this.camForward() : null
+    const dir: V2 | undefined = d ? [r2(d.x), r2(d.z)] : undefined
+    if (this.authority) this.perform(this.me, act, dir)
+    else this.net!.send({ t: 'act', a: act, d: dir }, true)
+  }
+
+  private perform(slot: Slot, act: Act, d?: V2) {
+    if (this.hud.phase !== 'play') return
+    if (slot === 'elf') {
+      const elf = this.elf
+      if (act === 'gaze') {
+        const dir = Array.isArray(d) ? new THREE.Vector3(Number(d[0]) || 0, 0, Number(d[1]) || 0) : new THREE.Vector3()
+        if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
+        this.elfGaze(dir.normalize())
+      } else if (act === 'music') elf.channel >= 0 ? this.elfStopMusic() : this.elfStartMusic()
+      else if (act === 'musicStop') this.elfStopMusic()
+      else if (act === 'stun') this.elfStun()
+      else if (act === 'capture') this.elfStartCapture()
+      return
+    }
+    const g = this.goblins[slot]
+    if (!g) return
+    if (act === 'dash') this.goblinDash(g)
+    else if (act === 'interfere') this.goblinInterfere(g)
+    else if (act === 'ult') this.goblinUlt(g)
   }
 
   private camForward() {
@@ -406,8 +503,9 @@ export class Game {
   }
 
   // ───────────────────────── 精靈技能 ─────────────────────────
+  // 技能判定只在房主 / 單機執行；結果以事件呈現（present），加入者收到相同事件後播放特效
   private elfCanAct() {
-    return !this.elf.busy && this.hud.phase === 'play'
+    return this.authority && !this.elf.busy && this.hud.phase === 'play'
   }
 
   elfGaze(dir: THREE.Vector3) {
@@ -416,12 +514,9 @@ export class Game {
     if (!this.elfCanAct() || elf.cd.gaze > 0) return false
     elf.cd.gaze = G.cooldown
     elf.yaw = Math.atan2(dir.x, dir.z)
-    elf.castT = 0.45
-    elf.castPose = 'cast'
     const origin = v1.copy(elf.pos)
     const len = this.world.rayDistance(origin, dir, G.range)
-    let hits = 0
-    const hitPos: THREE.Vector3[] = []
+    const hits: number[] = []
     for (const g of this.goblins) {
       if (g.captured || g.held || g.grace > 0) continue
       const ox = g.pos.x - origin.x, oz = g.pos.z - origin.z
@@ -431,16 +526,10 @@ export class Game {
       if (perp < G.width + g.radius) {
         g.rooted = Math.max(g.rooted, G.root)
         g.attract = 0
-        hits++
-        hitPos.push(g.pos.clone())
-        this.floatText(t('fRooted'), g.pos, '#ff7fb8')
+        hits.push(g.id)
       }
     }
-    this.fx.gazeBeam(origin, dir, len, hitPos, len < G.range - 0.5)
-    this.elfFx.gaze(elf.pos, dir)
-    if (hits && this.playerGoblin?.rooted) this.shake = Math.max(this.shake, 0.25)
-    sfx.gaze()
-    if (hits && this.playerGoblin && this.playerGoblin.rooted > 0) this.toast(t('tYouRooted'), 'bad')
+    this.emit({ e: 'gaze', o: [r2(origin.x), r2(origin.z)], d: [dir.x, dir.z], len: r2(len), hits })
     return true
   }
 
@@ -449,20 +538,16 @@ export class Game {
     if (!this.elfCanAct() || elf.cd.music > 0) return false
     elf.channel = 0
     elf.musicAffected.clear()
-    elf.model.setHarp?.(true)
-    this.fx.ring(elf.pos, CONFIG.elf.music.radius, 0xffe9a0, 1.4, 0.05)
-    this.fx.sparkles(elf.pos, 20, 0xffe6a0, 0.6, 2.5, 1.2)
-    this.elfFx.musicStart(elf.pos)
-    if (this.role === 'goblin') this.toast(t('tMusicStart'), 'warn')
+    this.emit({ e: 'music', on: true })
     return true
   }
 
   elfStopMusic() {
     const elf = this.elf
-    if (elf.channel < 0) return
+    if (!this.authority || elf.channel < 0) return
     elf.channel = -1
     elf.cd.music = CONFIG.elf.music.cooldown
-    elf.model.setHarp?.(false)
+    this.emit({ e: 'music', on: false })
   }
 
   elfStun() {
@@ -479,26 +564,17 @@ export class Game {
         best = g
       }
     }
-    elf.castT = 0.3
-    elf.castPose = 'attack'
     if (!best) {
       elf.cd.stun = 0.6
-      this.fx.dust(elf.pos.x + Math.sin(elf.yaw), elf.pos.z + Math.cos(elf.yaw), 4, 0.8, 0xffffff)
-      this.floatText(t('fMiss'), v2.copy(elf.pos).add(new THREE.Vector3(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))), '#dddddd')
+      this.emit({ e: 'miss', o: [r2(elf.pos.x), r2(elf.pos.z)], yaw: r2(elf.yaw) })
       return false
     }
     elf.cd.stun = S.cooldown
-    elf.yaw = Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
     best.stun = S.duration
     best.rooted = 0
     best.attract = 0
     best.dashT = 0
-    sfx.stun()
-    this.fx.starBurst(best.pos)
-    this.elfFx.stun(best.pos)
-    this.fx.pow(best.pos, t('fBonk'), '#ffd23f')
-    if (best.isPlayer || this.role === 'elf') this.shake = Math.max(this.shake, best.isPlayer ? 0.45 : 0.2)
-    if (best.isPlayer) this.toast(t('tYouStunned'), 'bad')
+    this.emit({ e: 'stun', g: best.id })
     return true
   }
 
@@ -517,19 +593,14 @@ export class Game {
       }
     }
     if (!best) {
-      if (this.role === 'elf') this.floatText(t('fNoStunned'), elf.pos, '#dddddd')
+      this.say(elf, 'elf', 'fNoStunned')
       return false
     }
     best.held = true
     this.packId++
     const total = best.charm > 0 ? C.charmedPackTime : C.packTime
     elf.packing = { g: best, t: 0, total }
-    this.fx.dust(best.pos.x, best.pos.z, 10, 1.4)
-    this.fx.sparkles(best.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
-    this.elfFx.capture(best.pos)
-    elf.yaw =Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
-    if (best.isPlayer) this.toast(best.ultUsed ? t('tYouPacked') : touchMode.value ? t('tYouPackedUltTouch') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
-    else if (this.role === 'goblin') this.toast(touchMode.value ? t('tAllyPackedTouch', { name: best.name }) : t('tAllyPacked', { name: best.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
+    this.emit({ e: 'pack', g: best.id })
     return true
   }
 
@@ -546,22 +617,9 @@ export class Game {
     g.grace = CONFIG.goblin.breakFreeGrace
     v1.subVectors(g.pos, elf.pos).setY(0).normalize()
     g.pos.addScaledVector(v1, 1.2)
-    if (reason === 'ult') {
-      g.dashT = 1.2
-      sfx.breakFree()
-      this.fx.shockwave(g.pos)
-      this.fx.pow(g.pos, t('fFree'), '#8ff27a')
-      this.shake = Math.max(this.shake, 0.5)
-      this.toast(g.isPlayer ? t('tYouBrokeFree') : t('tBrokeFree', { name: g.name }), g.isPlayer || this.role === 'goblin' ? 'good' : 'bad')
-    } else {
-      sfx.interfere()
-      const at = by ? by.pos.clone().lerp(elf.pos, 0.5) : g.pos
-      this.fx.starBurst(at, 0x9effa0)
-      this.fx.pow(at, 'POW!', '#ffd23f')
-      this.fx.dust(g.pos.x, g.pos.z, 10, 1.6)
-      this.shake = Math.max(this.shake, 0.35)
-      this.toast(t('tRescued', { by: by?.isPlayer ? t('you') : by?.name ?? t('aGoblin'), name: g.isPlayer ? t('you') : g.name }), this.role === 'goblin' ? 'good' : 'bad')
-    }
+    g.corr++
+    if (reason === 'ult') g.dashT = 1.2
+    this.emit({ e: 'free', g: g.id, by: by ? by.id : -1, ult: reason === 'ult' })
   }
 
   private completeCapture() {
@@ -569,49 +627,39 @@ export class Game {
     const g = elf.packing!.g
     elf.packing = null
     elf.cd.capture = CONFIG.elf.capture.cooldown
+    const n = this.goblins.filter((x) => x.captured).length
     g.captured = true
     g.held = false
     g.stun = g.rooted = g.attract = g.charm = 0
     g.capturedAt = this.elapsed
     g.zone = -2
-    const n = this.goblins.filter((x) => x.captured).length - 1
+    g.corr++
     const a = n * (Math.PI * 2 / CONFIG.goblinCount)
     const to = new THREE.Vector3(this.world.cagePos.x + Math.cos(a) * 1.5, 0, this.world.cagePos.z + Math.sin(a) * 1.5)
-    g.flight = { from: g.pos.clone(), to, t: 0, dur: Math.min(2.2, 0.8 + g.pos.distanceTo(to) / 60) }
-    g.pos.copy(to)
-    g.vel.set(0, 0, 0)
-    this.fx.sparkles(g.flight.from, 24, 0xffe6a0, 0.6, 3, 1)
-    this.fx.ring(g.flight.from, 3, 0xffe6a0, 0.6, 0.12)
-    sfx.captured()
     if (!elf.isPlayer) elf.ai.patrolWait = CONFIG.elf.aiRest
     const free = this.goblins.filter((x) => !x.captured).length
-    if (g.isPlayer) {
-      this.toast(t(touchMode.value ? 'tYouCapturedTouch' : 'tYouCaptured'), 'bad')
-      this.setSpeed(1)
-    } else this.toast(t('tCaptured', { name: g.name, n: free }), this.role === 'elf' ? 'good' : 'bad')
+    this.emit({ e: 'caught', g: g.id, from: [r2(g.pos.x), r2(g.pos.z)], to: [r2(to.x), r2(to.z)], free })
     if (free === 0) this.finish('elf')
   }
 
   // ───────────────────────── 哥布林技能 ─────────────────────────
   goblinDash(g: Goblin) {
-    if (g.captured || g.disabled || g.dashCd > 0) return false
+    if (!this.authority || g.captured || g.disabled || g.dashCd > 0) return false
     g.dashT = CONFIG.goblin.dashDuration
     g.dashCd = CONFIG.goblin.dashCooldown
-    this.fx.dust(g.pos.x, g.pos.z, 8, 1.3)
-    this.fx.ring(g.pos, 1.6, 0xdff8ff, 0.35, 0.18)
-    if (g.isPlayer) sfx.dash()
+    this.emit({ e: 'dash', g: g.id })
     return true
   }
 
   goblinInterfere(g: Goblin) {
     const elf = this.elf
-    if (g.captured || g.disabled || g.interfereCd > 0) return false
+    if (!this.authority || g.captured || g.disabled || g.interfereCd > 0) return false
     if (!elf.packing || elf.packing.g === g) {
-      if (g.isPlayer) this.floatText(t('fNoTarget'), g.pos, '#dddddd')
+      this.say(g, g.id, 'fNoTarget')
       return false
     }
     if (d2(g.pos, elf.pos) > CONFIG.goblin.interfereRange) {
-      if (g.isPlayer) this.floatText(t('fTooFar'), g.pos, '#dddddd')
+      this.say(g, g.id, 'fTooFar')
       return false
     }
     g.interfereCd = CONFIG.goblin.interfereCooldown
@@ -620,13 +668,332 @@ export class Game {
   }
 
   goblinUlt(g: Goblin) {
+    if (!this.authority) return false
     if (g.ultUsed || !g.held || this.elf.packing?.g !== g) {
-      if (g.isPlayer && !g.ultUsed) this.floatText(t('fUltOnlyHeld'), g.pos, '#dddddd')
+      if (!g.ultUsed) this.say(g, g.id, 'fUltOnlyHeld')
       return false
     }
     g.ultUsed = true
     this.interruptPacking('ult')
     return true
+  }
+
+  // 只給操控該角色的真人看的小提示（AI 角色不送）
+  private say(a: Actor, s: Slot, k: TKey) {
+    if (a.isPlayer || a.netDriven) this.emit({ e: 'say', s, k })
+  }
+
+  // ───────────────────────── 事件呈現（各端依自己的視角） ─────────────────────────
+  private emit(ev: GameEvent) {
+    this.present(ev)
+    if (this.net?.host) this.evQueue.push(ev)
+  }
+
+  private present(ev: GameEvent) {
+    const elf = this.elf
+    const me = this.playerGoblin
+    switch (ev.e) {
+      case 'go':
+        if (this.hud.phase !== 'countdown') return
+        this.hud.phase = 'play'
+        poki.gameplayStart()
+        this.toast(this.role === 'elf' ? t('tHuntStart') : t('tHideStart'), 'info')
+        return
+      case 'gaze': {
+        const G = CONFIG.elf.gaze
+        const origin = new THREE.Vector3(ev.o[0], 0, ev.o[1])
+        const dir = new THREE.Vector3(ev.d[0], 0, ev.d[1])
+        elf.yaw = Math.atan2(dir.x, dir.z)
+        elf.castT = 0.45
+        elf.castPose = 'cast'
+        const hitPos: THREE.Vector3[] = []
+        for (const id of ev.hits) {
+          const g = this.goblins[id]
+          hitPos.push(g.pos.clone())
+          this.floatText(t('fRooted'), g.pos, '#ff7fb8')
+        }
+        this.fx.gazeBeam(origin, dir, ev.len, hitPos, ev.len < G.range - 0.5)
+        this.elfFx.gaze(origin, dir)
+        sfx.gaze()
+        if (me && ev.hits.includes(me.id)) {
+          this.shake = Math.max(this.shake, 0.25)
+          this.toast(t('tYouRooted'), 'bad')
+        }
+        return
+      }
+      case 'music':
+        if (!this.authority) elf.channel = ev.on ? Math.max(elf.channel, 0) : -1
+        elf.model.setHarp?.(ev.on)
+        if (!ev.on) return
+        this.fx.ring(elf.pos, CONFIG.elf.music.radius, 0xffe9a0, 1.4, 0.05)
+        this.fx.sparkles(elf.pos, 20, 0xffe6a0, 0.6, 2.5, 1.2)
+        this.elfFx.musicStart(elf.pos)
+        if (this.role === 'goblin') this.toast(t('tMusicStart'), 'warn')
+        return
+      case 'miss': {
+        elf.castT = 0.3
+        elf.castPose = 'attack'
+        const at = new THREE.Vector3(ev.o[0] + Math.sin(ev.yaw), 0, ev.o[1] + Math.cos(ev.yaw))
+        this.fx.dust(at.x, at.z, 4, 0.8, 0xffffff)
+        this.floatText(t('fMiss'), at, '#dddddd')
+        return
+      }
+      case 'stun': {
+        const g = this.goblins[ev.g]
+        elf.castT = 0.3
+        elf.castPose = 'attack'
+        elf.yaw = Math.atan2(g.pos.x - elf.pos.x, g.pos.z - elf.pos.z)
+        sfx.stun()
+        this.fx.starBurst(g.pos)
+        this.elfFx.stun(g.pos)
+        this.fx.pow(g.pos, t('fBonk'), '#ffd23f')
+        if (g.isPlayer || this.role === 'elf') this.shake = Math.max(this.shake, g.isPlayer ? 0.45 : 0.2)
+        if (g.isPlayer) this.toast(t('tYouStunned'), 'bad')
+        return
+      }
+      case 'pack': {
+        const g = this.goblins[ev.g]
+        this.fx.dust(g.pos.x, g.pos.z, 10, 1.4)
+        this.fx.sparkles(g.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
+        this.elfFx.capture(g.pos)
+        elf.yaw = Math.atan2(g.pos.x - elf.pos.x, g.pos.z - elf.pos.z)
+        if (g.isPlayer) this.toast(g.ultUsed ? t('tYouPacked') : touchMode.value ? t('tYouPackedUltTouch') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
+        else if (this.role === 'goblin') this.toast(touchMode.value ? t('tAllyPackedTouch', { name: g.name }) : t('tAllyPacked', { name: g.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
+        return
+      }
+      case 'free': {
+        const g = this.goblins[ev.g]
+        const by = ev.by >= 0 ? this.goblins[ev.by] : undefined
+        if (ev.ult) {
+          sfx.breakFree()
+          this.fx.shockwave(g.pos)
+          this.fx.pow(g.pos, t('fFree'), '#8ff27a')
+          this.shake = Math.max(this.shake, 0.5)
+          this.toast(g.isPlayer ? t('tYouBrokeFree') : t('tBrokeFree', { name: g.name }), g.isPlayer || this.role === 'goblin' ? 'good' : 'bad')
+        } else {
+          sfx.interfere()
+          const at = by ? by.pos.clone().lerp(elf.pos, 0.5) : g.pos
+          this.fx.starBurst(at, 0x9effa0)
+          this.fx.pow(at, 'POW!', '#ffd23f')
+          this.fx.dust(g.pos.x, g.pos.z, 10, 1.6)
+          this.shake = Math.max(this.shake, 0.35)
+          this.toast(t('tRescued', { by: by?.isPlayer ? t('you') : by?.name ?? t('aGoblin'), name: g.isPlayer ? t('you') : g.name }), this.role === 'goblin' ? 'good' : 'bad')
+        }
+        return
+      }
+      case 'caught': {
+        const g = this.goblins[ev.g]
+        const from = new THREE.Vector3(ev.from[0], 0, ev.from[1])
+        const to = new THREE.Vector3(ev.to[0], 0, ev.to[1])
+        g.captured = true
+        g.held = false
+        g.zone = -2
+        g.net = null
+        g.pos.copy(to)
+        g.vel.set(0, 0, 0)
+        g.flight = { from, to, t: 0, dur: Math.min(2.2, 0.8 + from.distanceTo(to) / 60) }
+        this.fx.sparkles(from, 24, 0xffe6a0, 0.6, 3, 1)
+        this.fx.ring(from, 3, 0xffe6a0, 0.6, 0.12)
+        sfx.captured()
+        if (g.isPlayer) {
+          this.toast(t(touchMode.value ? 'tYouCapturedTouch' : 'tYouCaptured'), 'bad')
+          this.setSpeed(1)
+        } else this.toast(t('tCaptured', { name: g.name, n: ev.free }), this.role === 'elf' ? 'good' : 'bad')
+        return
+      }
+      case 'dash': {
+        const g = this.goblins[ev.g]
+        this.fx.dust(g.pos.x, g.pos.z, 8, 1.3)
+        this.fx.ring(g.pos, 1.6, 0xdff8ff, 0.35, 0.18)
+        if (g.isPlayer) sfx.dash()
+        return
+      }
+      case 'charm':
+        if (this.goblins[ev.g]?.isPlayer) this.toast(t('tYouCharmed'), 'bad')
+        return
+      case 'say':
+        if (ev.s === this.me) this.floatText(t(ev.k), this.actorOf(this.me).pos, '#dddddd')
+        return
+      case 'left':
+        this.toast(t('tPlayerLeft', { n: ev.n }), 'warn')
+        return
+      case 'end':
+        this.showResult(ev.w, ev.c, ev.time)
+        return
+    }
+  }
+
+  // ───────────────────────── 網路同步 ─────────────────────────
+  // 房主或單機：負責判定；加入者只顯示房主的結果
+  get authority() {
+    return !this.net || this.net.host
+  }
+
+  actorOf(slot: Slot): Actor {
+    return slot === 'elf' ? this.elf : this.goblins[slot]
+  }
+
+  private onNet(from: string, m: { t: string }) {
+    const net = this.net!
+    if (net.host) {
+      const slot = net.peers.get(from)
+      if (slot === undefined) return
+      if (m.t === 'in') this.applyInput(this.actorOf(slot), m as unknown as { p: number[]; c: number })
+      else if (m.t === 'act') {
+        const a = m as unknown as { a: Act; d?: V2 }
+        this.perform(slot, a.a, a.d)
+      }
+    } else if (m.t === 's') this.applySnapshot(m as Snapshot)
+    else if (m.t === 'ev') for (const ev of (m as unknown as { l: GameEvent[] }).l) this.present(ev)
+  }
+
+  // 房主：真人玩家回報的位置（移動由各自的瀏覽器計算，手感才不會有延遲）
+  private applyInput(a: Actor, m: { p: number[]; c: number }) {
+    const p = m.p
+    if (!a.netDriven || !Array.isArray(p) || p.length < 5 || !p.every(Number.isFinite)) return
+    // 被控制住、或房主剛強制移動過但對方還沒收到時，忽略回報
+    const locked = a === this.elf ? this.elf.busy : (a as Goblin).disabled
+    if (locked || m.c !== a.corr || this.hud.phase !== 'play') return
+    a.pos.set(p[0], 0, p[1])
+    this.world.resolve(a.pos, a.radius)
+    a.yaw = p[2]
+    a.vel.set(p[3], 0, p[4])
+  }
+
+  // 房主：玩家離線後改由 AI 接手
+  private onPeerLeave(peer: string) {
+    const net = this.net!
+    const slot = net.peers.get(peer)
+    if (slot === undefined) return
+    net.peers.delete(peer)
+    const a = this.actorOf(slot)
+    a.netDriven = false
+    a.net = null
+    this.emit({ e: 'left', n: net.numbers.get(slot) ?? 0 })
+  }
+
+  private snapshot(): Snapshot {
+    const e = this.elf
+    const p = e.packing
+    return {
+      t: 's',
+      q: ++this.seq,
+      ph: PHASES.indexOf(this.hud.phase),
+      cd: r2(this.countdown),
+      el: r2(this.elapsed),
+      du: this.duration,
+      pk: this.packId,
+      e: [
+        r2(e.pos.x), r2(e.pos.z), r2(e.yaw), r2(e.vel.x), r2(e.vel.z),
+        r2(e.cd.gaze), r2(e.cd.music), r2(e.cd.stun), r2(e.cd.capture),
+        r2(e.channel), r2(e.stagger), r2(e.castT), Math.max(0, CAST_POSES.indexOf(e.castPose)),
+        p ? p.g.id : -1, p ? r2(p.t) : 0, p ? p.total : 0, e.corr,
+      ],
+      g: this.goblins.map((g) => [
+        r2(g.pos.x), r2(g.pos.z), r2(g.yaw), r2(g.vel.x), r2(g.vel.z),
+        (g.captured ? 1 : 0) | (g.held ? 2 : 0) | (g.ultUsed ? 4 : 0),
+        r2(g.stun), r2(g.rooted), r2(g.attract), r2(g.charm), r2(g.grace), r2(g.dashT), r2(g.dashCd), r2(g.interfereCd), g.corr,
+      ]),
+    }
+  }
+
+  // 加入者：套用房主快照（無序通道，舊的直接丟棄）
+  private applySnapshot(m: Snapshot) {
+    if (m.q <= this.lastSeq) return
+    this.lastSeq = m.q
+    if (PHASES[m.ph] === 'play' && this.hud.phase === 'countdown') this.present({ e: 'go' })
+    if (this.hud.phase !== 'over') {
+      this.countdown = m.cd
+      this.duration = m.du
+      if (Math.abs(this.elapsed - m.el) > 0.25) this.elapsed = m.el
+    }
+    this.packId = m.pk
+    const elf = this.elf
+    const E = m.e
+    elf.cd.gaze = E[5]
+    elf.cd.music = E[6]
+    elf.cd.stun = E[7]
+    elf.cd.capture = E[8]
+    if (E[9] >= 0 !== elf.channel >= 0) elf.model.setHarp?.(E[9] >= 0)
+    elf.channel = E[9]
+    elf.stagger = E[10]
+    elf.castT = E[11]
+    elf.castPose = CAST_POSES[E[12]] ?? 'normal'
+    elf.packing = E[13] >= 0 && this.goblins[E[13]] ? { g: this.goblins[E[13]], t: E[14], total: E[15] } : null
+    this.follow(elf, E, E[16], elf.busy)
+    m.g.forEach((G, i) => {
+      const g = this.goblins[i]
+      if (!g) return
+      g.captured = !!(G[5] & 1)
+      g.held = !!(G[5] & 2)
+      g.ultUsed = !!(G[5] & 4)
+      ;[g.stun, g.rooted, g.attract, g.charm, g.grace, g.dashT, g.dashCd, g.interfereCd] = G.slice(6, 14)
+      if (g.captured) {
+        g.zone = -2
+        g.net = null
+        g.pos.set(G[0], 0, G[1])
+        g.corr = G[14]
+      } else this.follow(g, G, G[14], g.disabled)
+    })
+  }
+
+  private follow(a: Actor, s: number[], corr: number, locked: boolean) {
+    if (a.isPlayer) {
+      // 自己的位置由本機計算；被控制住、或被房主強制移動（掙脫推開等）時以房主為準
+      if (locked || corr !== a.corr) {
+        a.pos.set(s[0], 0, s[1])
+        if (locked) a.vel.set(0, 0, 0)
+        a.corr = corr
+      }
+      return
+    }
+    if (a.net) Object.assign(a.net, { x: s[0], z: s[1], yaw: s[2], t: 0 })
+    else {
+      a.net = { x: s[0], z: s[1], yaw: s[2], t: 0 }
+      a.pos.set(s[0], 0, s[1])
+      a.yaw = s[2]
+    }
+    a.vel.set(s[3], 0, s[4])
+  }
+
+  // 網路驅動的角色：平滑地追上最新位置，並依速度短暫推算（快照之間）
+  private netFollow(a: Actor, dt: number, base: number) {
+    const n = a.net
+    if (n) {
+      n.t += dt
+      if (n.t < 0.25) {
+        n.x += a.vel.x * dt
+        n.z += a.vel.z * dt
+      }
+      const dx = n.x - a.pos.x, dz = n.z - a.pos.z
+      if (dx * dx + dz * dz > 36) a.pos.set(n.x, 0, n.z)
+      else {
+        const k = Math.min(1, dt * 10)
+        a.pos.x += dx * k
+        a.pos.z += dz * k
+      }
+      const dy = Math.atan2(Math.sin(n.yaw - a.yaw), Math.cos(n.yaw - a.yaw))
+      a.yaw += dy * Math.min(1, dt * 10)
+    }
+    a.moveAmt = Math.min(1.3, a.vel.length() / base)
+  }
+
+  private netSync(dt: number) {
+    const net = this.net!
+    if (net.host && this.evQueue.length) {
+      net.send({ t: 'ev', l: this.evQueue }, true)
+      this.evQueue = []
+    }
+    this.netT -= dt
+    if (this.netT > 0) return
+    this.netT = net.host ? 1 / 15 : 1 / 20
+    if (net.host) {
+      net.send(this.snapshot(), false)
+      return
+    }
+    const a = this.actorOf(this.me)
+    if (a instanceof Goblin && a.captured) return
+    net.send({ t: 'in', p: [r2(a.pos.x), r2(a.pos.z), r2(a.yaw), r2(a.vel.x), r2(a.vel.z)], c: a.corr }, false)
   }
 
   // ───────────────────────── 導航 ─────────────────────────
@@ -727,9 +1094,13 @@ export class Game {
   }
 
   // ───────────────────────── 主迴圈 ─────────────────────────
-  private tick(rawDt: number) {
-    const steps = this.speed
-    for (let i = 0; i < steps; i++) this.update(rawDt)
+  private tick(rawDt: number, render = true) {
+    // 多人連線時 rawDt 可能長達 1 秒（背景分頁），切成 ≤0.05 秒的小步模擬
+    const sub = Math.max(1, Math.ceil(rawDt / 0.05 - 1e-6))
+    const steps = this.speed * sub
+    for (let i = 0; i < steps; i++) this.update(rawDt / sub)
+    if (this.net) this.netSync(rawDt)
+    if (!render) return
     this.updateCamera(rawDt)
     this.world.update(rawDt)
     this.hudTimer -= rawDt
@@ -743,6 +1114,8 @@ export class Game {
 
   private update(dt: number) {
     const hud = this.hud
+    const auth = this.authority
+    this.musicStopT -= dt
     if (hud.phase === 'countdown') {
       this.countdown -= dt
       const c = Math.ceil(this.countdown)
@@ -750,11 +1123,7 @@ export class Game {
         this.lastCount = c
         if (c > 0) sfx.tick()
       }
-      if (this.countdown <= 0) {
-        hud.phase = 'play'
-        poki.gameplayStart()
-        this.toast(this.role === 'elf' ? t('tHuntStart') : t('tHideStart'), 'info')
-      }
+      if (this.countdown <= 0 && auth) this.emit({ e: 'go' })
     } else if (hud.phase === 'play') {
       this.elapsed += dt
       const left = this.duration - this.elapsed
@@ -764,7 +1133,7 @@ export class Game {
           this.toast(t('tMinutesLeft', { n: mark / 60 }), 'warn')
         }
       }
-      if (left <= 0) {
+      if (left <= 0 && auth) {
         this.finish('goblin')
         return
       }
@@ -799,15 +1168,16 @@ export class Game {
         sfx.harpNote(elf.musicNote++)
       }
       const M = CONFIG.elf.music
-      for (const g of this.goblins) {
-        if (g.captured || g.held || elf.musicAffected.has(g)) continue
-        if (d2(g.pos, elf.pos) < M.radius) {
-          elf.musicAffected.add(g)
-          g.attract = M.attractTime
-          g.charm = M.charmTime
-          if (g.isPlayer) this.toast(t('tYouCharmed'), 'bad')
+      if (auth)
+        for (const g of this.goblins) {
+          if (g.captured || g.held || elf.musicAffected.has(g)) continue
+          if (d2(g.pos, elf.pos) < M.radius) {
+            elf.musicAffected.add(g)
+            g.attract = M.attractTime
+            g.charm = M.charmTime
+            if (g.isPlayer || g.netDriven) this.emit({ e: 'charm', g: g.id })
+          }
         }
-      }
       if (Math.floor(elf.channel / 1.2) !== Math.floor((elf.channel - dt) / 1.2)) this.fx.ring(elf.pos, M.radius, 0xffe9a0, 1.4, 0.05)
       this.elfFx.musicTick(dt, elf.pos, M.radius)
       if (elf.channel >= M.maxChannel) this.elfStopMusic()
@@ -819,7 +1189,7 @@ export class Game {
       p.t += dt
       p.g.stun = Math.max(p.g.stun, 0.2)
       if (Math.floor(p.t * 4) !== Math.floor((p.t - dt) * 4)) sfx.pack()
-      if (p.t >= p.total) this.completeCapture()
+      if (p.t >= p.total && auth) this.completeCapture()
     }
     if (hud.phase === 'over') {
       // 結算畫面時精靈仍要動（勝利動作）
@@ -830,29 +1200,41 @@ export class Game {
 
     // 操控 / AI
     if (playing) {
-      if (this.role === 'elf') {
+      if (elf.isPlayer) {
         if (!elf.busy) this.readMove(elf.wish)
         else {
-          // 彈奏中移動 = 解除
-          if (elf.channel >= 0 && this.readMove(v2).lengthSq() > 0.1) this.elfStopMusic()
+          // 彈奏中移動 = 解除（加入者送請求給房主，避免連續重送）
+          if (elf.channel >= 0 && this.readMove(v2).lengthSq() > 0.1 && this.musicStopT <= 0) {
+            this.musicStopT = 0.3
+            this.act('musicStop')
+          }
           elf.wish.set(0, 0, 0)
         }
+      } else if (elf.netDriven) {
+        /* 由網路驅動 */
       } else if (this.elapsed > 6) updateElfAI(this, dt)
       else elf.wish.set(0, 0, 0)
 
       for (const g of this.goblins) {
         if (g.captured) continue
         if (g.isPlayer) this.readMove(g.wish)
-        else if (this.elapsed > 0.5) updateGoblinAI(this, g, dt)
+        else if (!g.netDriven && this.elapsed > 0.5) updateGoblinAI(this, g, dt)
       }
     }
 
     // 移動
-    const elfSpeed = elf.isPlayer ? CONFIG.elf.speed : CONFIG.elf.aiSpeed
-    if (elf.busy) elf.wish.set(0, 0, 0)
-    this.moveActor(elf, elfSpeed * (elf.castT > 0 ? 0.35 : 1), dt, elfSpeed)
+    const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : CONFIG.elf.aiSpeed
+    if (elf.netDriven) this.netFollow(elf, dt, elfSpeed)
+    else {
+      if (elf.busy) elf.wish.set(0, 0, 0)
+      this.moveActor(elf, elfSpeed * (elf.castT > 0 ? 0.35 : 1), dt, elfSpeed)
+    }
     for (const g of this.goblins) {
       if (g.captured) continue
+      if (g.netDriven) {
+        this.netFollow(g, dt, CONFIG.goblin.speed)
+        continue
+      }
       let sp = CONFIG.goblin.speed
       if (g.held || g.stun > 0 || g.rooted > 0) g.wish.set(0, 0, 0)
       else if (g.attract > 0) {
@@ -975,6 +1357,8 @@ export class Game {
 
   private separate() {
     const list: Actor[] = [this.elf, ...this.goblins.filter((g) => !g.captured)]
+    // 網路驅動的角色位置以操控者為準，不被推開（但仍會推開其他角色）
+    const fixed = (x: Actor) => x.netDriven || (x === this.elf ? !!(this.elf.packing || this.elf.channel >= 0) : (x as Goblin).held)
     for (let i = 0; i < list.length; i++)
       for (let j = i + 1; j < list.length; j++) {
         const a = list[i], b = list[j]
@@ -985,13 +1369,11 @@ export class Game {
           const d = Math.sqrt(dd)
           const push = (min - d) / 2
           const nx = dx / d, nz = dz / d
-          const aFixed = a === this.elf && (this.elf.packing || this.elf.channel >= 0)
-          const bHeld = (b as Goblin).held
-          if (!aFixed) {
+          if (!fixed(a)) {
             a.pos.x -= nx * push
             a.pos.z -= nz * push
           }
-          if (!bHeld) {
+          if (!fixed(b)) {
             b.pos.x += nx * push
             b.pos.z += nz * push
           }
@@ -1059,11 +1441,17 @@ export class Game {
 
   private finish(winner: Role) {
     if (this.hud.phase === 'over') return
-    this.hud.phase = 'over'
-    poki.gameplayStop()
     this.elfStopMusic()
+    this.emit({ e: 'end', w: winner, c: this.goblins.filter((g) => g.captured).length, time: r2(this.elapsed) })
+  }
+
+  private showResult(winner: Role, captured: number, time: number) {
+    if (this.hud.phase === 'over') return
+    this.hud.phase = 'over'
+    this.elapsed = time
+    poki.gameplayStop()
+    this.elf.model.setHarp?.(false)
     if (winner === 'elf') this.elf.character.setVictory(true)
-    const captured = this.goblins.filter((g) => g.captured).length
     const won = winner === this.role
     if (won) sfx.win()
     else sfx.lose()

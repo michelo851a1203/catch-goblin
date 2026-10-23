@@ -13,6 +13,7 @@
     "validate:elf": "node tools/validate-glb.mjs public/models/elf/elf.glb --expect-anims Idle,Walk,Run,Play,Cast,Strike,Capture,Victory,Stunned --expect-nodes prop_harp,ElfMesh_LOD0,ElfMesh_LOD1"
   },
   "dependencies": {
+    "@poki/netlib": "0.0.20",
     "shaders": "^4.0.4",
     "three": "^0.186.1",
     "vue": "^3.5.44"
