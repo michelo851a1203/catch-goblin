@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
-import elfArt from '../assets/art/elf-card.png'
-import goblinArt from '../assets/art/goblin-card.png'
+import elfArt from '../assets/art/elf-card.webp'
+import goblinArt from '../assets/art/goblin-card.webp'
 import type { Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
