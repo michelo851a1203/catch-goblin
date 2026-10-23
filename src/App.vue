@@ -37,6 +37,7 @@ function attach(r: Room) {
   room.value = r
   r.onStart = (l) => {
     link.value = l
+    sheet.value = false
     round.value++
   }
   r.onClose = (why) => {
@@ -46,11 +47,17 @@ function attach(r: Room) {
     // 被拒絕 / 房主離開時重新打開 sheet 顯示原因；自己離開則不打開
     if (why) sheet.value = true
   }
+  if (r.current) r.onStart(r.current)
 }
 
+// 在房間內關閉 sheet 只是收起來，回到選角畫面用卡片選角；不在房間時關閉即為單機模式
 function closeSheet() {
   sheet.value = false
   roomError.value = null
+}
+
+function leaveLobby() {
+  closeSheet()
   room.value?.leave()
 }
 
@@ -78,8 +85,8 @@ async function leaveRoom() {
   />
   <GameView v-else-if="role" :key="round" :role="role" @restart="newRound(role)" @menu="role = null" />
   <template v-else>
-    <CharacterSelect @start="newRound" @multiplayer="sheet = true" />
-    <RoomSheet v-if="sheet || room" :room="room" :error="roomError" @close="closeSheet" @room="attach" />
+    <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" />
+    <RoomSheet v-if="sheet" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />
   </template>
   <div class="rotate">📱↻<span>{{ t('rotate') }}</span></div>
 </template>

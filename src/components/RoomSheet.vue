@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Room, type RoomError } from '../net/room'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { NAME_MAX, Room, cleanName, displayName, loadName, saveName, type RoomError } from '../net/room'
 import { MAX_PLAYERS, type Pick } from '../net/assign'
 import { sfx } from '../game/audio'
 import { t, type TKey } from '../i18n'
 
-// 多人連線的 bottom sheet：建立 / 加入房間，以及房間大廳（選角色、開始遊戲）
+// 多人連線的 bottom sheet：暱稱、建立 / 加入房間，以及房間大廳（房號、玩家、開始遊戲）
+// 選角改在選角畫面的卡片上進行；在房間內關閉 sheet 不會離開房間
 const props = defineProps<{ room: Room | null; error: RoomError | null }>()
-const emit = defineEmits<{ close: []; room: [room: Room] }>()
+const emit = defineEmits<{ close: []; leave: []; room: [room: Room] }>()
 
 const code = ref('')
+const nick = ref(props.room?.myName ?? loadName())
+let nickTimer = 0
 const busy = ref<'create' | 'join' | null>(null)
 const err = ref('')
 const copied = ref(false)
@@ -33,15 +36,6 @@ watch(
 )
 
 const s = computed(() => props.room?.state)
-const me = computed(() => s.value?.players.find((p) => p.id === s.value!.me))
-const picks = computed<{ pick: Pick; icon: string; label: string; off: string }[]>(() => {
-  const r = props.room
-  return [
-    { pick: 'elf', icon: '🧝‍♀️', label: t('elfName'), off: r && !r.canPick('elf') ? t('mpTaken') : '' },
-    { pick: 'goblin', icon: '👺', label: t('goblinName'), off: r && !r.canPick('goblin') ? t('mpGoblinFull') : '' },
-    { pick: 'random', icon: '🎲', label: t('mpPickRandom'), off: '' },
-  ]
-})
 const ICON: Record<Pick, string> = { elf: '🧝‍♀️', goblin: '👺', random: '🎲' }
 
 async function connect(kind: 'create' | 'join') {
@@ -52,6 +46,7 @@ async function connect(kind: 'create' | 'join') {
     err.value = t('mpErrCode')
     return
   }
+  saveName(cleanName(nick.value))
   const my = ++token
   busy.value = kind
   try {
@@ -73,11 +68,18 @@ function onCode(e: Event) {
   err.value = ''
 }
 
-function pick(p: Pick) {
-  sfx.unlock()
-  sfx.flip()
-  props.room?.setPick(p)
+// 房間內修改暱稱：停止輸入一下再送出，避免每個字都廣播一次
+function onNick(e: Event) {
+  nick.value = (e.target as HTMLInputElement).value
+  clearTimeout(nickTimer)
+  if (props.room) nickTimer = window.setTimeout(flushNick, 400)
 }
+function flushNick() {
+  clearTimeout(nickTimer)
+  if (props.room) props.room.setName(nick.value)
+  else saveName(cleanName(nick.value))
+}
+onBeforeUnmount(flushNick)
 
 async function copy() {
   try {
@@ -95,18 +97,27 @@ function close() {
   sfx.flip()
   emit('close')
 }
+
+function leave() {
+  sfx.flip()
+  emit('leave')
+}
 </script>
 
 <template>
   <div class="backdrop" @click.self="close">
     <section class="sheet" role="dialog" :aria-label="t('mpTitle')">
       <div class="grip"></div>
-      <button class="x" :aria-label="room ? t('mpLeave') : t('mpSolo')" :title="room ? t('mpLeave') : t('mpSolo')" @click="close">✕</button>
+      <button class="x" :aria-label="room ? t('mpGoPick') : t('mpSolo')" :title="room ? t('mpGoPick') : t('mpSolo')" @click="close">✕</button>
 
       <!-- 建立 / 加入 -->
       <template v-if="!room">
         <h2>{{ t('mpTitle') }}</h2>
         <p class="lead">{{ t('mpLead') }}</p>
+        <label class="nick">
+          <span>{{ t('mpNick') }}</span>
+          <input :value="nick" :maxlength="NAME_MAX" autocomplete="nickname" :placeholder="t('mpNickPh')" :disabled="!!busy" @input="onNick" @change="flushNick" />
+        </label>
         <div class="entry">
           <button class="go" :disabled="!!busy" @click="connect('create')">
             {{ busy === 'create' ? t('mpConnecting') : t('mpCreate') }}
@@ -140,35 +151,25 @@ function close() {
           <button class="ghost small" @click="copy">{{ copied ? t('mpCopied') : t('mpCopy') }}</button>
         </div>
         <p class="lead">{{ t('mpShare') }}</p>
+        <label class="nick">
+          <span>{{ t('mpNick') }}</span>
+          <input :value="nick" :maxlength="NAME_MAX" autocomplete="nickname" :placeholder="t('mpNickPh')" @input="onNick" @change="flushNick" />
+        </label>
 
         <h3>{{ t('mpPlayers', { n: s.players.length, max: MAX_PLAYERS }) }}</h3>
         <ul class="players">
           <li v-for="p in s.players" :key="p.id" :class="{ me: p.id === s.me }">
             <span class="ico">{{ ICON[p.pick] }}</span>
-            <span class="name">{{ p.id === s.me ? t('you') : t('playerN', { n: p.n }) }}</span>
+            <span class="name">{{ displayName(p) }}<template v-if="p.id === s.me"> ({{ t('you') }})</template></span>
             <span v-if="p.n === 1" class="tag">{{ t('mpHost') }}</span>
           </li>
         </ul>
 
-        <h3>{{ t('mpPickTitle') }}</h3>
-        <div class="picks">
-          <button
-            v-for="o in picks"
-            :key="o.pick"
-            class="pick"
-            :class="{ on: me?.pick === o.pick }"
-            :disabled="!!o.off && me?.pick !== o.pick"
-            @click="pick(o.pick)"
-          >
-            <span class="ico">{{ o.icon }}</span>
-            <span>{{ o.label }}</span>
-            <small v-if="o.off && me?.pick !== o.pick">{{ o.off }}</small>
-          </button>
-        </div>
-        <p class="rule">{{ t('mpRule') }}</p>
+        <p class="rule">{{ t('mpPickHint') }}<br />{{ t('mpRule') }}</p>
 
         <div class="foot">
-          <button class="ghost" @click="close">{{ t('mpLeave') }}</button>
+          <button class="ghost" @click="leave">{{ t('mpLeave') }}</button>
+          <button class="ghost" @click="close">{{ t('mpGoPick') }}</button>
           <button v-if="s.host" class="go" :disabled="s.players.length < 2" :title="s.players.length < 2 ? t('mpNeedTwo') : ''" @click="room.start()">
             {{ t('mpStart') }}
           </button>
@@ -394,35 +395,34 @@ button:disabled {
   background: #e6c878;
   color: #2a1d08;
 }
-.picks {
+.nick {
   display: flex;
+  align-items: center;
   justify-content: center;
   gap: 10px;
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #c9b27a;
 }
-.pick {
-  flex: 1;
-  max-width: 140px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 10px 6px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #f4ead2;
-  border-color: rgba(230, 200, 120, 0.4);
+.nick input {
+  width: 200px;
+  box-sizing: border-box;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid #c9a24e;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff3d6;
+  font-family: inherit;
+  font-size: 15px;
+  text-align: center;
+  outline: none;
 }
-.pick .ico {
-  font-size: 26px;
+.nick input::placeholder {
+  font-size: 13px;
+  color: #8f866f;
 }
-.pick small {
-  font-size: 10px;
-  color: #ff9f8f;
-}
-.pick.on {
-  background: rgba(230, 200, 120, 0.2);
-  border-color: #fff3a0;
-  box-shadow: 0 0 14px rgba(255, 210, 110, 0.4);
+.nick input:focus {
+  box-shadow: 0 0 0 2px rgba(230, 200, 120, 0.35);
 }
 .rule {
   margin: 8px 0 0;
@@ -471,14 +471,12 @@ button:disabled {
     padding: 3px 6px;
     font-size: 11px;
   }
-  .pick {
-    flex-direction: row;
-    justify-content: center;
-    padding: 6px;
-    gap: 6px;
+  .nick {
+    margin-bottom: 8px;
   }
-  .pick .ico {
-    font-size: 18px;
+  .nick input {
+    padding: 4px 12px;
+    font-size: 13px;
   }
   .foot {
     margin-top: 10px;

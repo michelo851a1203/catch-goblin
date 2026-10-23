@@ -167,8 +167,17 @@ const zh = {
   mpErrHostLeft: '房主已離開，房間已關閉',
   mpErrVersion: '遊戲版本不同，請重新整理頁面',
   mpErrCode: '請輸入 4 碼數字房號',
+  mpNick: '暱稱',
+  mpNickPh: '輸入暱稱（選填）',
+  mpPickHint: '關閉此視窗後，點選卡片選擇你的角色',
+  mpGoPick: '去選角色',
+  mpRoomBtn: '👥 房間 {code} · {n}/{max}',
+  mpPickThis: '選擇此角色',
+  mpUnpick: '改回隨機',
+  mpPickedBy: '{name} 已選擇',
+  mpMyPick: '目前選擇：{pick}',
   hudBackRoom: '回到房間',
-  tPlayerLeft: '玩家{n} 離線了，改由 AI 接手',
+  tPlayerLeft: '{name} 離線了，改由 AI 接手',
 }
 
 type Dict = Record<keyof typeof zh, string>
@@ -336,8 +345,17 @@ const en: Dict = {
   mpErrHostLeft: 'The host left and the room was closed',
   mpErrVersion: 'Different game version — please refresh the page',
   mpErrCode: 'Enter a 4-digit room code',
+  mpNick: 'Nickname',
+  mpNickPh: 'Nickname (optional)',
+  mpPickHint: 'Close this panel and tap a card to pick your role',
+  mpGoPick: 'Pick a role',
+  mpRoomBtn: '👥 Room {code} · {n}/{max}',
+  mpPickThis: 'Pick this role',
+  mpUnpick: 'Back to random',
+  mpPickedBy: 'Picked by {name}',
+  mpMyPick: 'Your pick: {pick}',
   hudBackRoom: 'Back to room',
-  tPlayerLeft: 'P{n} disconnected — AI takes over',
+  tPlayerLeft: '{name} disconnected — AI takes over',
 }
 
 const dicts: Record<Locale, Dict> = { zh, en }

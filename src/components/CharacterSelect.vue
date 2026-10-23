@@ -10,7 +10,11 @@ import { keyLabel, loadKeybinds } from '../keybinds'
 import KeybindSettings from './KeybindSettings.vue'
 import { locale, setLocale, t } from '../i18n'
 import { touchMode } from '../input/touch'
+import { displayName, type Room } from '../net/room'
+import { MAX_PLAYERS, type Pick } from '../net/assign'
 
+// room：在多人房間大廳時，卡片改為選角（精靈 / 哥布林），選擇結果標示在卡片邊框上
+const props = defineProps<{ room?: Room | null }>()
 const emit = defineEmits<{ start: [role: Role]; multiplayer: [] }>()
 
 const chosen = ref<Role | null>(null)
@@ -73,6 +77,30 @@ const cards = computed<
   ]
 })
 
+const lobby = computed(() => props.room?.state ?? null)
+const myPick = computed(() => lobby.value?.players.find((p) => p.id === lobby.value!.me)?.pick ?? null)
+const myPickLabel = computed(() => {
+  const label: Record<Pick, string> = { elf: `🧝‍♀️ ${t('elfName')}`, goblin: `👺 ${t('goblinName')}`, random: `🎲 ${t('mpPickRandom')}` }
+  return label[myPick.value ?? 'random']
+})
+function pickers(role: Role) {
+  return lobby.value?.players.filter((p) => p.pick === role) ?? []
+}
+function canPick(role: Role) {
+  return props.room?.canPick(role) ?? true
+}
+function pickRole(p: Pick) {
+  sfx.unlock()
+  sfx.flip()
+  props.room?.setPick(p)
+  chosen.value = null
+}
+function startRoom() {
+  sfx.unlock()
+  sfx.flip()
+  props.room?.start()
+}
+
 function toggleLocale() {
   sfx.unlock()
   sfx.flip()
@@ -100,7 +128,9 @@ function back() {
   <div class="select" :class="{ entered, picked: chosen }">
     <div class="glow"></div>
     <button class="lang" :class="{ solo: touchMode }" @click="toggleLocale">{{ t('langSwitch') }}</button>
-    <button class="mp" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpOpen') }}</button>
+    <button class="mp" :class="{ on: lobby }" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">
+      {{ lobby ? t('mpRoomBtn', { code: lobby.code, n: lobby.players.length, max: MAX_PLAYERS }) : t('mpOpen') }}
+    </button>
     <button v-if="!touchMode" class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
@@ -131,9 +161,15 @@ function back() {
         :key="c.role"
         :ref="(el) => (cardEls[c.role] = el as HTMLElement)"
         class="card-wrap"
-        :class="{ chosen: chosen === c.role, hidden: chosen && chosen !== c.role }"
+        :class="{ chosen: chosen === c.role, hidden: chosen && chosen !== c.role, mine: myPick === c.role, taken: lobby && !canPick(c.role) && myPick !== c.role }"
         :style="{ '--dx': offsets[c.role] + 'px' }"
       >
+        <!-- 多人大廳：在卡片上緣標示選了這個角色的玩家 -->
+        <div v-if="lobby && pickers(c.role).length" class="pickers">
+          <span v-for="p in pickers(c.role)" :key="p.id" :class="{ me: p.id === lobby.me }">
+            {{ c.role === 'elf' ? t('mpPickedBy', { name: p.id === lobby.me ? t('you') : displayName(p) }) : p.id === lobby.me ? t('you') : displayName(p) }}
+          </span>
+        </div>
         <div class="card" :class="c.role" @click="choose(c.role)">
           <div class="face front">
             <div class="art" :style="{ backgroundImage: `url(${c.art})` }"></div>
@@ -161,7 +197,13 @@ function back() {
               <p class="controls">{{ touchMode ? t('controlsTouch') : t('controls', { keys: moveKeys }) }}</p>
               <div class="actions">
                 <button class="ghost" @click.stop="back">{{ t('back') }}</button>
-                <button class="go" @click.stop="emit('start', c.role)">{{ t('startAdventure') }}</button>
+                <template v-if="lobby">
+                  <button v-if="myPick === c.role" class="go" @click.stop="pickRole('random')">{{ t('mpUnpick') }}</button>
+                  <button v-else class="go" :disabled="!canPick(c.role)" @click.stop="pickRole(c.role)">
+                    {{ canPick(c.role) ? t('mpPickThis') : c.role === 'elf' ? t('mpTaken') : t('mpGoblinFull') }}
+                  </button>
+                </template>
+                <button v-else class="go" @click.stop="emit('start', c.role)">{{ t('startAdventure') }}</button>
               </div>
             </div>
           </div>
@@ -169,7 +211,15 @@ function back() {
       </div>
     </div>
 
-    <footer>
+    <footer v-if="lobby" class="lobby-bar">
+      <span>{{ t('mpMyPick', { pick: myPickLabel }) }}</span>
+      <button v-if="myPick && myPick !== 'random'" class="ghost small" @click="pickRole('random')">{{ t('mpUnpick') }}</button>
+      <button v-if="lobby.host" class="go small" :disabled="lobby.players.length < 2" :title="lobby.players.length < 2 ? t('mpNeedTwo') : ''" @click="startRoom">
+        {{ t('mpStart') }}
+      </button>
+      <span v-else class="wait">{{ t('mpWaiting') }}</span>
+    </footer>
+    <footer v-else>
       <span>{{ t('elfWins', { n: stats.elfWins }) }}</span>
       <span>・</span>
       <span>{{ t('goblinWins', { n: stats.goblinWins }) }}</span>
@@ -216,6 +266,10 @@ function back() {
   background: rgba(20, 30, 24, 0.7);
   color: #e6c878;
   border-color: #c9a24e;
+}
+.mp.on {
+  background: rgba(230, 200, 120, 0.18);
+  color: #fff3d6;
 }
 .lang:hover,
 .mp:hover {
@@ -347,6 +401,7 @@ h1::after {
   z-index: 1;
 }
 .card-wrap {
+  position: relative;
   width: clamp(240px, 26vw, 340px);
   aspect-ratio: 0.66;
   transition:
@@ -380,6 +435,52 @@ h1::after {
 .card-wrap.chosen {
   transform: translateX(var(--dx)) scale(1.12);
   z-index: 3;
+}
+/* 多人大廳：選角標示 */
+.pickers {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 5;
+  transform: translate(-50%, -55%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  width: max-content;
+  max-width: 110%;
+  pointer-events: none;
+}
+.pickers span {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid #e6c878;
+  background: #2a1d08;
+  color: #fff3d6;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.pickers span.me {
+  background: linear-gradient(#f4d983, #c9973a);
+  color: #2a1d08;
+}
+.card-wrap.mine .face {
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.55),
+    0 0 0 3px #fff3a0,
+    0 0 0 7px rgba(30, 20, 8, 0.8),
+    0 0 26px 8px rgba(255, 215, 110, 0.6);
+}
+.card-wrap.taken .face {
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.55),
+    0 0 0 3px #ff8f7a,
+    0 0 0 7px rgba(30, 20, 8, 0.8);
+}
+.card-wrap.taken .art {
+  filter: saturate(0.45) brightness(0.75);
 }
 .card {
   position: relative;
@@ -570,6 +671,20 @@ button {
 .go:hover {
   filter: brightness(1.1);
 }
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+  filter: none;
+}
+.small {
+  font-size: 13px;
+  padding: 5px 16px;
+}
+.lobby-bar {
+  align-items: center;
+  gap: 12px;
+  color: #d6c9a6;
+}
 footer {
   z-index: 1;
   opacity: 0;
@@ -637,6 +752,15 @@ footer {
   .picked header,
   .picked footer {
     opacity: 0;
+    pointer-events: none;
+  }
+  .pickers span {
+    font-size: 9px;
+    padding: 1px 6px;
+  }
+  .small {
+    font-size: 10px;
+    padding: 3px 10px;
   }
   .plate {
     padding: 30px 10px 10px;

@@ -5,7 +5,7 @@ import { ElfMagicFx } from './elf/ElfMagicFx'
 import { CONFIG, type Role } from './config'
 import { Actor, Elf, Goblin } from './entities'
 import { GAP_HALF, World } from './world'
-import { noOutline } from './toon'
+import { makeSprite, noOutline } from './toon'
 import { updateElfAI, updateGoblinAI } from './ai'
 import { sfx } from './audio'
 import { FxSystem } from './fx/Effects'
@@ -34,8 +34,10 @@ export type GameEvent =
   | { e: 'dash'; g: number }
   | { e: 'charm'; g: number }
   | { e: 'say'; s: Slot; k: TKey }
-  | { e: 'left'; n: number }
+  | { e: 'left'; name: string }
   | { e: 'end'; w: Role; c: number; time: number }
+// 真人玩家名單：[角色, 暱稱, 玩家編號]
+type Roster = [Slot, string, number][]
 type Act = 'gaze' | 'music' | 'musicStop' | 'stun' | 'capture' | 'dash' | 'interfere' | 'ult'
 interface Snapshot {
   t: 's'
@@ -176,6 +178,9 @@ export class Game {
   private lastSeq = -1
   private musicStopT = 0
   private bgTimer = 0
+  // 真人玩家頭上的暱稱
+  private tags = new Map<Slot, THREE.Sprite>()
+  private defaultNames: string[] = []
 
   constructor(
     container: HTMLElement,
@@ -242,7 +247,7 @@ export class Game {
 
     // 哥布林：分散在各個山洞，玩家在第一個洞
     const caves = this.world.caves
-    const names = t('goblinNames').split(',')
+    const names = (this.defaultNames = t('goblinNames').split(','))
     const dist = [0, 0, 1, 1, 2, 2, 3, 4]
     for (let i = 0; i < CONFIG.goblinCount; i++) {
       const c = caves[dist[i] % caves.length]
@@ -259,13 +264,14 @@ export class Game {
       this.playerGoblin.name = t('you')
     }
     if (net) {
-      for (const [slot, n] of net.numbers) if (slot !== 'elf' && slot !== this.me) this.goblins[slot].name = t('playerN', { n })
+      this.applyRoster([...net.numbers.keys()].map((slot) => [slot, net.names.get(slot) ?? '', net.numbers.get(slot) ?? 0]))
       if (net.host) for (const slot of net.peers.values()) this.actorOf(slot).netDriven = true
       else for (const a of [this.elf, ...this.goblins]) a.netDriven = !a.isPlayer
       this.netOff.push(
         net.listen((from, m) => this.onNet(from, m)),
         net.onLeave((peer) => this.onPeerLeave(peer)),
       )
+      if (net.host) this.netOff.push(net.onRejoin((peer, prev, name, n) => this.onPeerRejoin(peer, prev, name, n)))
     }
 
     this.marker = new THREE.Mesh(
@@ -815,7 +821,7 @@ export class Game {
         if (ev.s === this.me) this.floatText(t(ev.k), this.actorOf(this.me).pos, '#dddddd')
         return
       case 'left':
-        this.toast(t('tPlayerLeft', { n: ev.n }), 'warn')
+        this.toast(t('tPlayerLeft', { name: ev.name }), 'warn')
         return
       case 'end':
         this.showResult(ev.w, ev.c, ev.time)
@@ -827,6 +833,12 @@ export class Game {
   // 房主或單機：負責判定；加入者只顯示房主的結果
   get authority() {
     return !this.net || this.net.host
+  }
+
+  // 多人連線時的玩家名稱：暱稱，沒填則為「玩家N」
+  private playerName(slot: Slot) {
+    const net = this.net!
+    return net.names.get(slot) || t('playerN', { n: net.numbers.get(slot) ?? 0 })
   }
 
   actorOf(slot: Slot): Actor {
@@ -844,6 +856,10 @@ export class Game {
         this.perform(slot, a.a, a.d)
       }
     } else if (m.t === 's') this.applySnapshot(m as Snapshot)
+    else if (m.t === 'roster') {
+      const l = (m as unknown as { l: unknown }).l
+      if (Array.isArray(l)) this.applyRoster(l.filter((x): x is Roster[number] => Array.isArray(x) && this.validSlot(x[0]) && typeof x[1] === 'string' && Number.isFinite(x[2])))
+    }
     else if (m.t === 'ev') for (const ev of (m as unknown as { l: GameEvent[] }).l) this.present(ev)
   }
 
@@ -869,7 +885,66 @@ export class Game {
     const a = this.actorOf(slot)
     a.netDriven = false
     a.net = null
-    this.emit({ e: 'left', n: net.numbers.get(slot) ?? 0 })
+    this.emit({ e: 'left', name: this.playerName(slot) })
+    net.names.delete(slot)
+    net.numbers.delete(slot)
+    this.syncRoster()
+  }
+
+  // 房主：斷線的玩家用房號連回來。精靈只還給原本的精靈（斷線期間由 AI 接手）；
+  // 哥布林可接手任一隻沒有真人操作的哥布林，優先原本那隻、其次還沒被抓的
+  private onPeerRejoin(peer: string, prev: Slot, name: string, n: number): Slot | null {
+    const net = this.net!
+    if (this.hud.phase === 'over') return null
+    const taken = new Set<Slot>([this.me, ...net.peers.values()])
+    let slot: Slot | undefined
+    if (prev === 'elf') slot = taken.has('elf') ? undefined : 'elf'
+    else {
+      const rank = (g: Goblin) => (g.captured ? 2 : 0) + (g.id === prev ? 0 : 1)
+      slot = this.goblins.filter((g) => !taken.has(g.id)).sort((a, b) => rank(a) - rank(b))[0]?.id
+    }
+    if (slot === undefined) return null
+    net.peers.set(peer, slot)
+    net.names.set(slot, name)
+    net.numbers.set(slot, n)
+    const a = this.actorOf(slot)
+    a.netDriven = true
+    a.net = null
+    // 讓重新連線的玩家以房主這邊的位置為準
+    a.corr++
+    this.syncRoster()
+    return slot
+  }
+
+  private validSlot(v: unknown): v is Slot {
+    return v === 'elf' || (Number.isInteger(v) && (v as number) >= 0 && (v as number) < this.goblins.length)
+  }
+
+  // 房主：玩家離開 / 回來後，把目前的真人玩家名單同步給所有人
+  private syncRoster() {
+    const net = this.net!
+    const l: Roster = [...net.numbers.keys()].map((slot) => [slot, net.names.get(slot) ?? '', net.numbers.get(slot) ?? 0])
+    net.send({ t: 'roster', l }, true)
+    this.applyRoster(l)
+  }
+
+  // 依真人玩家名單更新名稱與頭上的暱稱（自己用金色）；只有文字、沒有底框
+  private applyRoster(list: Roster) {
+    for (const tag of this.tags.values()) {
+      tag.removeFromParent()
+      tag.material.map?.dispose()
+      tag.material.dispose()
+    }
+    this.tags.clear()
+    this.goblins.forEach((g, i) => (g.name = g.isPlayer ? t('you') : this.defaultNames[i]))
+    for (const [slot, nick, n] of list) {
+      const name = nick || t('playerN', { n })
+      if (slot !== 'elf' && slot !== this.me) this.goblins[slot].name = name
+      const tag = makeSprite(name, 0.32, { w: 384, h: 96, font: 54, shadow: true, fg: slot === this.me ? '#ffd23f' : '#ffffff' })
+      tag.position.y = slot === 'elf' ? 2.5 : 2.45
+      this.actorOf(slot).root.add(tag)
+      this.tags.set(slot, tag)
+    }
   }
 
   private snapshot(): Snapshot {

@@ -1,14 +1,58 @@
 import { reactive } from 'vue'
 import { Network } from '@poki/netlib'
 import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assign'
+import { t } from '../i18n'
 
 // 多人連線：使用 Poki 的 netlib（WebRTC P2P）。信令伺服器與 TURN 由 Poki 免費提供，Cloudflare Pages / Poki 皆可連線。
 // 建立房間的玩家是房主，負責整場模擬；其他玩家只傳送自己的操作，接收房主廣播的狀態。
 // netlib 的房號由伺服器產生（英數混合），所以 4 碼數字房號存在 lobby 的 customData.room，加入時以 list() 查詢對應的 lobby。
 const GAME_ID = import.meta.env.VITE_NETLIB_GAME_ID || 'ef8f2673-827f-43a0-8cb1-d64cd038294f'
 // 通訊格式版本：不同版本的遊戲不能同房
-const PROTO = 1
+const PROTO = 2
 const TIMEOUT = 15000
+export const NAME_MAX = 12
+const NAME_KEY = 'goblin-game.nickname'
+const REJOIN_KEY = 'goblin-game.rejoin'
+
+// 重新連線用的識別碼：同一個房號沿用上次的識別碼（關閉遊戲、斷線後重新輸入房號即可回到原本的角色）
+function rejoinToken(code: string) {
+  try {
+    const last = JSON.parse(localStorage.getItem(REJOIN_KEY) ?? 'null') as { code?: string; token?: string } | null
+    if (last?.code === code && typeof last.token === 'string') return last.token
+  } catch {
+    /* 格式錯誤就重新產生 */
+  }
+  const token = Math.random().toString(36).slice(2, 12)
+  try {
+    localStorage.setItem(REJOIN_KEY, JSON.stringify({ code, token }))
+  } catch {
+    /* 存不了就只能以新玩家身分加入 */
+  }
+  return token
+}
+
+// 暱稱：去掉控制字元、限制長度
+export function cleanName(v: unknown) {
+  return typeof v === 'string' ? [...v.replace(/[\u0000-\u001f\u007f]/g, '').trim()].slice(0, NAME_MAX).join('') : ''
+}
+// 大廳顯示用：沒填暱稱時顯示「玩家N」
+export function displayName(p: { n: number; name: string }) {
+  return p.name || t('playerN', { n: p.n })
+}
+export function loadName() {
+  try {
+    return cleanName(localStorage.getItem(NAME_KEY))
+  } catch {
+    return ''
+  }
+}
+export function saveName(name: string) {
+  try {
+    localStorage.setItem(NAME_KEY, name)
+  } catch {
+    /* 無痕模式等情況存不了，只影響下次預設值 */
+  }
+}
 
 export type RoomError = 'full' | 'notFound' | 'started' | 'netFail' | 'hostLeft' | 'version'
 
@@ -16,6 +60,7 @@ export interface LobbyPlayer {
   id: string
   n: number // 玩家編號 1~9（房主是 1）
   pick: Pick
+  name: string // 空字串時顯示「玩家N」
 }
 
 // 開局後交給 Game 使用的連線介面
@@ -26,15 +71,20 @@ export interface NetLink {
   peers: Map<string, Slot>
   // 角色 → 玩家編號（含自己）
   numbers: Map<Slot, number>
+  // 角色 → 暱稱（含自己；沒填暱稱時為空字串）
+  names: Map<Slot, string>
   // 房主：廣播給所有人；其他玩家：傳給房主
   send(msg: object, reliable: boolean): void
   listen(fn: (from: string, msg: { t: string }) => void): () => void
   onLeave(fn: (peer: string) => void): () => void
+  // 房主：斷線的玩家重新連回來（prev 是原本的角色），回傳分配到的角色；回傳 null 表示不能加入
+  onRejoin(fn: (peer: string, prev: Slot, name: string, n: number) => Slot | null): () => void
 }
 
 type LobbyMsg =
-  | { t: 'hello'; v: number }
+  | { t: 'hello'; v: number; name: string; token: string }
   | { t: 'pick'; pick: Pick }
+  | { t: 'name'; name: string }
   | { t: 'lobby'; players: LobbyPlayer[] }
   | { t: 'reject'; why: RoomError }
   | { t: 'start'; slots: [string, Slot][] }
@@ -66,6 +116,13 @@ export class Room {
   private gameListeners = new Set<(from: string, msg: { t: string }) => void>()
   private leaveListeners = new Set<(peer: string) => void>()
   private welcomed: (() => void) | null = null
+  private name = loadName()
+  private token = ''
+  private link: NetLink | null = null
+  private rejoinHandler: ((peer: string, prev: Slot, name: string, n: number) => Slot | null) | null = null
+  // 房主：peer id → 重新連線識別碼；遊戲中斷線的玩家（識別碼 → 原本的資料）
+  private tokens = new Map<string, string>()
+  private dropped = new Map<string, LobbyPlayer & { slot: Slot }>()
 
   private constructor() {
     this.net = new Network(GAME_ID)
@@ -83,7 +140,7 @@ export class Room {
     })
     this.net.on('connected', (peer) => {
       // 加入者連上房主後打招呼，由房主決定是否接受
-      if (!this.state.host && peer.id === this.hostId) this.sendTo(peer.id, { t: 'hello', v: PROTO })
+      if (!this.state.host && peer.id === this.hostId) this.sendTo(peer.id, { t: 'hello', v: PROTO, name: this.name, token: this.token })
     })
     this.net.on('disconnected', (peer) => this.onDisconnected(peer.id))
   }
@@ -106,7 +163,7 @@ export class Room {
         customData: { room: code, host: room.net.id, v: PROTO },
       })
       room.hostId = room.net.id
-      Object.assign(room.state, { phase: 'lobby', code, host: true, me: room.net.id, players: [{ id: room.net.id, n: 1, pick: 'random' }] })
+      Object.assign(room.state, { phase: 'lobby', code, host: true, me: room.net.id, players: [{ id: room.net.id, n: 1, pick: 'random', name: room.name }] })
       return room
     } catch (e) {
       room.net.close()
@@ -124,6 +181,7 @@ export class Room {
       if (entry.customData?.v !== PROTO) throw new RoomFail('version')
       if (entry.playerCount >= entry.maxPlayers) throw new RoomFail('full')
       room.hostId = String(entry.customData?.host ?? '')
+      room.token = rejoinToken(code)
       room.state.code = code
       room.state.me = room.net.id
       const welcome = new Promise<void>((resolve) => (room.welcomed = resolve))
@@ -143,6 +201,11 @@ export class Room {
     }
   }
 
+  // 已開局時的連線介面（重新連線時，開局訊息可能比 onStart 設定得還早）
+  get current() {
+    return this.link
+  }
+
   get isHost() {
     return this.state.host
   }
@@ -151,6 +214,19 @@ export class Room {
     if (this.state.phase !== 'lobby') return
     if (this.state.host) this.applyPick(this.state.me, pick)
     else this.sendTo(this.hostId, { t: 'pick', pick })
+  }
+
+  get myName() {
+    return this.name
+  }
+
+  setName(v: string) {
+    const name = cleanName(v)
+    saveName(name)
+    if (name === this.name) return
+    this.name = name
+    if (this.state.host) this.applyName(this.state.me, name)
+    else this.sendTo(this.hostId, { t: 'name', name })
   }
 
   canPick(pick: Pick) {
@@ -162,7 +238,7 @@ export class Room {
     if (!this.state.host || this.state.phase !== 'lobby') return
     const slots = [...assignSlots(this.state.players)]
     this.broadcast({ t: 'start', slots })
-    void this.net.setLobbySettings({ public: false }).catch(() => {})
+    // 遊戲中房間維持可被搜尋，斷線的玩家才能用房號連回來（新玩家仍會被拒絕）
     this.begin(slots)
   }
 
@@ -170,8 +246,9 @@ export class Room {
   backToLobby() {
     if (this.closed || this.state.phase !== 'playing') return
     this.state.phase = 'lobby'
+    this.link = null
     if (this.state.host) {
-      void this.net.setLobbySettings({ public: true }).catch(() => {})
+      this.dropped.clear()
       this.broadcast({ t: 'lobby', players: this.state.players })
     }
   }
@@ -233,17 +310,21 @@ export class Room {
       if (m.t === 'hello') {
         const v = (m as { v: number }).v
         if (v !== PROTO) return this.sendTo(from, { t: 'reject', why: 'version' })
-        if (s.phase === 'playing') return this.sendTo(from, { t: 'reject', why: 'started' })
+        const token = String((m as { token?: unknown }).token ?? '').slice(0, 20)
+        if (s.phase === 'playing') return this.rejoin(from, token, cleanName((m as { name?: unknown }).name))
+        // 同一個識別碼已經在房間內（例如同一個瀏覽器開兩個分頁）時不記錄，避免互相頂替
+        if (token && ![...this.tokens.values()].includes(token)) this.tokens.set(from, token)
         if (s.players.length >= MAX_PLAYERS) return this.sendTo(from, { t: 'reject', why: 'full' })
         if (!s.players.some((p) => p.id === from)) {
           let n = 1
           while (s.players.some((p) => p.n === n)) n++
-          s.players.push({ id: from, n, pick: 'random' })
+          s.players.push({ id: from, n, pick: 'random', name: cleanName((m as { name?: unknown }).name) })
         }
         this.broadcast({ t: 'lobby', players: s.players })
         return
       }
       if (m.t === 'pick') return this.applyPick(from, (m as { pick: Pick }).pick)
+      if (m.t === 'name') return this.applyName(from, cleanName((m as { name?: unknown }).name))
     } else if (from === this.hostId) {
       if (m.t === 'lobby') {
         s.players = (m as { players: LobbyPlayer[] }).players
@@ -271,6 +352,34 @@ export class Room {
     this.broadcast({ t: 'lobby', players: s.players })
   }
 
+  // 房主：遊戲中有人用房號連回來。只接受這一局中途斷線的玩家，由 Game 決定接手哪個角色
+  private rejoin(from: string, token: string, name: string) {
+    const s = this.state
+    // 重新整理頁面時，房主可能還沒偵測到舊連線斷開：同一個識別碼連回來就先把舊連線當作離線
+    const stale = token ? [...this.tokens].find(([id, tk]) => tk === token && id !== from)?.[0] : undefined
+    if (stale) this.onDisconnected(stale)
+    const d = token ? this.dropped.get(token) : undefined
+    const link = this.link
+    if (!d || !link || s.players.some((p) => p.id === from)) return this.sendTo(from, { t: 'reject', why: 'started' })
+    const player = { id: from, n: d.n, pick: d.pick, name: name || d.name }
+    const slot = this.rejoinHandler?.(from, d.slot, player.name, player.n) ?? null
+    if (slot === null) return this.sendTo(from, { t: 'reject', why: 'started' })
+    this.dropped.delete(token)
+    this.tokens.set(from, token)
+    s.players.push(player)
+    s.players.sort((a, b) => a.n - b.n)
+    this.broadcast({ t: 'lobby', players: s.players })
+    this.sendTo(from, { t: 'start', slots: [[s.me, link.me], ...link.peers] })
+  }
+
+  private applyName(id: string, name: string) {
+    const s = this.state
+    const p = s.players.find((x) => x.id === id)
+    if (!p || p.name === name) return
+    p.name = name
+    this.broadcast({ t: 'lobby', players: s.players })
+  }
+
   private onDisconnected(peer: string) {
     if (this.closed) return
     const s = this.state
@@ -279,8 +388,13 @@ export class Room {
       return
     }
     const i = s.players.findIndex((p) => p.id === peer)
+    const token = this.tokens.get(peer)
+    this.tokens.delete(peer)
     if (i < 0) return
-    s.players.splice(i, 1)
+    const [p] = s.players.splice(i, 1)
+    // 遊戲中斷線：記下原本的角色，之後可用同一個識別碼連回來
+    const slot = this.link?.peers.get(peer)
+    if (s.phase === 'playing' && token && slot !== undefined) this.dropped.set(token, { ...p, slot })
     this.broadcast({ t: 'lobby', players: s.players })
     for (const fn of this.leaveListeners) fn(peer)
   }
@@ -290,9 +404,12 @@ export class Room {
     s.phase = 'playing'
     const all = new Map(slots)
     const numbers = new Map<Slot, number>()
+    const names = new Map<Slot, string>()
     for (const p of s.players) {
       const slot = all.get(p.id)
-      if (slot !== undefined) numbers.set(slot, p.n)
+      if (slot === undefined) continue
+      numbers.set(slot, p.n)
+      names.set(slot, cleanName(p.name))
     }
     const me = all.get(s.me)
     if (me === undefined) return
@@ -301,15 +418,20 @@ export class Room {
     const peers = s.host ? all : new Map<string, Slot>()
     this.gameListeners.clear()
     this.leaveListeners.clear()
+    this.rejoinHandler = null
+    this.dropped.clear()
     const link: NetLink = {
       host: s.host,
       me,
       peers,
       numbers,
+      names,
       send: (msg, reliable) => (s.host ? this.broadcast(msg, reliable) : this.sendTo(this.hostId, msg, reliable)),
       listen: (fn) => (this.gameListeners.add(fn), () => this.gameListeners.delete(fn)),
       onLeave: (fn) => (this.leaveListeners.add(fn), () => this.leaveListeners.delete(fn)),
+      onRejoin: (fn) => ((this.rejoinHandler = fn), () => (this.rejoinHandler = null)),
     }
+    this.link = link
     this.onStart?.(link)
   }
 
@@ -318,6 +440,7 @@ export class Room {
     this.closed = true
     this.gameListeners.clear()
     this.leaveListeners.clear()
+    this.rejoinHandler = null
     this.net.close(why ?? 'left')
     this.onClose?.(why)
   }

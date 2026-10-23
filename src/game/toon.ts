@@ -41,8 +41,9 @@ export function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, shadow = tr
 }
 
 // 文字 / emoji 看板用的 canvas 貼圖
-export function makeLabelTexture(text: string, opts: { bg?: string; fg?: string; font?: number; w?: number; h?: number } = {}) {
-  const { bg = 'rgba(0,0,0,0)', fg = '#fff', font = 64, w = 256, h = 128 } = opts
+// shadow：不描邊，改用柔和陰影維持對比（用於玩家名牌）
+export function makeLabelTexture(text: string, opts: { bg?: string; fg?: string; font?: number; w?: number; h?: number; shadow?: boolean } = {}) {
+  const { bg = 'rgba(0,0,0,0)', fg = '#fff', font = 64, w = 256, h = 128, shadow = false } = opts
   const c = document.createElement('canvas')
   c.width = w
   c.height = h
@@ -63,9 +64,15 @@ export function makeLabelTexture(text: string, opts: { bg?: string; fg?: string;
   if (fit < 1) g.font = `bold ${Math.floor(font * fit)}px "Noto Sans TC", system-ui, sans-serif`
   g.textAlign = 'center'
   g.textBaseline = 'middle'
-  g.lineWidth = 8
-  g.strokeStyle = 'rgba(0,0,0,0.55)'
-  g.strokeText(text, w / 2, h / 2 + 4)
+  if (shadow) {
+    g.shadowColor = 'rgba(0,0,0,0.9)'
+    g.shadowBlur = font * 0.25
+    g.shadowOffsetY = font * 0.05
+  } else {
+    g.lineWidth = 8
+    g.strokeStyle = 'rgba(0,0,0,0.55)'
+    g.strokeText(text, w / 2, h / 2 + 4)
+  }
   g.fillStyle = fg
   g.fillText(text, w / 2, h / 2 + 4)
   const t = new THREE.CanvasTexture(c)
