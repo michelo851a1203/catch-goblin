@@ -1,16 +1,24 @@
 // 以 WebAudio 合成的簡易音效，不需要外部音檔
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
+let muted = false
+const VOLUME = 0.35
 
 function ac() {
   if (!ctx) {
     ctx = new AudioContext()
     master = ctx.createGain()
-    master.gain.value = 0.35
+    master.gain.value = muted ? 0 : VOLUME
     master.connect(ctx.destination)
   }
   if (ctx.state === 'suspended') void ctx.resume()
   return ctx
+}
+
+// 廣告播放或分頁隱藏時靜音
+export function setMuted(on: boolean) {
+  muted = on
+  if (master) master.gain.value = on ? 0 : VOLUME
 }
 
 function tone(freq: number, dur: number, type: OscillatorType = 'sine', vol = 0.4, when = 0, slideTo?: number) {

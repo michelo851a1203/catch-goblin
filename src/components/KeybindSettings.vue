@@ -8,19 +8,21 @@ import {
   assignKey,
   defaultKeybinds,
   keyLabel,
+  labelOf,
   saveKeybinds,
   type Group,
   type Keybinds,
 } from '../keybinds'
 import { sfx } from '../game/audio'
+import { t, type TKey } from '../i18n'
 
 const props = defineProps<{ modelValue: Keybinds }>()
 const emit = defineEmits<{ 'update:modelValue': [k: Keybinds]; close: [] }>()
 
-const groups: { group: Group; title: string }[] = [
-  { group: 'move', title: '🧭 移動' },
-  { group: 'elf', title: '🧝‍♀️ 女精靈技能' },
-  { group: 'goblin', title: '👺 哥布林技能' },
+const groups: { group: Group; title: TKey }[] = [
+  { group: 'move', title: 'kbGroupMove' },
+  { group: 'elf', title: 'kbGroupElf' },
+  { group: 'goblin', title: 'kbGroupGoblin' },
 ]
 
 // 正在等待輸入的欄位
@@ -29,8 +31,7 @@ const notice = ref<{ text: string; kind: 'info' | 'warn' } | null>(null)
 let noticeTimer = 0
 
 function rows(group: Group) {
-  const labels = ACTION_LABELS[group] as Record<string, string>
-  return Object.keys(labels).map((action) => ({ action, label: labels[action] }))
+  return Object.keys(ACTION_LABELS[group]).map((action) => ({ action, label: labelOf(group, action) }))
 }
 function bound(group: Group, action: string) {
   return (props.modelValue[group] as Record<string, string>)[action]
@@ -59,14 +60,14 @@ function startListen(group: Group, action: string) {
 function apply(group: Group, action: string, code: string) {
   const next: Keybinds = JSON.parse(JSON.stringify(props.modelValue))
   const res = assignKey(next, group, action, code)
-  const name = (ACTION_LABELS[group] as Record<string, string>)[action]
+  const name = labelOf(group, action)
   if (!res.ok) {
-    say(`「${keyLabel(code)}」已被「${actionLabel(res.blocked)}」使用，且無法互換，請改用其他按鍵`, 'warn')
+    say(t('kbBlocked', { key: keyLabel(code), action: actionLabel(res.blocked) }), 'warn')
     return
   }
   if (res.swapped.length) {
     const old = keyLabel((props.modelValue[group] as Record<string, string>)[action])
-    say(`按鍵衝突：「${res.swapped.map(actionLabel).join('、')}」已改為 ${old}，「${name}」改為 ${keyLabel(code)}`, 'warn')
+    say(t('kbSwapped', { others: res.swapped.map(actionLabel).join(t('kbListSep')), old, action: name, key: keyLabel(code) }), 'warn')
   }
   commit(next)
 }
@@ -77,7 +78,7 @@ function resetOne(group: Group, action: string) {
 
 function resetAll() {
   commit(defaultKeybinds())
-  say('已回復所有預設按鍵')
+  say(t('kbResetDone'))
 }
 
 function onKey(e: KeyboardEvent) {
@@ -91,7 +92,7 @@ function onKey(e: KeyboardEvent) {
   listening.value = null
   if (e.code === 'Escape') return
   if (RESERVED_KEYS.has(e.code)) {
-    say(`「${keyLabel(e.code)}」是系統保留鍵，無法設定`, 'warn')
+    say(t('kbReserved', { key: keyLabel(e.code) }), 'warn')
     return
   }
   apply(group, action, e.code)
@@ -106,15 +107,15 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="overlay" @click.self="emit('close')">
-    <div class="panel" role="dialog" aria-label="按鍵設定">
+    <div class="panel" role="dialog" :aria-label="t('settings')">
       <header>
-        <h2>⚙️ 按鍵設定</h2>
-        <button class="x" aria-label="關閉" @click="emit('close')">✕</button>
+        <h2>{{ t('kbTitle') }}</h2>
+        <button class="x" :aria-label="t('kbClose')" @click="emit('close')">✕</button>
       </header>
-      <p class="tip">點選按鍵後按下新的按鍵即可變更（Esc 取消）。若與其他動作衝突，兩者會自動互換。</p>
+      <p class="tip">{{ t('kbTip') }}</p>
 
       <section v-for="g in groups" :key="g.group">
-        <h3>{{ g.title }}</h3>
+        <h3>{{ t(g.title) }}</h3>
         <div v-for="r in rows(g.group)" :key="r.action" class="row">
           <span class="name">{{ r.label }}</span>
           <button
@@ -122,12 +123,12 @@ onBeforeUnmount(() => {
             :class="{ listening: listening?.group === g.group && listening?.action === r.action }"
             @click="startListen(g.group, r.action)"
           >
-            {{ listening?.group === g.group && listening?.action === r.action ? '請按下按鍵…' : keyLabel(bound(g.group, r.action)) }}
+            {{ listening?.group === g.group && listening?.action === r.action ? t('kbListening') : keyLabel(bound(g.group, r.action)) }}
           </button>
           <button
             class="reset"
             :disabled="isDefault(g.group, r.action)"
-            :title="`回復預設（${keyLabel((DEFAULT_KEYBINDS[g.group] as Record<string, string>)[r.action])}）`"
+            :title="t('kbResetOne', { key: keyLabel((DEFAULT_KEYBINDS[g.group] as Record<string, string>)[r.action]) })"
             @click="resetOne(g.group, r.action)"
           >
             ↺
@@ -135,13 +136,13 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <p class="note">數字鍵 1～4 與滑鼠左右鍵為固定備用鍵；Tab（觀戰切換）、Esc 為系統保留鍵。</p>
+      <p class="note">{{ t('kbNote') }}</p>
 
       <div class="msg" :class="notice?.kind">{{ notice?.text }}</div>
 
       <footer>
-        <button class="ghost" :disabled="allDefault" @click="resetAll">回復全部預設</button>
-        <button class="go" @click="emit('close')">完成</button>
+        <button class="ghost" :disabled="allDefault" @click="resetAll">{{ t('kbResetAll') }}</button>
+        <button class="go" @click="emit('close')">{{ t('kbDone') }}</button>
       </footer>
     </div>
   </div>

@@ -11,6 +11,8 @@ import { sfx } from './audio'
 import { FxSystem } from './fx/Effects'
 import { CELL } from './fx/atlas'
 import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
+import { t } from '../i18n'
+import * as poki from '../poki'
 
 export interface SkillView {
   key: string
@@ -70,8 +72,6 @@ export function createHudState(role: Role): HudState {
   }
 }
 
-const GOBLIN_NAMES = ['阿吉', '布布', '咕嚕', '小臭', '歪鼻', '啾啾', '呱呱', '皮皮']
-
 const v1 = new THREE.Vector3()
 const v2 = new THREE.Vector3()
 
@@ -124,6 +124,8 @@ export class Game {
   private warned = new Set<number>()
   private marker: THREE.Mesh
   private disposed = false
+  // 暫停原因（廣告、分頁隱藏）；任一存在就停止更新與繪製
+  private pauses = new Set<string>()
   private listeners: [EventTarget, string, EventListener][] = []
 
 
@@ -188,10 +190,11 @@ export class Game {
 
     // 哥布林：分散在各個山洞，玩家在第一個洞
     const caves = this.world.caves
+    const names = t('goblinNames').split(',')
     const dist = [0, 0, 1, 1, 2, 2, 3, 4]
     for (let i = 0; i < CONFIG.goblinCount; i++) {
       const c = caves[dist[i] % caves.length]
-      const g = new Goblin(i, GOBLIN_NAMES[i], c.id)
+      const g = new Goblin(i, names[i], c.id)
       const a = Math.random() * Math.PI * 2
       g.pos.set(c.center.x + Math.cos(a) * 4, 0, c.center.z + Math.sin(a) * 4)
       g.yaw = Math.random() * 6
@@ -201,7 +204,7 @@ export class Game {
     if (role === 'goblin') {
       this.playerGoblin = this.goblins[0]
       this.playerGoblin.isPlayer = true
-      this.playerGoblin.name = '你'
+      this.playerGoblin.name = t('you')
     }
 
     this.marker = new THREE.Mesh(
@@ -229,7 +232,7 @@ export class Game {
       if (this.disposed) return
       this.raf = requestAnimationFrame(loop)
       const dt = Math.min(this.clock.getDelta(), 0.05)
-      this.tick(dt)
+      if (!this.pauses.size) this.tick(dt)
     }
     loop()
   }
@@ -237,6 +240,7 @@ export class Game {
   dispose() {
     this.disposed = true
     cancelAnimationFrame(this.raf)
+    poki.gameplayStop()
     for (const [t, n, f] of this.listeners) t.removeEventListener(n, f)
     if (document.pointerLockElement) document.exitPointerLock()
     this.fx.dispose()
@@ -246,6 +250,23 @@ export class Game {
     this.staff.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
+  }
+
+  pause(reason: string) {
+    if (this.disposed) return
+    const first = !this.pauses.size
+    this.pauses.add(reason)
+    if (!first) return
+    this.keys.clear()
+    this.dragging = false
+    if (document.pointerLockElement) document.exitPointerLock()
+    if (this.hud.phase === 'play') poki.gameplayStop()
+  }
+
+  resume(reason: string) {
+    if (!this.pauses.delete(reason) || this.pauses.size) return
+    this.clock.getDelta() // 丟棄暫停期間累積的時間
+    if (this.hud.phase === 'play') poki.gameplayStart()
   }
 
   setSpeed(s: number) {
@@ -273,6 +294,7 @@ export class Game {
       this.keys.delete(e.code)
     })
     this.on(window, 'blur', () => this.keys.clear())
+    this.on(document, 'visibilitychange', () => (document.hidden ? this.pause('hidden') : this.resume('hidden')))
     this.on(canvas, 'mousedown', ((e: MouseEvent) => {
       sfx.unlock()
       if (document.pointerLockElement === canvas) {
@@ -313,7 +335,7 @@ export class Game {
 
   // 由按鍵或 HUD 按鈕觸發
   onAction(code: string) {
-    if (this.hud.phase !== 'play') return
+    if (this.hud.phase !== 'play' || this.pauses.size) return
     sfx.unlock()
     // 數字鍵與滑鼠是固定的備用鍵，但若玩家把該鍵綁給其他動作則以自訂為準
     const bound = [...Object.values(this.binds.move), ...Object.values(this.role === 'elf' ? this.binds.elf : this.binds.goblin)]
@@ -379,22 +401,22 @@ export class Game {
     for (const g of this.goblins) {
       if (g.captured || g.held || g.grace > 0) continue
       const ox = g.pos.x - origin.x, oz = g.pos.z - origin.z
-      const t = ox * dir.x + oz * dir.z
-      if (t < 0 || t > len) continue
+      const along = ox * dir.x + oz * dir.z
+      if (along < 0 || along > len) continue
       const perp = Math.abs(ox * dir.z - oz * dir.x)
       if (perp < G.width + g.radius) {
         g.rooted = Math.max(g.rooted, G.root)
         g.attract = 0
         hits++
         hitPos.push(g.pos.clone())
-        this.floatText('定身！', g.pos, '#ff7fb8')
+        this.floatText(t('fRooted'), g.pos, '#ff7fb8')
       }
     }
     this.fx.gazeBeam(origin, dir, len, hitPos, len < G.range - 0.5)
     this.elfFx.gaze(elf.pos, dir)
     if (hits && this.playerGoblin?.rooted) this.shake = Math.max(this.shake, 0.25)
     sfx.gaze()
-    if (hits && this.playerGoblin && this.playerGoblin.rooted > 0) this.toast('你被精靈的眼神定住了！', 'bad')
+    if (hits && this.playerGoblin && this.playerGoblin.rooted > 0) this.toast(t('tYouRooted'), 'bad')
     return true
   }
 
@@ -407,7 +429,7 @@ export class Game {
     this.fx.ring(elf.pos, CONFIG.elf.music.radius, 0xffe9a0, 1.4, 0.05)
     this.fx.sparkles(elf.pos, 20, 0xffe6a0, 0.6, 2.5, 1.2)
     this.elfFx.musicStart(elf.pos)
-    if (this.role === 'goblin') this.toast('🎵 精靈開始彈奏豎琴……小心被吸引！', 'warn')
+    if (this.role === 'goblin') this.toast(t('tMusicStart'), 'warn')
     return true
   }
 
@@ -438,7 +460,7 @@ export class Game {
     if (!best) {
       elf.cd.stun = 0.6
       this.fx.dust(elf.pos.x + Math.sin(elf.yaw), elf.pos.z + Math.cos(elf.yaw), 4, 0.8, 0xffffff)
-      this.floatText('落空', v2.copy(elf.pos).add(new THREE.Vector3(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))), '#dddddd')
+      this.floatText(t('fMiss'), v2.copy(elf.pos).add(new THREE.Vector3(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))), '#dddddd')
       return false
     }
     elf.cd.stun = S.cooldown
@@ -450,9 +472,9 @@ export class Game {
     sfx.stun()
     this.fx.starBurst(best.pos)
     this.elfFx.stun(best.pos)
-    this.fx.pow(best.pos, '咚！', '#ffd23f')
+    this.fx.pow(best.pos, t('fBonk'), '#ffd23f')
     if (best.isPlayer || this.role === 'elf') this.shake = Math.max(this.shake, best.isPlayer ? 0.45 : 0.2)
-    if (best.isPlayer) this.toast('你被打暈了！', 'bad')
+    if (best.isPlayer) this.toast(t('tYouStunned'), 'bad')
     return true
   }
 
@@ -471,7 +493,7 @@ export class Game {
       }
     }
     if (!best) {
-      if (this.role === 'elf') this.floatText('附近沒有暈眩的哥布林', elf.pos, '#dddddd')
+      if (this.role === 'elf') this.floatText(t('fNoStunned'), elf.pos, '#dddddd')
       return false
     }
     best.held = true
@@ -482,8 +504,8 @@ export class Game {
     this.fx.sparkles(best.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
     this.elfFx.capture(best.pos)
     elf.yaw =Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
-    if (best.isPlayer) this.toast(best.ultUsed ? '你正在被打包！快叫隊友來救！' : `你正在被打包！按 ${keyLabel(this.binds.goblin.ult)} 使用大招掙脫！`, 'bad')
-    else if (this.role === 'goblin') this.toast(`${best.name} 正在被打包！靠近精靈按 ${keyLabel(this.binds.goblin.interfere)} 攪局！`, 'warn')
+    if (best.isPlayer) this.toast(best.ultUsed ? t('tYouPacked') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
+    else if (this.role === 'goblin') this.toast(t('tAllyPacked', { name: best.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
     return true
   }
 
@@ -504,9 +526,9 @@ export class Game {
       g.dashT = 1.2
       sfx.breakFree()
       this.fx.shockwave(g.pos)
-      this.fx.pow(g.pos, '掙脫！', '#8ff27a')
+      this.fx.pow(g.pos, t('fFree'), '#8ff27a')
       this.shake = Math.max(this.shake, 0.5)
-      this.toast(g.isPlayer ? '大招發動！你掙脫了！快跑！' : `${g.name} 用大招掙脫了！`, g.isPlayer || this.role === 'goblin' ? 'good' : 'bad')
+      this.toast(g.isPlayer ? t('tYouBrokeFree') : t('tBrokeFree', { name: g.name }), g.isPlayer || this.role === 'goblin' ? 'good' : 'bad')
     } else {
       sfx.interfere()
       const at = by ? by.pos.clone().lerp(elf.pos, 0.5) : g.pos
@@ -514,7 +536,7 @@ export class Game {
       this.fx.pow(at, 'POW!', '#ffd23f')
       this.fx.dust(g.pos.x, g.pos.z, 10, 1.6)
       this.shake = Math.max(this.shake, 0.35)
-      this.toast(`${by?.isPlayer ? '你' : `${by?.name ?? '哥布林'} `}攪局成功，救出了 ${g.isPlayer ? '你' : g.name}！`, this.role === 'goblin' ? 'good' : 'bad')
+      this.toast(t('tRescued', { by: by?.isPlayer ? t('you') : by?.name ?? t('aGoblin'), name: g.isPlayer ? t('you') : g.name }), this.role === 'goblin' ? 'good' : 'bad')
     }
   }
 
@@ -540,9 +562,9 @@ export class Game {
     if (!elf.isPlayer) elf.ai.patrolWait = CONFIG.elf.aiRest
     const free = this.goblins.filter((x) => !x.captured).length
     if (g.isPlayer) {
-      this.toast('你被捕獲了……進入觀戰模式（Tab 切換視角）', 'bad')
+      this.toast(t('tYouCaptured'), 'bad')
       this.setSpeed(1)
-    } else this.toast(`${g.name} 被捕獲了！剩下 ${free} 隻哥布林`, this.role === 'elf' ? 'good' : 'bad')
+    } else this.toast(t('tCaptured', { name: g.name, n: free }), this.role === 'elf' ? 'good' : 'bad')
     if (free === 0) this.finish('elf')
   }
 
@@ -561,11 +583,11 @@ export class Game {
     const elf = this.elf
     if (g.captured || g.disabled || g.interfereCd > 0) return false
     if (!elf.packing || elf.packing.g === g) {
-      if (g.isPlayer) this.floatText('沒有可以攪局的目標', g.pos, '#dddddd')
+      if (g.isPlayer) this.floatText(t('fNoTarget'), g.pos, '#dddddd')
       return false
     }
     if (d2(g.pos, elf.pos) > CONFIG.goblin.interfereRange) {
-      if (g.isPlayer) this.floatText('太遠了！靠近精靈', g.pos, '#dddddd')
+      if (g.isPlayer) this.floatText(t('fTooFar'), g.pos, '#dddddd')
       return false
     }
     g.interfereCd = CONFIG.goblin.interfereCooldown
@@ -575,7 +597,7 @@ export class Game {
 
   goblinUlt(g: Goblin) {
     if (g.ultUsed || !g.held || this.elf.packing?.g !== g) {
-      if (g.isPlayer && !g.ultUsed) this.floatText('大招只能在被打包時使用', g.pos, '#dddddd')
+      if (g.isPlayer && !g.ultUsed) this.floatText(t('fUltOnlyHeld'), g.pos, '#dddddd')
       return false
     }
     g.ultUsed = true
@@ -706,7 +728,8 @@ export class Game {
       }
       if (this.countdown <= 0) {
         hud.phase = 'play'
-        this.toast(this.role === 'elf' ? '狩獵開始！找出躲在山洞裡的哥布林！' : '躲起來！撐過 10 分鐘！', 'info')
+        poki.gameplayStart()
+        this.toast(this.role === 'elf' ? t('tHuntStart') : t('tHideStart'), 'info')
       }
     } else if (hud.phase === 'play') {
       this.elapsed += dt
@@ -714,7 +737,7 @@ export class Game {
       for (const mark of [300, 120, 60]) {
         if (left < mark && !this.warned.has(mark) && this.duration > mark) {
           this.warned.add(mark)
-          this.toast(`剩下 ${mark / 60} 分鐘！`, 'warn')
+          this.toast(t('tMinutesLeft', { n: mark / 60 }), 'warn')
         }
       }
       if (left <= 0) {
@@ -758,7 +781,7 @@ export class Game {
           elf.musicAffected.add(g)
           g.attract = M.attractTime
           g.charm = M.charmTime
-          if (g.isPlayer) this.toast('你被琴聲吸引了……（10 秒內更容易被捕獲）', 'bad')
+          if (g.isPlayer) this.toast(t('tYouCharmed'), 'bad')
         }
       }
       if (Math.floor(elf.channel / 1.2) !== Math.floor((elf.channel - dt) / 1.2)) this.fx.ring(elf.pos, M.radius, 0xffe9a0, 1.4, 0.05)
@@ -893,7 +916,7 @@ export class Game {
     const radarNow = !!this.playerGoblin && !this.playerGoblin.captured && this.playerGoblin.zone >= 0 && this.playerGoblin.zone === elf.zone
     if (radarNow && !this.radarWas) {
       sfx.alarm()
-      this.toast('⚠ 哥布林雷達：精靈已經進入你所在的山洞！', 'warn')
+      this.toast(t('tRadar'), 'warn')
     }
     this.radarWas = radarNow
 
@@ -1010,6 +1033,7 @@ export class Game {
   private finish(winner: Role) {
     if (this.hud.phase === 'over') return
     this.hud.phase = 'over'
+    poki.gameplayStop()
     this.elfStopMusic()
     if (winner === 'elf') this.elf.character.setVictory(true)
     const captured = this.goblins.filter((g) => g.captured).length
@@ -1020,11 +1044,11 @@ export class Game {
     const mm = Math.floor(this.elapsed / 60), ss = Math.floor(this.elapsed % 60)
     this.hud.result = {
       winner,
-      title: winner === 'elf' ? '精靈獲勝！' : '哥布林獲勝！',
+      title: winner === 'elf' ? t('rElfWin') : t('rGoblinWin'),
       detail:
         winner === 'elf'
-          ? `精靈在 ${mm} 分 ${String(ss).padStart(2, '0')} 秒內捕獲了全部 ${captured} 隻哥布林。`
-          : `撐過了 10 分鐘！${CONFIG.goblinCount - captured} 隻哥布林成功逃脫（被捕獲 ${captured} 隻）。`,
+          ? t('rElfDetail', { mm, ss: String(ss).padStart(2, '0'), n: captured })
+          : t('rGoblinDetail', { free: CONFIG.goblinCount - captured, n: captured }),
     }
     this.syncHud()
     this.onEnd(winner, { captured, time: this.elapsed })
@@ -1041,44 +1065,44 @@ export class Game {
       const E = CONFIG.elf
       const b = this.binds.elf
       h.skills = [
-        { key: keyLabel(b.gaze), code: b.gaze, name: '凝視', icon: '💗', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
-        { key: keyLabel(b.music), code: b.music, name: elf.channel >= 0 ? '停止彈奏' : '彈奏樂器', icon: '🎵', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
-        { key: keyLabel(b.stun), code: b.stun, name: '打暈', icon: '💫', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
-        { key: keyLabel(b.capture), code: b.capture, name: '捕獲', icon: '🎒', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
+        { key: keyLabel(b.gaze), code: b.gaze, name: t('skillGaze'), icon: '💗', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
+        { key: keyLabel(b.music), code: b.music, name: elf.channel >= 0 ? t('skillMusicStop') : t('skillMusic'), icon: '🎵', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
+        { key: keyLabel(b.stun), code: b.stun, name: t('skillStun'), icon: '💫', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
+        { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: '🎒', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
       ]
       h.radar = false
       const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < E.capture.range)
-      if (elf.stagger > 0) h.hint = '被哥布林干擾了！'
+      if (elf.stagger > 0) h.hint = t('hInterrupted')
       else if (elf.packing) h.hint = ''
-      else if (elf.channel >= 0) h.hint = `彈奏中……移動或再按 ${keyLabel(b.music)} 解除`
-      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = `按 ${keyLabel(b.capture)} 捕獲暈眩的哥布林！`
-      else if (near.length && elf.cd.stun <= 0) h.hint = `按 ${keyLabel(b.stun)}（或左鍵）打暈！`
+      else if (elf.channel >= 0) h.hint = t('hPlaying', { key: keyLabel(b.music) })
+      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = t('hCapture', { key: keyLabel(b.capture) })
+      else if (near.length && elf.cd.stun <= 0) h.hint = t('hStun', { key: keyLabel(b.stun) })
       else h.hint = ''
       h.progress = elf.packing ? elf.packing.t / elf.packing.total : -1
-      h.progressLabel = elf.packing ? `打包 ${elf.packing.g.name} 中……` : ''
+      h.progressLabel = elf.packing ? t('hPacking', { name: elf.packing.g.name }) : ''
       h.spectating = ''
     } else {
       const g = this.playerGoblin!
       const G = CONFIG.goblin
       const b = this.binds.goblin
       h.skills = [
-        { key: keyLabel(b.dash), code: b.dash, name: '加速', icon: '💨', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
-        { key: keyLabel(b.interfere), code: b.interfere, name: '攪局', icon: '🤜', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
-        { key: keyLabel(b.ult), code: b.ult, name: '大招・掙脫', icon: '💥', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
+        { key: keyLabel(b.dash), code: b.dash, name: t('skillDash'), icon: '💨', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
+        { key: keyLabel(b.interfere), code: b.interfere, name: t('skillInterfere'), icon: '🤜', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
+        { key: keyLabel(b.ult), code: b.ult, name: t('skillUlt'), icon: '💥', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
       ]
       h.radar = !g.captured && g.zone >= 0 && g.zone === elf.zone
       if (g.captured) h.hint = ''
-      else if (g.held) h.hint = g.ultUsed ? '大招已用完……等待隊友攪局！' : `按 ${keyLabel(b.ult)} 發動大招掙脫！`
-      else if (g.stun > 0) h.hint = '暈眩中……'
-      else if (g.rooted > 0) h.hint = '被凝視定身中！'
-      else if (g.attract > 0) h.hint = '被琴聲吸引中……'
-      else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = `按 ${keyLabel(b.interfere)} 攪局，救出同伴！`
-      else if (elf.packing && d2(g.pos, elf.pos) < 30) h.hint = `${elf.packing.g.name} 正在被打包，快去攪局！`
+      else if (g.held) h.hint = g.ultUsed ? t('hUltUsed') : t('hUlt', { key: keyLabel(b.ult) })
+      else if (g.stun > 0) h.hint = t('hStunned')
+      else if (g.rooted > 0) h.hint = t('hRooted')
+      else if (g.attract > 0) h.hint = t('hCharmed')
+      else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = t('hInterfere', { key: keyLabel(b.interfere) })
+      else if (elf.packing && d2(g.pos, elf.pos) < 30) h.hint = t('hAllyPacked', { name: elf.packing.g.name })
       else h.hint = ''
       h.progress = g.held && elf.packing ? elf.packing.t / elf.packing.total : -1
-      h.progressLabel = h.progress >= 0 ? '你正在被打包！' : ''
+      h.progressLabel = h.progress >= 0 ? t('hYouPacked') : ''
       const f = this.focusActor()
-      h.spectating = g.captured ? (f instanceof Goblin ? f.name : '精靈') : ''
+      h.spectating = g.captured ? (f instanceof Goblin ? f.name : t('elf')) : ''
     }
   }
 

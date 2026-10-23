@@ -4,6 +4,7 @@ import { Game, createHudState } from '../game/Game'
 import type { Role } from '../game/config'
 import { recordResult } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
+import { t } from '../i18n'
 
 const props = defineProps<{ role: Role }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
@@ -29,6 +30,12 @@ const won = computed(() => hud.result && hud.result.winner === props.role)
 function press(code: string) {
   game?.onAction(code)
 }
+// 廣告在回合之間播放（由 App 處理），離開前先暫停遊戲
+function leave(to: 'restart' | 'menu') {
+  game?.pause('leave')
+  if (to === 'restart') emit('restart')
+  else emit('menu')
+}
 function toggleSpeed() {
   game?.setSpeed(hud.speed === 1 ? 4 : 1)
 }
@@ -41,7 +48,7 @@ function toggleSpeed() {
     <!-- 上方：時間與剩餘數量 -->
     <div class="top">
       <div class="pill side">
-        <span class="label">{{ role === 'elf' ? '女精靈' : '哥布林' }}</span>
+        <span class="label">{{ role === 'elf' ? t('elfName') : t('goblinName') }}</span>
       </div>
       <div class="pill timer" :class="{ urgent: hud.timeLeft < 60 }">⏳ {{ clock }}</div>
       <div class="pill side">
@@ -59,7 +66,7 @@ function toggleSpeed() {
       </TransitionGroup>
     </div>
 
-    <div v-if="hud.radar" class="radar">❗ 哥布林雷達：精靈就在這個山洞裡！</div>
+    <div v-if="hud.radar" class="radar">{{ t('hudRadar') }}</div>
 
     <div v-if="hud.progress >= 0" class="progress">
       <span>{{ hud.progressLabel }}</span>
@@ -86,11 +93,11 @@ function toggleSpeed() {
     </div>
 
     <div v-if="hud.spectating" class="spectate">
-      👀 觀戰中：{{ hud.spectating }}（Tab 切換）
-      <button @click="toggleSpeed">{{ hud.speed === 1 ? '⏩ 快轉 x4' : '▶ 正常速度' }}</button>
+      {{ t('hudSpectating', { name: hud.spectating }) }}
+      <button @click="toggleSpeed">{{ hud.speed === 1 ? t('hudFast') : t('hudNormal') }}</button>
     </div>
 
-    <div class="help">{{ moveKeys }} 移動・拖曳滑鼠轉視角（雙擊鎖定滑鼠）・滾輪縮放</div>
+    <div class="help">{{ t('hudHelp', { keys: moveKeys }) }}</div>
 
     <div v-if="hud.phase === 'countdown'" class="countdown" :key="hud.countdown">{{ hud.countdown }}</div>
 
@@ -100,8 +107,8 @@ function toggleSpeed() {
         <h2>{{ hud.result.title }}</h2>
         <p>{{ hud.result.detail }}</p>
         <div class="actions">
-          <button class="ghost" @click="emit('menu')">回到選角</button>
-          <button class="go" @click="emit('restart')">再玩一次</button>
+          <button class="ghost" @click="leave('menu')">{{ t('hudMenu') }}</button>
+          <button class="go" @click="leave('restart')">{{ t('hudAgain') }}</button>
         </div>
       </div>
     </div>
@@ -114,7 +121,7 @@ function toggleSpeed() {
   inset: 0;
   background: #000;
   color: #fff;
-  font-family: 'Noto Serif TC', serif;
+  font-family: var(--font);
   user-select: none;
 }
 .viewport {

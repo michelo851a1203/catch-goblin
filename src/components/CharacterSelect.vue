@@ -8,6 +8,7 @@ import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
 import KeybindSettings from './KeybindSettings.vue'
+import { locale, setLocale, t } from '../i18n'
 
 const emit = defineEmits<{ start: [role: Role] }>()
 
@@ -26,44 +27,56 @@ const moveKeys = computed(() => {
 const entered = ref(false)
 onMounted(() => requestAnimationFrame(() => (entered.value = true)))
 
-const cards: {
-  role: Role
-  name: string
-  sub: string
-  art: string
-  tagline: string
-  goal: string
-  skills: { icon: string; key: () => string; name: string; desc: string }[]
-}[] = [
+// 依目前語系與鍵位重新產生卡片內容
+const cards = computed<
   {
-    role: 'elf',
-    name: '女精靈',
-    sub: 'Sylvari Huntress',
-    art: elfArt,
-    tagline: '以琴聲與凝視狩獵的森林守護者',
-    goal: '在 10 分鐘內捕獲所有哥布林',
-    skills: [
-      { icon: '💗', key: () => keyLabel(binds.value.elf.gaze), name: '凝視', desc: '射出愛心眼神射線，被看到的哥布林定身 2 秒' },
-      { icon: '🎵', key: () => keyLabel(binds.value.elf.music), name: '彈奏樂器', desc: '原地彈奏，範圍內哥布林被吸引 3 秒，10 秒內更容易被捕獲' },
-      { icon: '💫', key: () => keyLabel(binds.value.elf.stun), name: '打暈', desc: '近距離立即打暈哥布林 2 秒' },
-      { icon: '🎒', key: () => keyLabel(binds.value.elf.capture), name: '捕獲', desc: '把暈眩的哥布林打包，3 秒後完成捕獲' },
-    ],
-  },
-  {
-    role: 'goblin',
-    name: '哥布林',
-    sub: 'Cave Goblin',
-    art: goblinArt,
-    tagline: '群居在山洞裡、機靈又膽小的小傢伙',
-    goal: '和夥伴們一起撐過 10 分鐘',
-    skills: [
-      { icon: '💨', key: () => keyLabel(binds.value.goblin.dash), name: '加速', desc: '短時間衝刺 2 秒，冷卻 10 秒' },
-      { icon: '🤜', key: () => keyLabel(binds.value.goblin.interfere), name: '攪局', desc: '衝到正在打包的精靈身旁，救出被抓的同伴' },
-      { icon: '💥', key: () => keyLabel(binds.value.goblin.ult), name: '大招・掙脫', desc: '被打包時掙脫束縛，整場只能用一次' },
-      { icon: '📡', key: () => '被動', name: '哥布林雷達', desc: '精靈進入你所在的山洞時，頭上會跳出警告' },
-    ],
-  },
-]
+    role: Role
+    name: string
+    sub: string
+    art: string
+    tagline: string
+    goal: string
+    skills: { icon: string; key: string; name: string; desc: string }[]
+  }[]
+>(() => {
+  const b = binds.value
+  return [
+    {
+      role: 'elf',
+      name: t('elfName'),
+      sub: 'Sylvari Huntress',
+      art: elfArt,
+      tagline: t('elfTagline'),
+      goal: t('elfGoal'),
+      skills: [
+        { icon: '💗', key: keyLabel(b.elf.gaze), name: t('skillGaze'), desc: t('skillGazeDesc') },
+        { icon: '🎵', key: keyLabel(b.elf.music), name: t('skillMusic'), desc: t('skillMusicDesc') },
+        { icon: '💫', key: keyLabel(b.elf.stun), name: t('skillStun'), desc: t('skillStunDesc') },
+        { icon: '🎒', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+      ],
+    },
+    {
+      role: 'goblin',
+      name: t('goblinName'),
+      sub: 'Cave Goblin',
+      art: goblinArt,
+      tagline: t('goblinTagline'),
+      goal: t('goblinGoal'),
+      skills: [
+        { icon: '💨', key: keyLabel(b.goblin.dash), name: t('skillDash'), desc: t('skillDashDesc') },
+        { icon: '🤜', key: keyLabel(b.goblin.interfere), name: t('skillInterfere'), desc: t('skillInterfereDesc') },
+        { icon: '💥', key: keyLabel(b.goblin.ult), name: t('skillUlt'), desc: t('skillUltDesc') },
+        { icon: '📡', key: t('passive'), name: t('skillRadar'), desc: t('skillRadarDesc') },
+      ],
+    },
+  ]
+})
+
+function toggleLocale() {
+  sfx.unlock()
+  sfx.flip()
+  setLocale(locale.value === 'zh' ? 'en' : 'zh')
+}
 
 async function choose(role: Role) {
   if (chosen.value) return
@@ -85,7 +98,8 @@ function back() {
 <template>
   <div class="select" :class="{ entered }">
     <div class="glow"></div>
-    <button class="gear" aria-label="按鍵設定" title="按鍵設定" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
+    <button class="lang" @click="toggleLocale">{{ t('langSwitch') }}</button>
+    <button class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
           fill="currentColor"
@@ -96,9 +110,9 @@ function back() {
     </button>
     <KeybindSettings v-if="showSettings" v-model="binds" @close="showSettings = false" />
     <header>
-      <p class="eyebrow">— 草原上的捉迷藏 —</p>
-      <h1 data-text="快逃啊，哥布林！女精靈來山洞了">快逃啊，哥布林！女精靈來山洞了</h1>
-      <p class="lead">選擇你的陣營</p>
+      <p class="eyebrow">{{ t('eyebrow') }}</p>
+      <h1 :data-text="t('title')">{{ t('title') }}</h1>
+      <p class="lead">{{ t('chooseSide') }}</p>
     </header>
 
     <!-- 翻牌時灑落的夢幻藍色靈粉（Shaders：天藍光暈 + 冰藍光點 + 薰衣草藍光暈 + 閃爍星芒） -->
@@ -137,15 +151,15 @@ function back() {
                 <li v-for="s in c.skills" :key="s.name">
                   <span class="icon">{{ s.icon }}</span>
                   <div>
-                    <b>{{ s.name }} <kbd>{{ s.key() }}</kbd></b>
+                    <b>{{ s.name }} <kbd>{{ s.key }}</kbd></b>
                     <small>{{ s.desc }}</small>
                   </div>
                 </li>
               </ul>
-              <p class="controls">{{ moveKeys }} 移動・拖曳滑鼠（或雙擊鎖定）轉動視角・滾輪縮放</p>
+              <p class="controls">{{ t('controls', { keys: moveKeys }) }}</p>
               <div class="actions">
-                <button class="ghost" @click.stop="back">返回</button>
-                <button class="go" @click.stop="emit('start', c.role)">開始冒險</button>
+                <button class="ghost" @click.stop="back">{{ t('back') }}</button>
+                <button class="go" @click.stop="emit('start', c.role)">{{ t('startAdventure') }}</button>
               </div>
             </div>
           </div>
@@ -154,9 +168,9 @@ function back() {
     </div>
 
     <footer>
-      <span>精靈勝場 {{ stats.elfWins }}</span>
+      <span>{{ t('elfWins', { n: stats.elfWins }) }}</span>
       <span>・</span>
-      <span>哥布林勝場 {{ stats.goblinWins }}</span>
+      <span>{{ t('goblinWins', { n: stats.goblinWins }) }}</span>
     </footer>
   </div>
 </template>
@@ -173,7 +187,21 @@ function back() {
   gap: 2vh;
   background: radial-gradient(ellipse at 50% 30%, #2f5d4a 0%, #14261f 55%, #0b1411 100%);
   color: #f4ead2;
-  font-family: 'Noto Serif TC', serif;
+  font-family: var(--font);
+}
+.lang {
+  position: absolute;
+  top: 26px;
+  right: 84px;
+  z-index: 10;
+  padding: 6px 16px;
+  font-size: 14px;
+  background: rgba(20, 30, 24, 0.7);
+  color: #e6c878;
+  border-color: #c9a24e;
+}
+.lang:hover {
+  box-shadow: 0 0 14px rgba(255, 210, 110, 0.45);
 }
 .gear {
   position: absolute;
@@ -401,7 +429,7 @@ h1::after {
   background: linear-gradient(transparent, rgba(12, 18, 10, 0.92) 55%);
 }
 .sub {
-  font-family: 'Cinzel', serif;
+  font-family: var(--font-display);
   font-size: 12px;
   letter-spacing: 0.25em;
   color: #e6c878;

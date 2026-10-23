@@ -1,0 +1,286 @@
+import { ref } from 'vue'
+
+// 介面文字（繁中 / 英文）；{name} 形式的佔位符由 t() 代入
+export type Locale = 'zh' | 'en'
+const KEY = 'goblin-game:locale'
+
+const zh = {
+  title: '快逃啊，哥布林！女精靈來山洞了',
+  eyebrow: '— 草原上的捉迷藏 —',
+  chooseSide: '選擇你的陣營',
+  settings: '按鍵設定',
+  langSwitch: 'English',
+  back: '返回',
+  startAdventure: '開始冒險',
+  elfWins: '精靈勝場 {n}',
+  goblinWins: '哥布林勝場 {n}',
+  controls: '{keys} 移動・拖曳滑鼠（或雙擊鎖定）轉動視角・滾輪縮放',
+  passive: '被動',
+
+  elfName: '女精靈',
+  elfTagline: '以琴聲與凝視狩獵的森林守護者',
+  elfGoal: '在 10 分鐘內捕獲所有哥布林',
+  goblinName: '哥布林',
+  goblinTagline: '群居在山洞裡、機靈又膽小的小傢伙',
+  goblinGoal: '和夥伴們一起撐過 10 分鐘',
+
+  skillGaze: '凝視',
+  skillGazeDesc: '射出愛心眼神射線，被看到的哥布林定身 2 秒',
+  skillMusic: '彈奏樂器',
+  skillMusicStop: '停止彈奏',
+  skillMusicDesc: '原地彈奏，範圍內哥布林被吸引 3 秒，10 秒內更容易被捕獲',
+  skillStun: '打暈',
+  skillStunDesc: '近距離立即打暈哥布林 2 秒',
+  skillCapture: '捕獲',
+  skillCaptureDesc: '把暈眩的哥布林打包，3 秒後完成捕獲',
+  skillDash: '加速',
+  skillDashDesc: '短時間衝刺 2 秒，冷卻 10 秒',
+  skillInterfere: '攪局',
+  skillInterfereDesc: '衝到正在打包的精靈身旁，救出被抓的同伴',
+  skillUlt: '大招・掙脫',
+  skillUltDesc: '被打包時掙脫束縛，整場只能用一次',
+  skillRadar: '哥布林雷達',
+  skillRadarDesc: '精靈進入你所在的山洞時，頭上會跳出警告',
+
+  moveUp: '向前',
+  moveDown: '向後',
+  moveLeft: '向左',
+  moveRight: '向右',
+
+  kbTitle: '⚙️ 按鍵設定',
+  kbClose: '關閉',
+  kbTip: '點選按鍵後按下新的按鍵即可變更（Esc 取消）。若與其他動作衝突，兩者會自動互換。',
+  kbGroupMove: '🧭 移動',
+  kbGroupElf: '🧝‍♀️ 女精靈技能',
+  kbGroupGoblin: '👺 哥布林技能',
+  kbListening: '請按下按鍵…',
+  kbResetOne: '回復預設（{key}）',
+  kbNote: '數字鍵 1～4 與滑鼠左右鍵為固定備用鍵；Tab（觀戰切換）、Esc 為系統保留鍵。',
+  kbResetAll: '回復全部預設',
+  kbDone: '完成',
+  kbBlocked: '「{key}」已被「{action}」使用，且無法互換，請改用其他按鍵',
+  kbSwapped: '按鍵衝突：「{others}」已改為 {old}，「{action}」改為 {key}',
+  kbListSep: '、',
+  kbReserved: '「{key}」是系統保留鍵，無法設定',
+  kbResetDone: '已回復所有預設按鍵',
+
+  hudRadar: '❗ 哥布林雷達：精靈就在這個山洞裡！',
+  hudSpectating: '👀 觀戰中：{name}（Tab 切換）',
+  hudFast: '⏩ 快轉 x4',
+  hudNormal: '▶ 正常速度',
+  hudHelp: '{keys} 移動・拖曳滑鼠轉視角（雙擊鎖定滑鼠）・滾輪縮放',
+  hudMenu: '回到選角',
+  hudAgain: '再玩一次',
+
+  goblinNames: '阿吉,布布,咕嚕,小臭,歪鼻,啾啾,呱呱,皮皮',
+  you: '你',
+  aGoblin: '哥布林',
+  elfInCave: '❗ 精靈在洞裡！',
+
+  fRooted: '定身！',
+  fMiss: '落空',
+  fBonk: '咚！',
+  fFree: '掙脫！',
+  fNoStunned: '附近沒有暈眩的哥布林',
+  fNoTarget: '沒有可以攪局的目標',
+  fTooFar: '太遠了！靠近精靈',
+  fUltOnlyHeld: '大招只能在被打包時使用',
+
+  tYouRooted: '你被精靈的眼神定住了！',
+  tMusicStart: '🎵 精靈開始彈奏豎琴……小心被吸引！',
+  tYouStunned: '你被打暈了！',
+  tYouPackedUlt: '你正在被打包！按 {key} 使用大招掙脫！',
+  tYouPacked: '你正在被打包！快叫隊友來救！',
+  tAllyPacked: '{name} 正在被打包！靠近精靈按 {key} 攪局！',
+  tYouBrokeFree: '大招發動！你掙脫了！快跑！',
+  tBrokeFree: '{name} 用大招掙脫了！',
+  tRescued: '{by}攪局成功，救出了 {name}！',
+  tYouCaptured: '你被捕獲了……進入觀戰模式（Tab 切換視角）',
+  tCaptured: '{name} 被捕獲了！剩下 {n} 隻哥布林',
+  tHuntStart: '狩獵開始！找出躲在山洞裡的哥布林！',
+  tHideStart: '躲起來！撐過 10 分鐘！',
+  tMinutesLeft: '剩下 {n} 分鐘！',
+  tYouCharmed: '你被琴聲吸引了……（10 秒內更容易被捕獲）',
+  tRadar: '⚠ 哥布林雷達：精靈已經進入你所在的山洞！',
+
+  rElfWin: '精靈獲勝！',
+  rGoblinWin: '哥布林獲勝！',
+  rElfDetail: '精靈在 {mm} 分 {ss} 秒內捕獲了全部 {n} 隻哥布林。',
+  rGoblinDetail: '撐過了 10 分鐘！{free} 隻哥布林成功逃脫（被捕獲 {n} 隻）。',
+
+  hInterrupted: '被哥布林干擾了！',
+  hPlaying: '彈奏中……移動或再按 {key} 解除',
+  hCapture: '按 {key} 捕獲暈眩的哥布林！',
+  hStun: '按 {key}（或左鍵）打暈！',
+  hPacking: '打包 {name} 中……',
+  hUltUsed: '大招已用完……等待隊友攪局！',
+  hUlt: '按 {key} 發動大招掙脫！',
+  hStunned: '暈眩中……',
+  hRooted: '被凝視定身中！',
+  hCharmed: '被琴聲吸引中……',
+  hInterfere: '按 {key} 攪局，救出同伴！',
+  hAllyPacked: '{name} 正在被打包，快去攪局！',
+  hYouPacked: '你正在被打包！',
+  elf: '精靈',
+}
+
+type Dict = Record<keyof typeof zh, string>
+
+const en: Dict = {
+  title: 'Elf & Goblins',
+  eyebrow: '— Hide and Seek on the Grassland —',
+  chooseSide: 'Choose your side',
+  settings: 'Controls',
+  langSwitch: '中文',
+  back: 'Back',
+  startAdventure: 'Start',
+  elfWins: 'Elf wins {n}',
+  goblinWins: 'Goblin wins {n}',
+  controls: '{keys} to move · Drag mouse (or double-click to lock) to look · Scroll to zoom',
+  passive: 'Passive',
+
+  elfName: 'Elf',
+  elfTagline: 'A forest guardian who hunts with her harp and gaze',
+  elfGoal: 'Capture every goblin within 10 minutes',
+  goblinName: 'Goblin',
+  goblinTagline: 'Clever, timid little critters living in caves',
+  goblinGoal: 'Survive 10 minutes with your friends',
+
+  skillGaze: 'Gaze',
+  skillGazeDesc: 'Fire a heart-eyed beam that roots goblins for 2s',
+  skillMusic: 'Harp',
+  skillMusicStop: 'Stop',
+  skillMusicDesc: 'Play in place: nearby goblins are lured for 3s and easier to capture for 10s',
+  skillStun: 'Stun',
+  skillStunDesc: 'Instantly stun a nearby goblin for 2s',
+  skillCapture: 'Capture',
+  skillCaptureDesc: 'Bag a stunned goblin; capture completes after 3s',
+  skillDash: 'Dash',
+  skillDashDesc: 'Sprint for 2s, 10s cooldown',
+  skillInterfere: 'Interfere',
+  skillInterfereDesc: 'Rush the elf while she bags a friend to set them free',
+  skillUlt: 'Break Free',
+  skillUltDesc: 'Escape while being bagged — once per match',
+  skillRadar: 'Goblin Radar',
+  skillRadarDesc: 'A warning pops up when the elf enters your cave',
+
+  moveUp: 'Forward',
+  moveDown: 'Back',
+  moveLeft: 'Left',
+  moveRight: 'Right',
+
+  kbTitle: '⚙️ Controls',
+  kbClose: 'Close',
+  kbTip: 'Click a key, then press a new one (Esc to cancel). Conflicting actions swap keys automatically.',
+  kbGroupMove: '🧭 Movement',
+  kbGroupElf: '🧝‍♀️ Elf skills',
+  kbGroupGoblin: '👺 Goblin skills',
+  kbListening: 'Press a key…',
+  kbResetOne: 'Reset to default ({key})',
+  kbNote: 'Number keys 1–4 and mouse buttons are fixed alternates; Tab (switch spectate) and Esc are reserved.',
+  kbResetAll: 'Reset all',
+  kbDone: 'Done',
+  kbBlocked: '"{key}" is used by "{action}" and can\'t be swapped — pick another key',
+  kbSwapped: 'Key conflict: "{others}" moved to {old}, "{action}" set to {key}',
+  kbListSep: ', ',
+  kbReserved: '"{key}" is reserved and can\'t be bound',
+  kbResetDone: 'All keys reset to default',
+
+  hudRadar: '❗ Goblin Radar: the elf is in this cave!',
+  hudSpectating: '👀 Spectating: {name} (Tab to switch)',
+  hudFast: '⏩ Fast x4',
+  hudNormal: '▶ Normal speed',
+  hudHelp: '{keys} move · Drag mouse to look (double-click to lock) · Scroll to zoom',
+  hudMenu: 'Change side',
+  hudAgain: 'Play again',
+
+  goblinNames: 'Aggy,Bubu,Gollo,Stinky,Crooknose,Chirpy,Croaky,Pip',
+  you: 'You',
+  aGoblin: 'A goblin',
+  elfInCave: '❗ Elf in the cave!',
+
+  fRooted: 'Rooted!',
+  fMiss: 'Miss',
+  fBonk: 'BONK!',
+  fFree: 'FREE!',
+  fNoStunned: 'No stunned goblin nearby',
+  fNoTarget: 'Nobody to rescue',
+  fTooFar: 'Too far! Get closer',
+  fUltOnlyHeld: 'Only while being bagged',
+
+  tYouRooted: "You're rooted by the elf's gaze!",
+  tMusicStart: '🎵 The elf is playing her harp… don\'t get lured!',
+  tYouStunned: "You've been stunned!",
+  tYouPackedUlt: "You're being bagged! Press {key} to break free!",
+  tYouPacked: "You're being bagged! Call your friends!",
+  tAllyPacked: '{name} is being bagged! Get close and press {key}!',
+  tYouBrokeFree: 'Break Free! You escaped — run!',
+  tBrokeFree: '{name} broke free!',
+  tRescued: '{by} interfered and rescued {name}!',
+  tYouCaptured: "You've been captured… spectating (Tab to switch)",
+  tCaptured: '{name} was captured! {n} goblins left',
+  tHuntStart: 'The hunt begins! Find the goblins hiding in caves!',
+  tHideStart: 'Hide! Survive for 10 minutes!',
+  tMinutesLeft: '{n} min left!',
+  tYouCharmed: "You're lured by the harp… (easier to capture for 10s)",
+  tRadar: '⚠ Goblin Radar: the elf just entered your cave!',
+
+  rElfWin: 'The Elf Wins!',
+  rGoblinWin: 'The Goblins Win!',
+  rElfDetail: 'The elf captured all {n} goblins in {mm}:{ss}.',
+  rGoblinDetail: 'Survived 10 minutes! {free} goblins escaped ({n} captured).',
+
+  hInterrupted: 'Interrupted by a goblin!',
+  hPlaying: 'Playing… move or press {key} to stop',
+  hCapture: 'Press {key} to capture the stunned goblin!',
+  hStun: 'Press {key} (or left click) to stun!',
+  hPacking: 'Bagging {name}…',
+  hUltUsed: 'Break Free used… wait for a rescue!',
+  hUlt: 'Press {key} to Break Free!',
+  hStunned: 'Stunned…',
+  hRooted: 'Rooted by the gaze!',
+  hCharmed: 'Lured by the harp…',
+  hInterfere: 'Press {key} to interfere and save your friend!',
+  hAllyPacked: '{name} is being bagged — go help!',
+  hYouPacked: "You're being bagged!",
+  elf: 'Elf',
+}
+
+const dicts: Record<Locale, Dict> = { zh, en }
+export type TKey = keyof Dict
+
+function initial(): Locale {
+  try {
+    const saved = localStorage.getItem(KEY)
+    if (saved === 'zh' || saved === 'en') return saved
+  } catch {
+    /* 無痕模式等情況忽略 */
+  }
+  // 中文系統顯示中文，其餘預設英文（Poki 玩家來自全球）
+  return typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+}
+
+export const locale = ref<Locale>(initial())
+
+function applyDocument() {
+  if (typeof document === 'undefined') return
+  document.documentElement.lang = locale.value === 'zh' ? 'zh-Hant-TW' : 'en'
+  document.title = dicts[locale.value].title
+}
+applyDocument()
+
+export function setLocale(l: Locale) {
+  locale.value = l
+  applyDocument()
+  try {
+    localStorage.setItem(KEY, l)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function t(key: TKey, params?: Record<string, string | number>): string {
+  let s = dicts[locale.value][key]
+  if (params) for (const k in params) s = s.replaceAll(`{${k}}`, String(params[k]))
+  return s
+}

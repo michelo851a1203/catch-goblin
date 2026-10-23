@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "package": "bun run build && rm -f poki-build.zip && cd dist && zip -qr ../poki-build.zip . -x elf-preview.html 'assets/elfPreview-*'",
     "preview": "vite preview",
     "test": "vitest run",
     "validate:elf": "node tools/validate-glb.mjs public/models/elf/elf.glb --expect-anims Idle,Walk,Run,Play,Cast,Strike,Capture,Victory,Stunned --expect-nodes prop_harp,ElfMesh_LOD0,ElfMesh_LOD1"

@@ -3,6 +3,7 @@ import { CONFIG } from './config'
 import { createElf, createGoblin, type CharacterModel, type Pose } from './models'
 import { ElfCharacter } from './elf/ElfCharacter'
 import { makeSprite } from './toon'
+import { t } from '../i18n'
 
 export class Actor {
   pos = new THREE.Vector3()
@@ -102,7 +103,7 @@ export class Goblin extends Actor {
       rescuing: false,
       walk: 0.45,
     }
-    const radar = makeSprite('❗ 精靈在洞裡！', 0.42, { w: 512, h: 128, font: 58, bg: 'rgba(200,40,40,0.92)' })
+    const radar = makeSprite(t('elfInCave'), 0.42, { w: 512, h: 128, font: 58, bg: 'rgba(200,40,40,0.92)' })
     const bar = barSprites()
     radar.visible = false
     radar.position.y = 2.15

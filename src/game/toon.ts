@@ -58,6 +58,9 @@ export function makeLabelTexture(text: string, opts: { bg?: string; fg?: string;
     g.stroke()
   }
   g.font = `bold ${font}px "Noto Sans TC", system-ui, sans-serif`
+  // 英文字串較長，超出寬度時縮小字級
+  const fit = (w - 24) / g.measureText(text).width
+  if (fit < 1) g.font = `bold ${Math.floor(font * fit)}px "Noto Sans TC", system-ui, sans-serif`
   g.textAlign = 'center'
   g.textBaseline = 'middle'
   g.lineWidth = 8

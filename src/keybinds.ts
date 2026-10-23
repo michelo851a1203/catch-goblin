@@ -1,4 +1,5 @@
 import type { Role } from './game/config'
+import { t, type TKey } from './i18n'
 
 // 玩家自訂鍵位，存在 localStorage
 const KEY = 'goblin-game:keybinds'
@@ -20,10 +21,15 @@ export const DEFAULT_KEYBINDS: Keybinds = {
   goblin: { dash: 'ShiftLeft', interfere: 'KeyF', ult: 'KeyR' },
 }
 
-export const ACTION_LABELS: { [G in Group]: Record<keyof Keybinds[G], string> } = {
-  move: { up: '向前', down: '向後', left: '向左', right: '向右' },
-  elf: { gaze: '凝視', music: '彈奏樂器', stun: '打暈', capture: '捕獲' },
-  goblin: { dash: '加速', interfere: '攪局', ult: '大招・掙脫' },
+// 動作名稱的翻譯 key，顯示時用 labelOf() 取得目前語系的文字
+export const ACTION_LABELS: { [G in Group]: Record<keyof Keybinds[G], TKey> } = {
+  move: { up: 'moveUp', down: 'moveDown', left: 'moveLeft', right: 'moveRight' },
+  elf: { gaze: 'skillGaze', music: 'skillMusic', stun: 'skillStun', capture: 'skillCapture' },
+  goblin: { dash: 'skillDash', interfere: 'skillInterfere', ult: 'skillUlt' },
+}
+
+export function labelOf(group: Group, action: string) {
+  return t((ACTION_LABELS[group] as Record<string, TKey>)[action])
 }
 
 // 系統保留鍵：Esc 取消設定／解除滑鼠鎖定，Tab 觀戰切換
@@ -99,7 +105,7 @@ export function assignKey(k: Keybinds, group: Group, action: string, code: strin
 }
 
 export function actionLabel(c: Conflict) {
-  return (ACTION_LABELS[c.group] as Record<string, string>)[c.action]
+  return labelOf(c.group, c.action)
 }
 
 // 左右 Shift／Ctrl／Alt 視為同一個鍵
