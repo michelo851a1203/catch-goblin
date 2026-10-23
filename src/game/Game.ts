@@ -13,6 +13,7 @@ import { CELL } from './fx/atlas'
 import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 import { t } from '../i18n'
 import * as poki from '../poki'
+import { lowPower, touchMode } from '../input/touch'
 
 export interface SkillView {
   key: string
@@ -112,6 +113,7 @@ export class Game {
   private staff: ReturnType<FxSystem['createStaff']>
   private shake = 0
   private keys = new Set<string>()
+  private touchMove = new THREE.Vector2()
   private binds = loadKeybinds()
   private camYaw = 0
   private camPitch = 0.35
@@ -145,7 +147,8 @@ export class Game {
     this.duration = fast ? Number(fast) || 90 : CONFIG.matchDuration
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+    // 手機 / 平板降低解析度與陰影品質
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, lowPower ? 1.5 : 2))
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     container.appendChild(this.renderer.domElement)
@@ -157,7 +160,7 @@ export class Game {
     this.scene.add(this.hemi)
     this.sun = new THREE.DirectionalLight(0xfff0d0, 2.4)
     this.sun.castShadow = true
-    this.sun.shadow.mapSize.set(2048, 2048)
+    this.sun.shadow.mapSize.setScalar(lowPower ? 1024 : 2048)
     const sc = this.sun.shadow.camera
     sc.left = -45
     sc.right = 45
@@ -258,6 +261,7 @@ export class Game {
     this.pauses.add(reason)
     if (!first) return
     this.keys.clear()
+    this.touchMove.set(0, 0)
     this.dragging = false
     if (document.pointerLockElement) document.exitPointerLock()
     if (this.hud.phase === 'play') poki.gameplayStop()
@@ -306,7 +310,7 @@ export class Game {
       this.lastMouse = { x: e.clientX, y: e.clientY }
     }))
     this.on(canvas, 'dblclick', () => {
-      void canvas.requestPointerLock?.()
+      if (!touchMode.value) void canvas.requestPointerLock?.()
     })
     this.on(canvas, 'contextmenu', ((e: Event) => e.preventDefault()))
     this.on(window, 'mouseup', () => (this.dragging = false))
@@ -326,6 +330,24 @@ export class Game {
 
   requestPointerLock() {
     void this.renderer.domElement.requestPointerLock?.()
+  }
+
+  // ── 觸控（由 TouchControls 呼叫）──
+  // x：向右、y：向前，長度 0～1（可慢走）
+  setTouchMove(x: number, y: number) {
+    this.touchMove.set(x, y)
+  }
+
+  touchLook(dx: number, dy: number) {
+    this.rotateCam(dx * 1.6, dy * 1.6)
+  }
+
+  touchZoom(ratio: number) {
+    this.camDist = THREE.MathUtils.clamp(this.camDist / ratio, 3.5, 14)
+  }
+
+  nextSpectate() {
+    this.spectateIdx++
   }
 
   private rotateCam(dx: number, dy: number) {
@@ -375,6 +397,8 @@ export class Game {
     if (down(m.left)) r -= 1
     if (arrowFree('ArrowLeft')) this.camYaw += 0.04
     if (arrowFree('ArrowRight')) this.camYaw -= 0.04
+    f += this.touchMove.y
+    r += this.touchMove.x
     const sy = Math.sin(this.camYaw), cy = Math.cos(this.camYaw)
     out.set(-sy * f + cy * r, 0, -cy * f - sy * r)
     if (out.lengthSq() > 1) out.normalize()
@@ -504,8 +528,8 @@ export class Game {
     this.fx.sparkles(best.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
     this.elfFx.capture(best.pos)
     elf.yaw =Math.atan2(best.pos.x - elf.pos.x, best.pos.z - elf.pos.z)
-    if (best.isPlayer) this.toast(best.ultUsed ? t('tYouPacked') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
-    else if (this.role === 'goblin') this.toast(t('tAllyPacked', { name: best.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
+    if (best.isPlayer) this.toast(best.ultUsed ? t('tYouPacked') : touchMode.value ? t('tYouPackedUltTouch') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
+    else if (this.role === 'goblin') this.toast(touchMode.value ? t('tAllyPackedTouch', { name: best.name }) : t('tAllyPacked', { name: best.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
     return true
   }
 
@@ -562,7 +586,7 @@ export class Game {
     if (!elf.isPlayer) elf.ai.patrolWait = CONFIG.elf.aiRest
     const free = this.goblins.filter((x) => !x.captured).length
     if (g.isPlayer) {
-      this.toast(t('tYouCaptured'), 'bad')
+      this.toast(t(touchMode.value ? 'tYouCapturedTouch' : 'tYouCaptured'), 'bad')
       this.setSpeed(1)
     } else this.toast(t('tCaptured', { name: g.name, n: free }), this.role === 'elf' ? 'good' : 'bad')
     if (free === 0) this.finish('elf')
@@ -1013,6 +1037,9 @@ export class Game {
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
     this.fx.setViewport(h * this.renderer.getPixelRatio(), this.camera.fov)
+    // 手機直拿時顯示轉向提示（App.vue），遊戲先暫停
+    if (lowPower && h > w) this.pause('portrait')
+    else this.resume('portrait')
   }
 
   // ───────────────────────── 特效 ─────────────────────────
@@ -1061,6 +1088,7 @@ export class Game {
     h.timeLeft = Math.max(0, this.duration - this.elapsed)
     h.free = this.goblins.filter((g) => !g.captured).length
     const elf = this.elf
+    const touch = touchMode.value
     if (this.role === 'elf') {
       const E = CONFIG.elf
       const b = this.binds.elf
@@ -1074,9 +1102,9 @@ export class Game {
       const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < E.capture.range)
       if (elf.stagger > 0) h.hint = t('hInterrupted')
       else if (elf.packing) h.hint = ''
-      else if (elf.channel >= 0) h.hint = t('hPlaying', { key: keyLabel(b.music) })
-      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = t('hCapture', { key: keyLabel(b.capture) })
-      else if (near.length && elf.cd.stun <= 0) h.hint = t('hStun', { key: keyLabel(b.stun) })
+      else if (elf.channel >= 0) h.hint = touch ? t('hPlayingTouch') : t('hPlaying', { key: keyLabel(b.music) })
+      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.capture) })
+      else if (near.length && elf.cd.stun <= 0) h.hint = touch ? t('hStunTouch') : t('hStun', { key: keyLabel(b.stun) })
       else h.hint = ''
       h.progress = elf.packing ? elf.packing.t / elf.packing.total : -1
       h.progressLabel = elf.packing ? t('hPacking', { name: elf.packing.g.name }) : ''
@@ -1092,11 +1120,11 @@ export class Game {
       ]
       h.radar = !g.captured && g.zone >= 0 && g.zone === elf.zone
       if (g.captured) h.hint = ''
-      else if (g.held) h.hint = g.ultUsed ? t('hUltUsed') : t('hUlt', { key: keyLabel(b.ult) })
+      else if (g.held) h.hint = g.ultUsed ? t('hUltUsed') : touch ? t('hUltTouch') : t('hUlt', { key: keyLabel(b.ult) })
       else if (g.stun > 0) h.hint = t('hStunned')
       else if (g.rooted > 0) h.hint = t('hRooted')
       else if (g.attract > 0) h.hint = t('hCharmed')
-      else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = t('hInterfere', { key: keyLabel(b.interfere) })
+      else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = touch ? t('hInterfereTouch') : t('hInterfere', { key: keyLabel(b.interfere) })
       else if (elf.packing && d2(g.pos, elf.pos) < 30) h.hint = t('hAllyPacked', { name: elf.packing.g.name })
       else h.hint = ''
       h.progress = g.held && elf.packing ? elf.packing.t / elf.packing.total : -1

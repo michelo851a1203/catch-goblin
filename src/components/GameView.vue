@@ -5,6 +5,8 @@ import type { Role } from '../game/config'
 import { recordResult } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
 import { t } from '../i18n'
+import { touchMode } from '../input/touch'
+import TouchControls from './TouchControls.vue'
 
 const props = defineProps<{ role: Role }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
@@ -36,14 +38,32 @@ function leave(to: 'restart' | 'menu') {
   if (to === 'restart') emit('restart')
   else emit('menu')
 }
+function touchMove(x: number, y: number) {
+  game?.setTouchMove(x, y)
+}
+function touchLook(dx: number, dy: number) {
+  game?.touchLook(dx, dy)
+}
+function touchZoom(r: number) {
+  game?.touchZoom(r)
+}
+function nextSpectate() {
+  game?.nextSpectate()
+}
 function toggleSpeed() {
   game?.setSpeed(hud.speed === 1 ? 4 : 1)
 }
 </script>
 
 <template>
-  <div class="game">
+  <div class="game" :class="{ touch: touchMode }">
     <div ref="host" class="viewport"></div>
+    <TouchControls
+      v-if="touchMode && !hud.result"
+      @move="touchMove"
+      @look="touchLook"
+      @zoom="touchZoom"
+    />
 
     <!-- 上方：時間與剩餘數量 -->
     <div class="top">
@@ -82,7 +102,7 @@ function toggleSpeed() {
         :key="s.key"
         class="skill"
         :class="{ active: s.active, cooling: s.cd > 0, off: !s.usable || s.used }"
-        @click="press(s.code)"
+        @pointerdown.prevent="press(s.code)"
       >
         <span class="ico">{{ s.used ? '✖' : s.icon }}</span>
         <span class="cd" v-if="s.cd > 0" :style="{ height: (s.cd / s.max) * 100 + '%' }"></span>
@@ -93,11 +113,12 @@ function toggleSpeed() {
     </div>
 
     <div v-if="hud.spectating" class="spectate">
-      {{ t('hudSpectating', { name: hud.spectating }) }}
+      {{ touchMode ? t('hudSpectatingTouch', { name: hud.spectating }) : t('hudSpectating', { name: hud.spectating }) }}
+      <button @click="nextSpectate">{{ t('hudNext') }}</button>
       <button @click="toggleSpeed">{{ hud.speed === 1 ? t('hudFast') : t('hudNormal') }}</button>
     </div>
 
-    <div class="help">{{ t('hudHelp', { keys: moveKeys }) }}</div>
+    <div v-if="!touchMode" class="help">{{ t('hudHelp', { keys: moveKeys }) }}</div>
 
     <div v-if="hud.phase === 'countdown'" class="countdown" :key="hud.countdown">{{ hud.countdown }}</div>
 
@@ -130,7 +151,7 @@ function toggleSpeed() {
 }
 .top {
   position: absolute;
-  top: 14px;
+  top: calc(14px + env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -172,8 +193,8 @@ function toggleSpeed() {
 }
 .minimap {
   position: absolute;
-  right: 16px;
-  top: 16px;
+  right: calc(16px + env(safe-area-inset-right));
+  top: calc(16px + env(safe-area-inset-top));
   width: 180px;
   height: 180px;
   pointer-events: none;
@@ -441,5 +462,119 @@ function toggleSpeed() {
   background: linear-gradient(#f4d983, #c9973a);
   color: #2a1d08;
   font-weight: 700;
+}
+/* ── 觸控模式：技能鍵移到右下角、放大，方便大拇指按 ── */
+.touch .skills {
+  left: auto;
+  right: calc(18px + env(safe-area-inset-right));
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  transform: none;
+  display: grid;
+  grid-template-columns: repeat(2, 80px);
+  gap: 12px;
+  direction: rtl; /* 第一個技能在最右邊，最靠近大拇指 */
+}
+.touch .skill {
+  width: 80px;
+  height: 80px;
+  touch-action: none;
+  direction: ltr;
+}
+.touch .skill kbd {
+  display: none;
+}
+.touch .skill small {
+  font-size: 11px;
+}
+.touch .spectate {
+  bottom: calc(18px + env(safe-area-inset-bottom));
+}
+
+/* ── 矮螢幕（手機橫向）── */
+@media (max-height: 500px) {
+  .top {
+    top: calc(8px + env(safe-area-inset-top));
+    gap: 6px;
+  }
+  .pill {
+    padding: 3px 10px;
+    font-size: 12px;
+  }
+  .timer {
+    font-size: 17px;
+    padding: 3px 14px;
+  }
+  .goblins i {
+    font-size: 11px;
+    margin: 0;
+  }
+  .minimap {
+    width: 104px;
+    height: 104px;
+    top: calc(8px + env(safe-area-inset-top));
+    right: calc(10px + env(safe-area-inset-right));
+  }
+  .toasts {
+    top: 44px;
+    max-width: 60vw;
+  }
+  .toast {
+    font-size: 12px;
+    padding: 4px 10px;
+    white-space: normal;
+    text-align: center;
+  }
+  .radar {
+    bottom: auto;
+    top: 42%;
+    font-size: 13px;
+    padding: 5px 12px;
+  }
+  .progress {
+    bottom: auto;
+    top: 58%;
+  }
+  .progress .bar {
+    width: 200px;
+  }
+  .hint {
+    bottom: auto;
+    top: 68%;
+    font-size: 14px;
+    max-width: 50vw;
+    text-align: center;
+  }
+  .countdown {
+    font-size: 90px;
+  }
+  .panel {
+    padding: 16px 26px;
+  }
+  .panel h2 {
+    font-size: 28px;
+    margin: 4px 0 6px;
+  }
+  .panel p {
+    margin: 4px 0;
+    font-size: 13px;
+  }
+  .actions {
+    margin-top: 10px;
+  }
+  .touch .skills {
+    grid-template-columns: repeat(2, 66px);
+    gap: 10px;
+  }
+  .touch .skill {
+    width: 66px;
+    height: 66px;
+  }
+  .touch .skill .ico {
+    font-size: 24px;
+  }
+  .spectate {
+    font-size: 13px;
+    padding: 6px 12px;
+  }
 }
 </style>

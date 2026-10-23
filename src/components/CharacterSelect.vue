@@ -9,6 +9,7 @@ import { loadStats } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
 import KeybindSettings from './KeybindSettings.vue'
 import { locale, setLocale, t } from '../i18n'
+import { touchMode } from '../input/touch'
 
 const emit = defineEmits<{ start: [role: Role] }>()
 
@@ -96,10 +97,10 @@ function back() {
 </script>
 
 <template>
-  <div class="select" :class="{ entered }">
+  <div class="select" :class="{ entered, picked: chosen }">
     <div class="glow"></div>
-    <button class="lang" @click="toggleLocale">{{ t('langSwitch') }}</button>
-    <button class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
+    <button class="lang" :class="{ solo: touchMode }" @click="toggleLocale">{{ t('langSwitch') }}</button>
+    <button v-if="!touchMode" class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
           fill="currentColor"
@@ -151,12 +152,12 @@ function back() {
                 <li v-for="s in c.skills" :key="s.name">
                   <span class="icon">{{ s.icon }}</span>
                   <div>
-                    <b>{{ s.name }} <kbd>{{ s.key }}</kbd></b>
+                    <b>{{ s.name }} <kbd v-if="!touchMode">{{ s.key }}</kbd></b>
                     <small>{{ s.desc }}</small>
                   </div>
                 </li>
               </ul>
-              <p class="controls">{{ t('controls', { keys: moveKeys }) }}</p>
+              <p class="controls">{{ touchMode ? t('controlsTouch') : t('controls', { keys: moveKeys }) }}</p>
               <div class="actions">
                 <button class="ghost" @click.stop="back">{{ t('back') }}</button>
                 <button class="go" @click.stop="emit('start', c.role)">{{ t('startAdventure') }}</button>
@@ -199,6 +200,10 @@ function back() {
   background: rgba(20, 30, 24, 0.7);
   color: #e6c878;
   border-color: #c9a24e;
+}
+.lang.solo {
+  top: calc(16px + env(safe-area-inset-top));
+  right: calc(16px + env(safe-area-inset-right));
 }
 .lang:hover {
   box-shadow: 0 0 14px rgba(255, 210, 110, 0.45);
@@ -591,11 +596,88 @@ footer {
     opacity: 0.55;
   }
 }
-.stage {
+  .stage {
     gap: 14px;
   }
   .card-wrap {
-    width: 44vw;
+    width: min(44vw, 45vh);
+  }
+}
+/* 矮螢幕（手機橫向）：卡片依高度縮小，翻牌後放大並隱藏標題，背面內容可捲動 */
+@media (max-height: 500px) {
+  .select {
+    gap: 1vh;
+  }
+  .eyebrow,
+  .lead {
+    font-size: 11px;
+  }
+  h1 {
+    font-size: 20px;
+  }
+  .card-wrap {
+    width: 42vh;
+  }
+  .card-wrap.chosen {
+    transform: translateX(var(--dx)) translateY(-3vh) scale(1.3);
+  }
+  .picked header,
+  .picked footer {
+    opacity: 0;
+  }
+  .plate {
+    padding: 30px 10px 10px;
+  }
+  .plate h2,
+  .back h2 {
+    font-size: 18px;
+  }
+  .plate p {
+    font-size: 10px;
+  }
+  .back-inner {
+    inset: 6px;
+    padding: 8px 8px 6px;
+  }
+  /* 只有技能清單捲動，開始按鈕固定在卡片底部 */
+  ul {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .sub {
+    font-size: 8px;
+  }
+  .goal {
+    font-size: 9px;
+    margin: 2px 0 4px;
+  }
+  ul {
+    gap: 3px;
+  }
+  li {
+    padding: 3px 5px;
+    gap: 5px;
+  }
+  .icon {
+    font-size: 13px;
+  }
+  li b {
+    font-size: 9px;
+  }
+  li small {
+    font-size: 7.5px;
+  }
+  .controls {
+    font-size: 7.5px;
+    margin: 4px 0;
+  }
+  .actions button {
+    font-size: 10px;
+    padding: 4px 12px;
+  }
+  footer {
+    font-size: 11px;
   }
 }
 </style>

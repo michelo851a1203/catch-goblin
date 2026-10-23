@@ -15,3 +15,14 @@ body,
 * {
   box-sizing: border-box;
 }
+/* 手機：關閉長按選單、文字選取、雙擊縮放與橡皮筋捲動 */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+button {
+  touch-action: manipulation;
+}
