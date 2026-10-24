@@ -1,6 +1,7 @@
 {
   "name": "goblin-game",
   "private": true,
+  "license": "SEE LICENSE IN NOTICE.md",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
