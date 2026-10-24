@@ -32,8 +32,10 @@ async function newRound(r: Role) {
   round.value++
 }
 
+// 輸入暱稱並連線成功後收起 sheet，左上角改為「已加入 <房號>」
 function attach(r: Room) {
   roomError.value = null
+  sheet.value = false
   room.value = r
   r.onStart = (l) => {
     link.value = l
@@ -85,7 +87,7 @@ async function leaveRoom() {
   />
   <GameView v-else-if="role" :key="round" :role="role" @restart="newRound(role)" @menu="role = null" />
   <template v-else>
-    <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" />
+    <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" @leave="leaveLobby" />
     <RoomSheet v-if="sheet" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />
   </template>
   <div class="rotate">📱↻<span>{{ t('rotate') }}</span></div>

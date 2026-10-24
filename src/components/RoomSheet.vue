@@ -5,7 +5,7 @@ import { MAX_PLAYERS, type Pick } from '../net/assign'
 import { sfx } from '../game/audio'
 import { t, type TKey } from '../i18n'
 
-// 多人連線的 bottom sheet：暱稱、建立 / 加入房間，以及房間大廳（房號、玩家、開始遊戲）
+// 多人連線的 bottom sheet：建立 / 加入房間 → 輸入暱稱後才真正連線，以及房間大廳（房號、玩家、開始遊戲）
 // 選角改在選角畫面的卡片上進行；在房間內關閉 sheet 不會離開房間
 const props = defineProps<{ room: Room | null; error: RoomError | null }>()
 const emit = defineEmits<{ close: []; leave: []; room: [room: Room] }>()
@@ -13,10 +13,14 @@ const emit = defineEmits<{ close: []; leave: []; room: [room: Room] }>()
 const code = ref('')
 const nick = ref(props.room?.myName ?? loadName())
 let nickTimer = 0
-const busy = ref<'create' | 'join' | null>(null)
+// entry：選擇建立 / 加入；nick：輸入暱稱後確定才連線
+const step = ref<'entry' | 'nick'>('entry')
+const kind = ref<'create' | 'join'>('create')
+const busy = ref(false)
 const err = ref('')
 const copied = ref(false)
-// 連線中按下關閉後，晚到的結果要丟棄
+const nickEl = ref<HTMLInputElement | null>(null)
+// 連線中按下關閉 / 返回後，晚到的結果要丟棄
 let token = 0
 
 const ERR: Record<RoomError, TKey> = {
@@ -38,26 +42,38 @@ watch(
 const s = computed(() => props.room?.state)
 const ICON: Record<Pick, string> = { elf: '🧝‍♀️', goblin: '👺', random: '🎲' }
 
-async function connect(kind: 'create' | 'join') {
-  if (busy.value) return
+// 先切到輸入暱稱的 sheet，按下確定才建立 / 加入房間
+function next(k: 'create' | 'join') {
   sfx.unlock()
   err.value = ''
-  if (kind === 'join' && !/^\d{4}$/.test(code.value)) {
+  if (k === 'join' && !/^\d{4}$/.test(code.value)) {
     err.value = t('mpErrCode')
     return
   }
+  sfx.flip()
+  kind.value = k
+  step.value = 'nick'
+}
+
+async function connect() {
+  if (busy.value) return
+  sfx.unlock()
+  err.value = ''
   saveName(cleanName(nick.value))
   const my = ++token
-  busy.value = kind
+  busy.value = true
   try {
-    const r = kind === 'create' ? await Room.create() : await Room.join(code.value)
+    const r = kind.value === 'create' ? await Room.create() : await Room.join(code.value)
     if (my !== token) return r.leave()
     sfx.flip()
     emit('room', r)
   } catch (e) {
-    if (my === token) err.value = t(ERR[(e as RoomError) in ERR ? (e as RoomError) : 'netFail'])
+    if (my !== token) return
+    // 房號錯誤 / 房間已滿等：回到第一步顯示原因
+    err.value = t(ERR[(e as RoomError) in ERR ? (e as RoomError) : 'netFail'])
+    step.value = 'entry'
   } finally {
-    if (my === token) busy.value = null
+    if (my === token) busy.value = false
   }
 }
 
@@ -93,9 +109,22 @@ async function copy() {
 
 function close() {
   token++
-  busy.value = null
+  busy.value = false
   sfx.flip()
   emit('close')
+}
+
+// 暱稱 sheet 的 ✕：取消連線並回到建立 / 加入
+function back() {
+  token++
+  busy.value = false
+  sfx.flip()
+  step.value = 'entry'
+}
+
+function dismiss() {
+  if (!props.room && step.value === 'nick') back()
+  else close()
 }
 
 function leave() {
@@ -105,42 +134,46 @@ function leave() {
 </script>
 
 <template>
-  <div class="backdrop" @click.self="close">
-    <section class="sheet" role="dialog" :aria-label="t('mpTitle')">
+  <div class="backdrop" @click.self="dismiss">
+    <Transition name="sheet" mode="out-in" @after-enter="nickEl?.focus()">
+    <section class="sheet" :key="room ? 'lobby' : step" role="dialog" :aria-label="step === 'nick' && !room ? t('mpNickTitle') : t('mpTitle')">
       <div class="grip"></div>
-      <button class="x" :aria-label="room ? t('mpGoPick') : t('mpSolo')" :title="room ? t('mpGoPick') : t('mpSolo')" @click="close">✕</button>
+      <button v-if="!room && step === 'nick'" class="x" :aria-label="t('back')" :title="t('back')" @click="back">✕</button>
+      <button v-else class="x" :aria-label="room ? t('mpGoPick') : t('mpSolo')" :title="room ? t('mpGoPick') : t('mpSolo')" @click="close">✕</button>
 
       <!-- 建立 / 加入 -->
-      <template v-if="!room">
+      <template v-if="!room && step === 'entry'">
         <h2>{{ t('mpTitle') }}</h2>
         <p class="lead">{{ t('mpLead') }}</p>
-        <label class="nick">
-          <span>{{ t('mpNick') }}</span>
-          <input :value="nick" :maxlength="NAME_MAX" autocomplete="nickname" :placeholder="t('mpNickPh')" :disabled="!!busy" @input="onNick" @change="flushNick" />
-        </label>
         <div class="entry">
-          <button class="go" :disabled="!!busy" @click="connect('create')">
-            {{ busy === 'create' ? t('mpConnecting') : t('mpCreate') }}
-          </button>
+          <button class="go" @click="next('create')">{{ t('mpCreate') }}</button>
           <span class="or">{{ t('mpOr') }}</span>
-          <form class="join" @submit.prevent="connect('join')">
-            <input
-              :value="code"
-              inputmode="numeric"
-              autocomplete="off"
-              maxlength="4"
-              pattern="[0-9]*"
-              :placeholder="t('mpCodePh')"
-              :disabled="!!busy"
-              @input="onCode"
-            />
-            <button class="ghost" type="submit" :disabled="!!busy">
-              {{ busy === 'join' ? t('mpConnecting') : t('mpJoin') }}
-            </button>
+          <form class="join" @submit.prevent="next('join')">
+            <input :value="code" inputmode="numeric" autocomplete="off" maxlength="4" pattern="[0-9]*" :placeholder="t('mpCodePh')" @input="onCode" />
+            <button class="ghost" type="submit">{{ t('mpJoin') }}</button>
           </form>
         </div>
         <p v-if="err" class="err" role="alert">{{ err }}</p>
-        <button class="link" @click="close">{{ t('mpSolo') }} →</button>
+      </template>
+
+      <!-- 輸入暱稱：確定後才真正建立 / 加入房間 -->
+      <template v-else-if="!room">
+        <h2>{{ t('mpNickTitle') }}</h2>
+        <p class="lead">{{ kind === 'create' ? t('mpNickCreate') : t('mpNickJoin', { code }) }}</p>
+        <form class="join nick-form" @submit.prevent="connect">
+          <input
+            ref="nickEl"
+            :value="nick"
+            :maxlength="NAME_MAX"
+            autocomplete="nickname"
+            enterkeyhint="go"
+            :placeholder="t('mpNickPh')"
+            :disabled="busy"
+            @input="onNick"
+          />
+          <button class="go" type="submit" :disabled="busy">{{ busy ? t('mpConnecting') : t('mpOk') }}</button>
+        </form>
+        <p v-if="err" class="err" role="alert">{{ err }}</p>
       </template>
 
       <!-- 房間大廳 -->
@@ -178,6 +211,7 @@ function leave() {
         <p v-if="s.host && s.players.length < 2" class="hint">{{ t('mpNeedTwo') }}</p>
       </template>
     </section>
+    </Transition>
   </div>
 </template>
 
@@ -201,6 +235,7 @@ function leave() {
   position: relative;
   width: min(560px, 100%);
   max-height: 92vh;
+  max-height: 92dvh;
   overflow-y: auto;
   box-sizing: border-box;
   padding: 14px 24px calc(20px + env(safe-area-inset-bottom));
@@ -218,6 +253,10 @@ function leave() {
   from {
     transform: translateY(100%);
   }
+}
+/* 切換建立 / 暱稱步驟時：先收下去再彈上來 */
+.sheet-leave-active {
+  animation: up 0.22s ease-in reverse;
 }
 .grip {
   width: 44px;
@@ -334,13 +373,14 @@ button:disabled {
   font-size: 14px;
   font-weight: 600;
 }
-.link {
-  margin-top: 14px;
-  border: none;
-  background: none;
-  color: #a99f86;
-  font-size: 13px;
-  text-decoration: underline;
+.nick-form {
+  justify-content: center;
+}
+.nick-form input {
+  width: 220px;
+  font-family: inherit;
+  font-size: 16px;
+  letter-spacing: 0;
 }
 .code {
   display: flex;

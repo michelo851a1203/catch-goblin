@@ -11,11 +11,11 @@ import KeybindSettings from './KeybindSettings.vue'
 import { locale, setLocale, t } from '../i18n'
 import { touchMode } from '../input/touch'
 import { displayName, type Room } from '../net/room'
-import { MAX_PLAYERS, type Pick } from '../net/assign'
+import type { Pick } from '../net/assign'
 
 // room：在多人房間大廳時，卡片改為選角（精靈 / 哥布林），選擇結果標示在卡片邊框上
 const props = defineProps<{ room?: Room | null }>()
-const emit = defineEmits<{ start: [role: Role]; multiplayer: [] }>()
+const emit = defineEmits<{ start: [role: Role]; multiplayer: []; leave: [] }>()
 
 const chosen = ref<Role | null>(null)
 const offsets = ref<Record<Role, number>>({ elf: 0, goblin: 0 })
@@ -128,9 +128,12 @@ function back() {
   <div class="select" :class="{ entered, picked: chosen }">
     <div class="glow"></div>
     <button class="lang" :class="{ solo: touchMode }" @click="toggleLocale">{{ t('langSwitch') }}</button>
-    <button class="mp" :class="{ on: lobby }" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">
-      {{ lobby ? t('mpRoomBtn', { code: lobby.code, n: lobby.players.length, max: MAX_PLAYERS }) : t('mpOpen') }}
-    </button>
+    <!-- 已在房間內：點房號打開大廳，✕ 離開房間回到單機 -->
+    <div v-if="lobby" class="mp on">
+      <button class="mp-open" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpJoined', { code: lobby.code }) }}</button>
+      <button class="mp-x" :aria-label="t('mpLeave')" :title="t('mpLeave')" @click="(sfx.unlock(), sfx.flip(), emit('leave'))">✕</button>
+    </div>
+    <button v-else class="mp" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpOpen') }}</button>
     <button v-if="!touchMode" class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
@@ -237,6 +240,7 @@ function back() {
   align-items: center;
   justify-content: center;
   gap: 2vh;
+  gap: 2dvh;
   background: radial-gradient(ellipse at 50% 30%, #2f5d4a 0%, #14261f 55%, #0b1411 100%);
   color: #f4ead2;
   font-family: var(--font);
@@ -268,8 +272,26 @@ function back() {
   border-color: #c9a24e;
 }
 .mp.on {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 1px solid #e6c878;
+  border-radius: 999px;
   background: rgba(230, 200, 120, 0.18);
   color: #fff3d6;
+}
+.mp.on button {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+}
+.mp-open {
+  padding: 6px 8px 6px 16px;
+}
+.mp-x {
+  padding: 6px 14px 6px 8px;
+  color: #e6c878 !important;
 }
 .lang:hover,
 .mp:hover {
@@ -496,6 +518,10 @@ h1::after {
 .card-wrap.chosen .card {
   transform: rotateY(180deg);
   cursor: default;
+}
+/* Safari 的 3D 翻牌：翻到背面後正面仍可能攔截點擊 */
+.card-wrap.chosen .front {
+  pointer-events: none;
 }
 .face {
   position: absolute;
@@ -729,12 +755,16 @@ footer {
   }
   .card-wrap {
     width: min(44vw, 45vh);
+    width: min(44vw, 45dvh);
   }
 }
+/* iOS Safari 的 vh 以工具列收起時的高度計算，網址列 / 分頁列展開時卡片會超出畫面、點不到開始按鈕，
+   所以卡片尺寸改用 dvh（實際可見高度） */
 /* 矮螢幕（手機橫向）：卡片依高度縮小，翻牌後放大並隱藏標題，背面內容可捲動 */
 @media (max-height: 500px) {
   .select {
     gap: 1vh;
+    gap: 1dvh;
   }
   .eyebrow,
   .lead {
@@ -745,9 +775,11 @@ footer {
   }
   .card-wrap {
     width: 42vh;
+    width: 42dvh;
   }
   .card-wrap.chosen {
     transform: translateX(var(--dx)) translateY(-3vh) scale(1.3);
+    transform: translateX(var(--dx)) translateY(-3dvh) scale(1.3);
   }
   .picked header,
   .picked footer {
