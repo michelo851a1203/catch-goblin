@@ -522,19 +522,22 @@ export class Game {
     elf.yaw = Math.atan2(dir.x, dir.z)
     const origin = v1.copy(elf.pos)
     const len = this.world.rayDistance(origin, dir, G.range)
-    const hits: number[] = []
+    const inBeam: { g: Goblin; along: number }[] = []
     for (const g of this.goblins) {
       if (g.captured || g.held || g.grace > 0) continue
       const ox = g.pos.x - origin.x, oz = g.pos.z - origin.z
       const along = ox * dir.x + oz * dir.z
       if (along < 0 || along > len) continue
       const perp = Math.abs(ox * dir.z - oz * dir.x)
-      if (perp < G.width + g.radius) {
-        g.rooted = Math.max(g.rooted, G.root)
-        g.attract = 0
-        hits.push(g.id)
-      }
+      if (perp < G.width + g.radius) inBeam.push({ g, along })
     }
+    inBeam.sort((a, b) => a.along - b.along)
+    const hits: number[] = []
+    inBeam.forEach(({ g }, i) => {
+      g.rooted = Math.max(g.rooted, G.root[Math.min(i, G.root.length - 1)])
+      g.attract = 0
+      hits.push(g.id)
+    })
     this.emit({ e: 'gaze', o: [r2(origin.x), r2(origin.z)], d: [dir.x, dir.z], len: r2(len), hits })
     return true
   }

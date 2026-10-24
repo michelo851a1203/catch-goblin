@@ -25,10 +25,11 @@ export const CONFIG = {
     aiGazeRange: 15,
     aiRest: 2.5,
     radius: 0.6,
-    gaze: { range: 24, width: 1.3, root: 2, cooldown: 7, beamTime: 0.5 },
+    // 依射線上由近到遠的命中順序定身：第一個 2 秒、第二個 1.4 秒、其餘 1 秒（讓後面的哥布林有時間救人）
+    gaze: { range: 24, width: 1.3, root: [2, 1.4, 1], cooldown: 7, beamTime: 0.5 },
     music: { radius: 17, maxChannel: 5, attractTime: 3, charmTime: 10, cooldown: 18 },
     stun: { range: 2.7, duration: 2, cooldown: 3.5 },
-    capture: { range: 2.8, packTime: 3, charmedPackTime: 1.4, cooldown: 1 },
+    capture: { range: 2.8, packTime: 4, charmedPackTime: 2, cooldown: 1 },
     staggerOnInterrupt: 1.2,
   },
 }
