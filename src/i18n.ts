@@ -1,3 +1,4 @@
+import { platformLocale, store } from './crazygames'
 import { ref } from 'vue'
 
 // 介面文字（繁中 / 英文）；{name} 形式的佔位符由 t() 代入
@@ -371,13 +372,14 @@ export type TKey = keyof Dict
 
 function initial(): Locale {
   try {
-    const saved = localStorage.getItem(KEY)
+    const saved = store.getItem(KEY)
     if (saved === 'zh' || saved === 'en') return saved
   } catch {
     /* 無痕模式等情況忽略 */
   }
-  // 中文系統顯示中文，其餘預設英文（Poki 玩家來自全球）
-  return typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+  // 依 CrazyGames 回報的語言，取不到時看瀏覽器；中文顯示中文，其餘預設英文
+  const lang = platformLocale() ?? (typeof navigator !== 'undefined' ? navigator.language : '')
+  return lang?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
 export const locale = ref<Locale>(initial())
@@ -393,7 +395,7 @@ export function setLocale(l: Locale) {
   locale.value = l
   applyDocument()
   try {
-    localStorage.setItem(KEY, l)
+    store.setItem(KEY, l)
   } catch {
     /* ignore */
   }

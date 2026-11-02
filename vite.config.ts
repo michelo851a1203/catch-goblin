@@ -9,7 +9,7 @@ const preview = resolve(root, 'elf-preview.html')
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Poki 會把遊戲放在自己的路徑底下，資源一律使用相對路徑
+  // CrazyGames 會把遊戲放在自己的路徑底下，資源一律使用相對路徑
   base: './',
   plugins: [vue()],
   build: {

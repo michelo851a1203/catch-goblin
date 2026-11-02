@@ -1,16 +1,35 @@
 import { reactive } from 'vue'
-import { Network } from '@poki/netlib'
+import Peer, { type DataConnection, type PeerOptions } from 'peerjs'
 import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assign'
+import { store } from '../crazygames'
 import { t } from '../i18n'
 
-// 多人連線：使用 Poki 的 netlib（WebRTC P2P）。信令伺服器與 TURN 由 Poki 免費提供，Cloudflare Pages / Poki 皆可連線。
+// 多人連線：使用 PeerJS（WebRTC P2P）。預設使用 PeerJS 的公用信令伺服器，可用 VITE_PEER_* 改成自架的 PeerServer。
+// PeerJS 內建的 TURN 網域已無法解析，嚴格 NAT 的玩家需要自備 TURN：VITE_PEER_ICE_SERVERS 填 RTCIceServer[] 的 JSON（見 README）。
 // 建立房間的玩家是房主，負責整場模擬；其他玩家只傳送自己的操作，接收房主廣播的狀態。
-// netlib 的房號由伺服器產生（英數混合），所以 4 碼數字房號存在 lobby 的 customData.room，加入時以 list() 查詢對應的 lobby。
-const GAME_ID = import.meta.env.VITE_NETLIB_GAME_ID || 'ef8f2673-827f-43a0-8cb1-d64cd038294f'
+// 房主以固定前綴 + 4 碼房號註冊 peer id，加入者直接用房號連線，所以不需要大廳列表。
+const ID_PREFIX = 'elf-and-goblins-'
+const env = import.meta.env
+const PEER_OPTIONS: PeerOptions = {
+  ...(env.VITE_PEER_HOST
+    ? {
+        host: env.VITE_PEER_HOST,
+        port: Number(env.VITE_PEER_PORT) || 443,
+        path: env.VITE_PEER_PATH || '/',
+        key: env.VITE_PEER_KEY || 'peerjs',
+        secure: true,
+      }
+    : {}),
+  ...(env.VITE_PEER_ICE_SERVERS ? { config: { iceServers: JSON.parse(env.VITE_PEER_ICE_SERVERS) as RTCIceServer[] } } : {}),
+}
 // 通訊格式版本：不同版本的遊戲不能同房
-const PROTO = 2
+const PROTO = 3
 const TIMEOUT = 15000
-export const NAME_MAX = 12
+// ICE 斷線後等待恢復的時間，超過就視為對方離線
+const ICE_GRACE = 8000
+const RECONNECT_DELAY = 3000
+// CrazyGames 使用者名稱最長 20 字元
+export const NAME_MAX = 20
 const NAME_KEY = 'goblin-game.nickname'
 const REJOIN_KEY = 'goblin-game.rejoin'
 
@@ -41,14 +60,14 @@ export function displayName(p: { n: number; name: string }) {
 }
 export function loadName() {
   try {
-    return cleanName(localStorage.getItem(NAME_KEY))
+    return cleanName(store.getItem(NAME_KEY))
   } catch {
     return ''
   }
 }
 export function saveName(name: string) {
   try {
-    localStorage.setItem(NAME_KEY, name)
+    store.setItem(NAME_KEY, name)
   } catch {
     /* 無痕模式等情況存不了，只影響下次預設值 */
   }
@@ -91,6 +110,7 @@ type LobbyMsg =
 
 class RoomFail extends Error {
   why: RoomError
+  idTaken = false // 房號已被使用（建立房間時換一個重試）
   constructor(why: RoomError) {
     super(why)
     this.why = why
@@ -110,7 +130,12 @@ export class Room {
   // 房間關閉（被拒絕、房主離開、斷線）；自己離開時 why 為 null
   onClose: ((why: RoomError | null) => void) | null = null
 
-  private net: Network
+  private peer: Peer
+  // 每位對方兩條資料通道：reliable 與 unreliable（不保證順序，對應遊戲狀態廣播）
+  private conns = new Map<string, { reliable?: DataConnection; unreliable?: DataConnection; connected: boolean; iceTimer: number }>()
+  // 連線階段的 PeerJS 錯誤交給正在等待的 Promise
+  private pendingFail: ((why: RoomFail) => void) | null = null
+  private unload = () => this.peer.destroy()
   private hostId = ''
   private closed = false
   private gameListeners = new Set<(from: string, msg: { t: string }) => void>()
@@ -124,79 +149,63 @@ export class Room {
   private tokens = new Map<string, string>()
   private dropped = new Map<string, LobbyPlayer & { slot: Slot }>()
 
-  private constructor() {
-    this.net = new Network(GAME_ID)
-    // 錯誤都在各自的請求中處理；註冊空的 listener 避免 netlib 印出 console.error
-    this.net.on('signalingerror', () => {})
-    this.net.on('rtcerror', () => {})
-    this.net.on('failed', () => this.close('netFail'))
-    this.net.on('message', (peer, _channel, data) => {
-      if (typeof data !== 'string') return
-      try {
-        this.onMessage(peer.id, JSON.parse(data))
-      } catch {
-        /* 格式錯誤的訊息直接忽略 */
-      }
+  private constructor(id?: string) {
+    this.peer = id ? new Peer(id, PEER_OPTIONS) : new Peer(PEER_OPTIONS)
+    this.peer.on('connection', (c) => this.attachConn(c))
+    this.peer.on('error', (e) => {
+      const why = e.type === 'peer-unavailable' ? 'notFound' : 'netFail'
+      const fail = new RoomFail(why)
+      fail.idTaken = e.type === 'unavailable-id'
+      this.pendingFail?.(fail)
     })
-    this.net.on('connected', (peer) => {
-      // 加入者連上房主後打招呼，由房主決定是否接受
-      if (!this.state.host && peer.id === this.hostId) this.sendTo(peer.id, { t: 'hello', v: PROTO, name: this.name, token: this.token })
+    // 只是跟信令伺服器斷線：已建立的 P2P 連線不受影響，持續嘗試連回去，新玩家與重新連線的玩家才找得到房間
+    this.peer.on('disconnected', () => {
+      if (this.closed) return
+      setTimeout(() => {
+        if (!this.closed && this.peer.disconnected && !this.peer.destroyed) this.peer.reconnect()
+      }, RECONNECT_DELAY)
     })
-    this.net.on('disconnected', (peer) => this.onDisconnected(peer.id))
+    // 關閉分頁時主動斷線，對方才能立刻知道
+    window.addEventListener('pagehide', this.unload)
   }
 
-  // 建立房間：隨機產生沒人用的 4 碼數字房號
+  // 建立房間：隨機產生沒人用的 4 碼數字房號（已被使用的 id 伺服器會拒絕）
   static async create(): Promise<Room> {
-    const room = new Room()
-    try {
-      await room.ready()
-      let code = ''
-      for (let i = 0; i < 10 && !code; i++) {
-        const c = String(Math.floor(Math.random() * 10000)).padStart(4, '0')
-        if (!(await room.find(c))) code = c
+    for (let i = 0; i < 10; i++) {
+      const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0')
+      const room = new Room(ID_PREFIX + code)
+      try {
+        await room.ready()
+        room.hostId = room.peer.id
+        Object.assign(room.state, { phase: 'lobby', code, host: true, me: room.peer.id, players: [{ id: room.peer.id, n: 1, pick: 'random', name: room.name }] })
+        return room
+      } catch (e) {
+        room.dispose()
+        if (!(e instanceof RoomFail && e.idTaken)) throw e instanceof RoomFail ? e.why : 'netFail'
       }
-      if (!code) throw new RoomFail('netFail')
-      await room.net.create({
-        public: true,
-        maxPlayers: MAX_PLAYERS,
-        canUpdateBy: 'creator',
-        customData: { room: code, host: room.net.id, v: PROTO },
-      })
-      room.hostId = room.net.id
-      Object.assign(room.state, { phase: 'lobby', code, host: true, me: room.net.id, players: [{ id: room.net.id, n: 1, pick: 'random', name: room.name }] })
-      return room
-    } catch (e) {
-      room.net.close()
-      throw e instanceof RoomFail ? e.why : 'netFail'
     }
+    throw 'netFail'
   }
 
-  // 依 4 碼房號加入；失敗時丟出 RoomError
+  // 依 4 碼房號加入；失敗時丟出 RoomError（人數已滿、已開局等由房主回覆）
   static async join(code: string): Promise<Room> {
     const room = new Room()
     try {
       await room.ready()
-      const entry = await room.find(code)
-      if (!entry) throw new RoomFail('notFound')
-      if (entry.customData?.v !== PROTO) throw new RoomFail('version')
-      if (entry.playerCount >= entry.maxPlayers) throw new RoomFail('full')
-      room.hostId = String(entry.customData?.host ?? '')
+      room.hostId = ID_PREFIX + code
       room.token = rejoinToken(code)
       room.state.code = code
-      room.state.me = room.net.id
+      room.state.me = room.peer.id
       const welcome = new Promise<void>((resolve) => (room.welcomed = resolve))
-      try {
-        await room.net.join(entry.code)
-      } catch (e) {
-        const c = (e as { code?: string }).code
-        throw new RoomFail(c === 'lobby-is-full' ? 'full' : c === 'lobby-not-found' ? 'notFound' : 'netFail')
-      }
+      const peerFail = new Promise<never>((_, reject) => (room.pendingFail = reject))
+      room.attachConn(room.peer.connect(room.hostId, { label: 'reliable', reliable: true, serialization: 'raw' }))
+      room.attachConn(room.peer.connect(room.hostId, { label: 'unreliable', reliable: false, serialization: 'raw' }))
       // 等房主回覆大廳狀態（P2P 連線建立需要一點時間）
-      await Promise.race([welcome, room.failAfter(TIMEOUT), room.closedPromise()])
+      await Promise.race([welcome, peerFail, room.failAfter(TIMEOUT), room.closedPromise()])
+      room.pendingFail = null
       return room
     } catch (e) {
-      room.closed = true
-      room.net.close()
+      room.dispose()
       throw e instanceof RoomFail ? e.why : 'netFail'
     }
   }
@@ -261,17 +270,60 @@ export class Room {
   private ready() {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new RoomFail('netFail')), TIMEOUT)
-      this.net.once('ready', () => {
+      this.pendingFail = (e) => {
         clearTimeout(timer)
+        reject(e)
+      }
+      this.peer.once('open', () => {
+        clearTimeout(timer)
+        this.pendingFail = null
         resolve()
       })
     })
   }
 
-  // 房主離開後伺服器還會暫時保留空的 lobby（或改由其他人當 leader），只認房主仍在的那一個
-  private async find(code: string) {
-    const list = await this.net.list({ room: code }, undefined, 10)
-    return list.find((l) => l.playerCount > 0 && l.leader !== undefined && l.leader === l.customData?.host)
+  // 兩條資料通道都打開才算連上；任一條關閉就算離線
+  private attachConn(c: DataConnection) {
+    const id = c.peer
+    let entry = this.conns.get(id)
+    if (!entry) {
+      entry = { connected: false, iceTimer: 0 }
+      this.conns.set(id, entry)
+    }
+    const e = entry
+    if (c.label === 'reliable') e.reliable = c
+    else if (c.label === 'unreliable') e.unreliable = c
+    else return c.close()
+    c.on('open', () => {
+      if (e.connected || !e.reliable?.open || !e.unreliable?.open) return
+      e.connected = true
+      // 加入者連上房主後打招呼，由房主決定是否接受
+      if (!this.state.host && id === this.hostId) this.sendTo(id, { t: 'hello', v: PROTO, name: this.name, token: this.token })
+    })
+    c.on('data', (data) => {
+      if (typeof data !== 'string') return
+      try {
+        this.onMessage(id, JSON.parse(data))
+      } catch {
+        /* 格式錯誤的訊息直接忽略 */
+      }
+    })
+    c.on('close', () => this.dropConn(id, e))
+    c.on('error', () => {})
+    c.on('iceStateChanged', (state) => {
+      clearTimeout(e.iceTimer)
+      if (state === 'disconnected') e.iceTimer = window.setTimeout(() => this.dropConn(id, e), ICE_GRACE)
+      else if (state === 'failed' || state === 'closed') this.dropConn(id, e)
+    })
+  }
+
+  private dropConn(id: string, e: { reliable?: DataConnection; unreliable?: DataConnection; iceTimer: number }) {
+    if (this.conns.get(id) !== e) return
+    clearTimeout(e.iceTimer)
+    this.conns.delete(id)
+    e.reliable?.close()
+    e.unreliable?.close()
+    this.onDisconnected(id)
   }
 
   private failAfter(ms: number) {
@@ -289,19 +341,19 @@ export class Room {
   }
 
   private sendTo(peer: string, msg: LobbyMsg | object, reliable = true) {
+    // 只看要用的那條通道：對方的 hello 可能比另一條通道的 open 事件先到
+    const e = this.conns.get(peer)
+    const c = reliable ? e?.reliable : e?.unreliable
+    if (!c?.open) return
     try {
-      this.net.send(reliable ? 'reliable' : 'unreliable', peer, JSON.stringify(msg))
+      void c.send(JSON.stringify(msg))
     } catch {
       /* 對方剛斷線 */
     }
   }
 
   private broadcast(msg: LobbyMsg | object, reliable = true) {
-    try {
-      this.net.broadcast(reliable ? 'reliable' : 'unreliable', JSON.stringify(msg))
-    } catch {
-      /* ignore */
-    }
+    for (const id of this.conns.keys()) this.sendTo(id, msg, reliable)
   }
 
   private onMessage(from: string, m: LobbyMsg | { t: string }) {
@@ -435,13 +487,20 @@ export class Room {
     this.onStart?.(link)
   }
 
+  private dispose() {
+    this.closed = true
+    for (const e of this.conns.values()) clearTimeout(e.iceTimer)
+    window.removeEventListener('pagehide', this.unload)
+    this.peer.destroy()
+  }
+
   private close(why: RoomError | null) {
     if (this.closed) return
     this.closed = true
     this.gameListeners.clear()
     this.leaveListeners.clear()
     this.rejoinHandler = null
-    this.net.close(why ?? 'left')
+    this.dispose()
     this.onClose?.(why)
   }
 }

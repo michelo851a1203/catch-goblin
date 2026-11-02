@@ -1,6 +1,7 @@
+import { store } from './crazygames'
 import type { Role } from './game/config'
 
-// 只存戰績到 localStorage，遊戲本身不存檔
+// 只存戰績（CrazyGames 存檔，不可用時為 localStorage），遊戲本身不存檔
 const KEY = 'goblin-game:stats'
 
 export interface Stats {
@@ -11,7 +12,7 @@ export interface Stats {
 
 export function loadStats(): Stats {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = store.getItem(KEY)
     if (raw) return { elfWins: 0, goblinWins: 0, lastRole: null, ...JSON.parse(raw) }
   } catch {
     /* 無痕模式等情況忽略 */
@@ -25,7 +26,7 @@ export function recordResult(role: Role, winner: Role) {
   else s.goblinWins++
   s.lastRole = role
   try {
-    localStorage.setItem(KEY, JSON.stringify(s))
+    store.setItem(KEY, JSON.stringify(s))
   } catch {
     /* ignore */
   }

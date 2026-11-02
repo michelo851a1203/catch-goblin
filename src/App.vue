@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from 'vue'
+import { onMounted, ref, shallowRef, watch } from 'vue'
 import CharacterSelect from './components/CharacterSelect.vue'
 import GameView from './components/GameView.vue'
 import RoomSheet from './components/RoomSheet.vue'
 import type { Role } from './game/config'
 import type { NetLink, Room, RoomError } from './net/room'
-import * as poki from './poki'
+import * as crazygames from './crazygames'
+import { MAX_PLAYERS } from './net/assign'
 import { t } from './i18n'
 
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
@@ -20,13 +21,51 @@ const room = shallowRef<Room | null>(null)
 const link = shallowRef<NetLink | null>(null)
 const roomError = ref<RoomError | null>(null)
 
-onMounted(() => void poki.loadingFinished())
+// CrazyGames 的邀請 / 即時多人：直接連線，跳過建立 / 加入與暱稱的步驟
+// SDK 在載入 App 前就初始化完成，這裡要先決定好，RoomSheet 掛載時才讀得到
+const auto = ref<{ kind: 'create' } | { kind: 'join'; code: string } | null>(null)
 
-// 每回合開始前播插頁廣告（是否真的播放由 Poki 決定）
+function joinInvite(code: string) {
+  room.value?.leave()
+  link.value = null
+  role.value = null
+  roomError.value = null
+  auto.value = { kind: 'join', code }
+  sheet.value = true
+}
+
+const invite = crazygames.startupInvite()
+if (invite) joinInvite(invite)
+else if (crazygames.isInstantMultiplayer()) {
+  role.value = null
+  auto.value = { kind: 'create' }
+  sheet.value = true
+}
+
+onMounted(() => {
+  crazygames.loadingFinished()
+  crazygames.onInvite(joinInvite)
+})
+
+// 回報房間狀態給 CrazyGames，好友才能加入：只有大廳還有空位時可加入
+watch(
+  () => {
+    const s = room.value?.state
+    return s ? `${s.code}|${s.phase === 'lobby' && s.players.length < MAX_PLAYERS}` : ''
+  },
+  (now, prev) => {
+    if (now) {
+      const [code, joinable] = now.split('|')
+      crazygames.updateRoom(code, joinable === 'true')
+    } else if (prev) crazygames.leftRoom()
+  },
+)
+
+// 每回合開始前播插頁廣告（是否真的播放由 CrazyGames 決定）
 async function newRound(r: Role) {
   if (busy) return
   busy = true
-  await poki.commercialBreak()
+  await crazygames.commercialBreak()
   busy = false
   role.value = r
   round.value++
@@ -35,6 +74,7 @@ async function newRound(r: Role) {
 // 輸入暱稱並連線成功後收起 sheet，左上角改為「已加入 <房號>」
 function attach(r: Room) {
   roomError.value = null
+  auto.value = null
   sheet.value = false
   room.value = r
   r.onStart = (l) => {
@@ -54,6 +94,7 @@ function attach(r: Room) {
 
 // 在房間內關閉 sheet 只是收起來，回到選角畫面用卡片選角；不在房間時關閉即為單機模式
 function closeSheet() {
+  auto.value = null
   sheet.value = false
   roomError.value = null
 }
@@ -68,11 +109,10 @@ function backToRoom() {
   room.value?.backToLobby()
 }
 
-// 多人回合之間不播插頁廣告（會讓玩家不同步），離開房間回到單機時才播
-async function leaveRoom() {
+// 多人回合之間不播插頁廣告（會讓玩家不同步）；CrazyGames 也不允許在導覽按鈕上播廣告，離開房間不播
+function leaveRoom() {
   room.value?.leave()
   sheet.value = false
-  await poki.commercialBreak()
 }
 </script>
 
@@ -88,7 +128,7 @@ async function leaveRoom() {
   <GameView v-else-if="role" :key="round" :role="role" @restart="newRound(role)" @menu="role = null" />
   <template v-else>
     <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" @leave="leaveLobby" />
-    <RoomSheet v-if="sheet" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />
+    <RoomSheet v-if="sheet" :key="auto?.kind === 'join' ? auto.code : ''" :auto="auto" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />
   </template>
   <div class="rotate">📱↻<span>{{ t('rotate') }}</span></div>
 </template>

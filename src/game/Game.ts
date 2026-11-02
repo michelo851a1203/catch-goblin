@@ -12,7 +12,7 @@ import { FxSystem } from './fx/Effects'
 import { CELL } from './fx/atlas'
 import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 import { t, type TKey } from '../i18n'
-import * as poki from '../poki'
+import * as crazygames from '../crazygames'
 import { lowPower, touchMode } from '../input/touch'
 import type { Pose } from './models'
 import type { NetLink } from '../net/room'
@@ -315,7 +315,7 @@ export class Game {
     cancelAnimationFrame(this.raf)
     clearInterval(this.bgTimer)
     for (const off of this.netOff) off()
-    poki.gameplayStop()
+    crazygames.gameplayStop()
     for (const [t, n, f] of this.listeners) t.removeEventListener(n, f)
     if (document.pointerLockElement) document.exitPointerLock()
     this.fx.dispose()
@@ -336,13 +336,13 @@ export class Game {
     this.touchMove.set(0, 0)
     this.dragging = false
     if (document.pointerLockElement) document.exitPointerLock()
-    if (this.hud.phase === 'play') poki.gameplayStop()
+    if (this.hud.phase === 'play') crazygames.gameplayStop()
   }
 
   resume(reason: string) {
     if (!this.pauses.delete(reason) || this.pauses.size) return
     this.clock.getDelta() // 丟棄暫停期間累積的時間
-    if (this.hud.phase === 'play') poki.gameplayStart()
+    if (this.hud.phase === 'play') crazygames.gameplayStart()
   }
 
   setSpeed(s: number) {
@@ -705,7 +705,7 @@ export class Game {
       case 'go':
         if (this.hud.phase !== 'countdown') return
         this.hud.phase = 'play'
-        poki.gameplayStart()
+        crazygames.gameplayStart()
         this.toast(this.role === 'elf' ? t('tHuntStart') : t('tHideStart'), 'info')
         return
       case 'gaze': {
@@ -1527,7 +1527,7 @@ export class Game {
     if (this.hud.phase === 'over') return
     this.hud.phase = 'over'
     this.elapsed = time
-    poki.gameplayStop()
+    crazygames.gameplayStop()
     this.elf.model.setHarp?.(false)
     if (winner === 'elf') this.elf.character.setVictory(true)
     const won = winner === this.role

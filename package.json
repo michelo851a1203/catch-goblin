@@ -7,13 +7,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "package": "bun run build && rm -f poki-build.zip && cd dist && zip -qr ../poki-build.zip . -x elf-preview.html 'assets/elfPreview-*'",
+    "package": "bun run build && rm -f crazygames-build.zip && cd dist && zip -qr ../crazygames-build.zip . -x elf-preview.html 'assets/elfPreview-*'",
     "preview": "vite preview",
     "test": "vitest run",
     "validate:elf": "node tools/validate-glb.mjs public/models/elf/elf.glb --expect-anims Idle,Walk,Run,Play,Cast,Strike,Capture,Victory,Stunned --expect-nodes prop_harp,ElfMesh_LOD0,ElfMesh_LOD1"
   },
   "dependencies": {
-    "@poki/netlib": "0.0.20",
+    "peerjs": "1.5.5",
     "shaders": "^4.0.4",
     "three": "^0.186.1",
     "vue": "^3.5.44"

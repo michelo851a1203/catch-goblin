@@ -1,7 +1,8 @@
+import { store } from './crazygames'
 import type { Role } from './game/config'
 import { t, type TKey } from './i18n'
 
-// 玩家自訂鍵位，存在 localStorage
+// 玩家自訂鍵位，存在 CrazyGames 存檔（不可用時為 localStorage）
 const KEY = 'goblin-game:keybinds'
 
 export type MoveAction = 'up' | 'down' | 'left' | 'right'
@@ -46,7 +47,7 @@ export function defaultKeybinds(): Keybinds {
 export function loadKeybinds(): Keybinds {
   const k = defaultKeybinds()
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = store.getItem(KEY)
     if (raw) {
       const saved = JSON.parse(raw) as Partial<Keybinds>
       for (const g of ['move', 'elf', 'goblin'] as const) Object.assign(k[g], saved[g])
@@ -59,7 +60,7 @@ export function loadKeybinds(): Keybinds {
 
 export function saveKeybinds(k: Keybinds) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(k))
+    store.setItem(KEY, JSON.stringify(k))
   } catch {
     /* ignore */
   }

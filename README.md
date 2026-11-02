@@ -200,6 +200,25 @@ bun run preview    # 本機預覽打包結果
 
 `dist/` 是純靜態檔案，可以直接部署到任何靜態網站平台。
 
+### 🎮 上架 CrazyGames
+
+```bash
+bun run package    # 打包並輸出 crazygames-build.zip，上傳到 CrazyGames Developer Portal
+```
+
+- SDK 整合都在 [`src/crazygames.ts`](src/crazygames.ts)：遊玩事件、插頁廣告、存檔、使用者名稱、好友邀請。在 CrazyGames 以外的網域或被廣告阻擋器擋掉時，全部改成 no-op，遊戲照常運作。
+- 投稿時請開啟 **Progress Save**（戰績、鍵位、語言才會跟著帳號同步），大廳人數填 **9**。
+- 本機可用 `?instantJoin=true`（即時多人）與 `?czy_invite=true&room=1234`（邀請連結）測試。
+
+### 🌍 多人連線設定（選用）
+
+多人連線使用 [PeerJS](https://peerjs.com/) 的 WebRTC P2P，預設走 PeerJS 的公用信令伺服器。建置時可用環境變數調整：
+
+| 變數 | 說明 |
+|---|---|
+| `VITE_PEER_ICE_SERVERS` | STUN / TURN 設定，`RTCIceServer[]` 的 JSON。**正式上線建議設定 TURN**，否則嚴格 NAT 的玩家可能連不上 |
+| `VITE_PEER_HOST` / `VITE_PEER_PORT` / `VITE_PEER_PATH` / `VITE_PEER_KEY` | 改用自架的 PeerServer |
+
 ### 🌐 部署到 GitHub Pages
 
 推送到 `main` 分支後，[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) 會自動打包並部署。
@@ -224,7 +243,8 @@ bun run preview    # 本機預覽打包結果
 goblin-game/
 ├── src/
 │   ├── App.vue                    # 畫面切換（選角 ↔ 遊戲）
-│   ├── stats.ts                   # 戰績紀錄（localStorage）
+│   ├── stats.ts                   # 戰績紀錄
+│   ├── crazygames.ts              # CrazyGames SDK 包裝
 │   ├── components/
 │   │   ├── CharacterSelect.vue    # 選角畫面與卡片翻轉動畫
 │   │   └── GameView.vue           # 遊戲 HUD：計時、技能列、小地圖、結算
@@ -260,7 +280,7 @@ goblin-game/
   - 哥布林會逃跑、躲進洞裡、搬家，也會去救同伴、使用大招
   - 精靈會巡邏、追擊、預判，並在適當時機施放技能
 - **🔊 零音檔**：所有音效與豎琴旋律都由 WebAudio 即時合成。
-- **💾 免後端**：遊戲過程不存檔，只把勝場數存在 `localStorage`。
+- **💾 免後端**：遊戲過程不存檔，只把勝場數存在 CrazyGames 存檔（不可用時為 `localStorage`）。
 
 ---
 

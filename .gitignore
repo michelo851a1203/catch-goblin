@@ -10,7 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-poki-build.zip
+*-build.zip
 *.local
 
 # Editor directories and files
@@ -31,4 +31,3 @@ poki-build.zip
 # Blender 自動備份
 *.blend1
 elf-preview.html
-poki-build.zip

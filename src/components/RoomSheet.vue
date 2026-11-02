@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAME_MAX, Room, cleanName, displayName, loadName, saveName, type RoomError } from '../net/room'
 import { MAX_PLAYERS, type Pick } from '../net/assign'
 import { sfx } from '../game/audio'
@@ -7,7 +7,12 @@ import { t, type TKey } from '../i18n'
 
 // 多人連線的 bottom sheet：建立 / 加入房間 → 輸入暱稱後才真正連線，以及房間大廳（房號、玩家、開始遊戲）
 // 選角改在選角畫面的卡片上進行；在房間內關閉 sheet 不會離開房間
-const props = defineProps<{ room: Room | null; error: RoomError | null }>()
+const props = defineProps<{
+  room: Room | null
+  error: RoomError | null
+  // CrazyGames 的邀請 / 即時多人：開啟後直接連線
+  auto?: { kind: 'create' } | { kind: 'join'; code: string } | null
+}>()
 const emit = defineEmits<{ close: []; leave: []; room: [room: Room] }>()
 
 const code = ref('')
@@ -96,6 +101,15 @@ function flushNick() {
   else saveName(cleanName(nick.value))
 }
 onBeforeUnmount(flushNick)
+
+onMounted(() => {
+  const a = props.auto
+  if (!a || props.room) return
+  kind.value = a.kind
+  if (a.kind === 'join') code.value = a.code
+  step.value = 'nick'
+  void connect()
+})
 
 async function copy() {
   try {
@@ -422,10 +436,11 @@ button:disabled {
   background: rgba(230, 200, 120, 0.14);
   box-shadow: inset 0 0 0 1px rgba(230, 200, 120, 0.5);
 }
+/* CrazyGames 規定要顯示完整使用者名稱讓好友認得：太長時換行，不截斷 */
 .players .name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 .tag {
   margin-left: auto;
@@ -505,7 +520,7 @@ button:disabled {
     font-size: 28px;
   }
   .players {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
   .players li {
     padding: 3px 6px;
