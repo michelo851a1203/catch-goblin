@@ -1,0 +1,75 @@
+name: CrazyGames build & Cloudflare deploy
+
+# 只監聽 crazy-game 分支；main 分支的 GitHub Pages 部署（deploy.yml）不受影響
+#
+# 需要在 repo 的 Settings → Secrets and variables → Actions 設定：
+#   Secrets
+#     CLOUDFLARE_API_TOKEN：具有「Workers Scripts: Edit」與「Cloudflare Pages: Edit」權限的 API token
+#     CLOUDFLARE_ACCOUNT_ID：Cloudflare 帳號 ID
+#   Variables
+#     VITE_TURN_URL：TURN Worker 的網址，例如 https://elf-and-goblins-turn.<子網域>.workers.dev/ice
+# TURN 金鑰（TURN_KEY_ID / TURN_KEY_API_TOKEN）只設定在 Worker 上，不放在 GitHub
+on:
+  push:
+    branches: [crazy-game]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crazygames
+  cancel-in-progress: true
+
+jobs:
+  # TURN 憑證 Worker：遊戲多人連線用
+  turn:
+    # 手動觸發時若選了其他分支就不執行
+    if: github.ref == 'refs/heads/crazy-game'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Deploy TURN worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker/turn
+          command: deploy
+
+  build:
+    if: github.ref == 'refs/heads/crazy-game'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun run test
+
+      - name: Build
+        run: bun run build
+        env:
+          VITE_TURN_URL: ${{ vars.VITE_TURN_URL }}
+
+      # 下載後解壓得到的就是遊戲檔案，重新壓成 zip（index.html 在最上層）即可上傳到 CrazyGames Developer Portal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crazygames-build
+          path: dist
+          retention-days: 30
+
+      # 測試站：https://crazy-game.elf-and-goblins.pages.dev（在 CrazyGames 以外的網域，SDK 會自動停用）
+      - name: Deploy preview to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=elf-and-goblins --branch=crazy-game
