@@ -9,5 +9,5 @@ compatibility_date = "2026-10-01"
 
 [vars]
 # CrazyGames 的遊戲檔案放在 <slug>.game-files.crazygames.com；pages.dev 是 GitHub Actions 部署的測試站；localhost 給本機 dev / preview
-ALLOWED_ORIGINS = "https://*.crazygames.com,https://crazy-game.elf-and-goblins.pages.dev,http://localhost:5173,http://localhost:4173"
+ALLOWED_ORIGINS = "https://*.crazygames.com,https://elf-and-goblins.pages.dev,https://crazy-game.elf-and-goblins.pages.dev,http://localhost:5173,http://localhost:4173"
 TURN_TTL = "86400"
