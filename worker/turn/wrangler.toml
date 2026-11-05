@@ -1,0 +1,13 @@
+# Cloudflare TURN 憑證 Worker（見 README「多人連線設定」）
+# 部署：GitHub Actions（.github/workflows/crazygames.yml）在 crazy-game 分支推送時自動部署
+# 金鑰用 secret 設定，不要寫在這裡：
+#   bunx wrangler secret put TURN_KEY_ID
+#   bunx wrangler secret put TURN_KEY_API_TOKEN
+name = "elf-and-goblins-turn"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+# CrazyGames 的遊戲檔案放在 <slug>.game-files.crazygames.com；pages.dev 是 GitHub Actions 部署的測試站；localhost 給本機 dev / preview
+ALLOWED_ORIGINS = "https://*.crazygames.com,https://crazy-game.elf-and-goblins.pages.dev,http://localhost:5173,http://localhost:4173"
+TURN_TTL = "86400"

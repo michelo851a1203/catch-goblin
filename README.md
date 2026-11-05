@@ -210,14 +210,27 @@ bun run package    # 打包並輸出 crazygames-build.zip，上傳到 CrazyGames
 - 投稿時請開啟 **Progress Save**（戰績、鍵位、語言才會跟著帳號同步），大廳人數填 **9**。
 - 本機可用 `?instantJoin=true`（即時多人）與 `?czy_invite=true&room=1234`（邀請連結）測試。
 
-### 🌍 多人連線設定（選用）
+### 🌍 多人連線設定
 
-多人連線使用 [PeerJS](https://peerjs.com/) 的 WebRTC P2P，預設走 PeerJS 的公用信令伺服器。建置時可用環境變數調整：
+多人連線使用 [PeerJS](https://peerjs.com/) 的 WebRTC P2P，預設走 PeerJS 的公用信令伺服器。
+TURN（讓嚴格 NAT 的玩家也連得上）使用 **Cloudflare TURN**：[`worker/turn`](worker/turn) 是一個 Cloudflare Worker，負責發短效憑證，TURN 金鑰只存在 Worker 上、不會打包進遊戲。
+沒設定或 Worker 連不上時會退回只用 STUN，大部分玩家仍可連線。
 
 | 變數 | 說明 |
 |---|---|
-| `VITE_PEER_ICE_SERVERS` | STUN / TURN 設定，`RTCIceServer[]` 的 JSON。**正式上線建議設定 TURN**，否則嚴格 NAT 的玩家可能連不上 |
+| `VITE_TURN_URL` | TURN Worker 的網址，例如 `https://elf-and-goblins-turn.<子網域>.workers.dev/ice` |
+| `VITE_PEER_ICE_SERVERS` | 沒有 TURN Worker 時的 STUN / TURN 設定，`RTCIceServer[]` 的 JSON |
 | `VITE_PEER_HOST` / `VITE_PEER_PORT` / `VITE_PEER_PATH` / `VITE_PEER_KEY` | 改用自架的 PeerServer |
+
+Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wrangler.toml) 的 `ALLOWED_ORIGINS`（預設：`*.crazygames.com`、Cloudflare Pages 測試站、localhost）。
+
+### ☁️ crazy-game 分支的自動部署
+
+推送到 `crazy-game` 分支後，[`.github/workflows/crazygames.yml`](.github/workflows/crazygames.yml) 會：
+
+1. 部署 TURN Worker
+2. 跑測試、建置，並把 `dist` 上傳為 `crazygames-build` artifact（重新壓成 zip 即可上傳到 CrazyGames）
+3. 部署測試站到 Cloudflare Pages：`https://crazy-game.elf-and-goblins.pages.dev`
 
 ### 🌐 部署到 GitHub Pages
 

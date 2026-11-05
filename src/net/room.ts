@@ -2,25 +2,26 @@ import { reactive } from 'vue'
 import Peer, { type DataConnection, type PeerOptions } from 'peerjs'
 import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assign'
 import { store } from '../crazygames'
+import { iceServers } from './ice'
 import { t } from '../i18n'
 
 // 多人連線：使用 PeerJS（WebRTC P2P）。預設使用 PeerJS 的公用信令伺服器，可用 VITE_PEER_* 改成自架的 PeerServer。
-// PeerJS 內建的 TURN 網域已無法解析，嚴格 NAT 的玩家需要自備 TURN：VITE_PEER_ICE_SERVERS 填 RTCIceServer[] 的 JSON（見 README）。
+// PeerJS 內建的 TURN 網域已無法解析，TURN 改由 Cloudflare 提供（見 ./ice.ts 與 worker/turn）。
 // 建立房間的玩家是房主，負責整場模擬；其他玩家只傳送自己的操作，接收房主廣播的狀態。
 // 房主以固定前綴 + 4 碼房號註冊 peer id，加入者直接用房號連線，所以不需要大廳列表。
 const ID_PREFIX = 'elf-and-goblins-'
 const env = import.meta.env
-const PEER_OPTIONS: PeerOptions = {
-  ...(env.VITE_PEER_HOST
-    ? {
-        host: env.VITE_PEER_HOST,
-        port: Number(env.VITE_PEER_PORT) || 443,
-        path: env.VITE_PEER_PATH || '/',
-        key: env.VITE_PEER_KEY || 'peerjs',
-        secure: true,
-      }
-    : {}),
-  ...(env.VITE_PEER_ICE_SERVERS ? { config: { iceServers: JSON.parse(env.VITE_PEER_ICE_SERVERS) as RTCIceServer[] } } : {}),
+const SIGNALING: PeerOptions = env.VITE_PEER_HOST
+  ? {
+      host: env.VITE_PEER_HOST,
+      port: Number(env.VITE_PEER_PORT) || 443,
+      path: env.VITE_PEER_PATH || '/',
+      key: env.VITE_PEER_KEY || 'peerjs',
+      secure: true,
+    }
+  : {}
+async function peerOptions(): Promise<PeerOptions> {
+  return { ...SIGNALING, config: { iceServers: await iceServers() } }
 }
 // 通訊格式版本：不同版本的遊戲不能同房
 const PROTO = 3
@@ -149,8 +150,8 @@ export class Room {
   private tokens = new Map<string, string>()
   private dropped = new Map<string, LobbyPlayer & { slot: Slot }>()
 
-  private constructor(id?: string) {
-    this.peer = id ? new Peer(id, PEER_OPTIONS) : new Peer(PEER_OPTIONS)
+  private constructor(opts: PeerOptions, id?: string) {
+    this.peer = id ? new Peer(id, opts) : new Peer(opts)
     this.peer.on('connection', (c) => this.attachConn(c))
     this.peer.on('error', (e) => {
       const why = e.type === 'peer-unavailable' ? 'notFound' : 'netFail'
@@ -171,9 +172,10 @@ export class Room {
 
   // 建立房間：隨機產生沒人用的 4 碼數字房號（已被使用的 id 伺服器會拒絕）
   static async create(): Promise<Room> {
+    const opts = await peerOptions()
     for (let i = 0; i < 10; i++) {
       const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0')
-      const room = new Room(ID_PREFIX + code)
+      const room = new Room(opts, ID_PREFIX + code)
       try {
         await room.ready()
         room.hostId = room.peer.id
@@ -189,7 +191,7 @@ export class Room {
 
   // 依 4 碼房號加入；失敗時丟出 RoomError（人數已滿、已開局等由房主回覆）
   static async join(code: string): Promise<Room> {
-    const room = new Room()
+    const room = new Room(await peerOptions())
     try {
       await room.ready()
       room.hostId = ID_PREFIX + code
