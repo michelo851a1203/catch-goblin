@@ -63,6 +63,12 @@ let adMuted = false
 let settingsMuted = false
 let initP: Promise<void> | null = null
 
+// 只在 CrazyGames（遊戲檔案放在 <slug>.game-files.crazygames.com，也包含地區網域）與本機（SDK 的 local 測試模式）初始化 SDK。
+// 其他網域（Cloudflare Pages 測試站、GitHub Pages）的 SDK init() 不會回應，會讓玩家白等到 INIT_TIMEOUT
+export function onCrazyGames(host: string) {
+  return /(^|\.)crazygames\.[a-z]{2,}(\.[a-z]{2})?$/i.test(host) || host === 'localhost' || host === '127.0.0.1'
+}
+
 function syncMute() {
   setMuted(adMuted || settingsMuted)
 }
@@ -74,7 +80,7 @@ export function init() {
 
 async function doInit() {
   const s = window.CrazyGames?.SDK
-  if (!s) return
+  if (!s || !onCrazyGames(window.location?.hostname ?? '')) return
   try {
     const ok = await Promise.race([s.init().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), INIT_TIMEOUT))])
     if (!ok || s.environment === 'disabled') return

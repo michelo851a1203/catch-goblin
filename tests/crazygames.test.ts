@@ -16,9 +16,9 @@ function fakeSdk(environment = 'crazygames') {
   }
 }
 
-async function load(sdk?: ReturnType<typeof fakeSdk>) {
+async function load(sdk?: ReturnType<typeof fakeSdk>, hostname = 'elf-and-goblins.game-files.crazygames.com') {
   vi.resetModules()
-  vi.stubGlobal('window', { CrazyGames: sdk ? { SDK: sdk } : undefined, setTimeout, clearTimeout })
+  vi.stubGlobal('window', { CrazyGames: sdk ? { SDK: sdk } : undefined, location: { hostname }, setTimeout, clearTimeout })
   const cg = await import('../src/crazygames')
   await cg.init()
   return cg
@@ -32,6 +32,25 @@ describe('crazygames', () => {
     cg.gameplayStart()
     await expect(cg.commercialBreak()).resolves.toBeUndefined()
     expect(setMuted).not.toHaveBeenCalled()
+  })
+
+  it('判斷是否在 CrazyGames 或本機', async () => {
+    const { onCrazyGames } = await load()
+    for (const h of ['elf-and-goblins.game-files.crazygames.com', 'www.crazygames.com', 'crazygames.fr', 'www.crazygames.co.id', 'localhost', '127.0.0.1'])
+      expect(onCrazyGames(h), h).toBe(true)
+    for (const h of ['crazy-game.elf-and-goblins.pages.dev', 'michelo851a1203.github.io', 'notcrazygames.com', ''])
+      expect(onCrazyGames(h), h).toBe(false)
+  })
+
+  it('不在 CrazyGames 網域時不等 SDK 初始化，遊戲立刻載入', async () => {
+    const sdk = fakeSdk()
+    sdk.init.mockImplementation(() => new Promise<void>(() => {})) // 實測：其他網域的 init() 永遠不會回應
+    const t0 = Date.now()
+    const cg = await load(sdk, 'crazy-game.elf-and-goblins.pages.dev')
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(sdk.init).not.toHaveBeenCalled()
+    cg.gameplayStart()
+    expect(sdk.game.gameplayStart).not.toHaveBeenCalled()
   })
 
   it('其他網域（disabled）不呼叫 SDK', async () => {
