@@ -8,6 +8,7 @@ import type { NetLink, Room, RoomError } from './net/room'
 import * as crazygames from './crazygames'
 import { MAX_PLAYERS } from './net/assign'
 import { t } from './i18n'
+import { music } from './game/music'
 
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
@@ -59,6 +60,13 @@ watch(
       crazygames.updateRoom(code, joinable === 'true')
     } else if (prev) crazygames.leftRoom()
   },
+)
+
+// 背景音樂：回到選角畫面或大廳時播主選單音樂；遊戲中的音樂（陣營、勝利）由 GameView 決定
+watch(
+  () => !link.value && !role.value,
+  (inMenu) => inMenu && music.play('menu'),
+  { immediate: true },
 )
 
 // 每回合開始前播插頁廣告（是否真的播放由 CrazyGames 決定）

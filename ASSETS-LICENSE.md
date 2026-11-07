@@ -29,7 +29,11 @@ The designs of the Elf and Goblin characters, including their shape, proportions
 - `public/og-image.jpg`
 - `docs/` 內的截圖與圖片 / screenshots and images in `docs/`
 
-### 3. 名稱與標誌 / Names and Logos
+### 3. 音樂 / Music
+
+- `public/music/**`（主選單、精靈視角、哥布林視角的背景音樂 / background music for the main menu, elf view and goblin view）
+
+### 4. 名稱與標誌 / Names and Logos
 
 - 快逃啊，哥布林！女精靈來山洞了
 - Elf & Goblins

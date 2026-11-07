@@ -1,4 +1,4 @@
-// 以 WebAudio 合成的簡易音效，不需要外部音檔
+// 以 WebAudio 合成的簡易音效，不需要外部音檔；背景音樂見 music.ts，共用同一個 AudioContext 與靜音狀態
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
 let muted = false
@@ -15,10 +15,23 @@ function ac() {
   return ctx
 }
 
-// 廣告播放或分頁隱藏時靜音
+// 背景音樂要接到同一個 AudioContext（iOS 只能用 WebAudio 調整音樂音量）
+export function audioContext() {
+  return ac()
+}
+
+const muteListeners = new Set<(on: boolean) => void>()
+// 訂閱靜音狀態；訂閱時立即通知一次目前狀態
+export function onMuteChange(fn: (on: boolean) => void) {
+  muteListeners.add(fn)
+  fn(muted)
+}
+
+// 廣告播放或平台設定靜音時，音效與背景音樂一起靜音
 export function setMuted(on: boolean) {
   muted = on
   if (master) master.gain.value = on ? 0 : VOLUME
+  for (const fn of muteListeners) fn(on)
 }
 
 function tone(freq: number, dur: number, type: OscillatorType = 'sine', vol = 0.4, when = 0, slideTo?: number) {

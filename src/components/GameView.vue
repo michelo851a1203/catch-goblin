@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Game, createHudState } from '../game/Game'
 import type { Role } from '../game/config'
 import type { NetLink } from '../net/room'
@@ -7,6 +7,7 @@ import { recordResult } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
 import { t } from '../i18n'
 import { touchMode } from '../input/touch'
+import { music } from '../game/music'
 import TouchControls from './TouchControls.vue'
 import FullscreenButton from './FullscreenButton.vue'
 
@@ -21,7 +22,14 @@ let game: Game | null = null
 onMounted(() => {
   game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null)
   game.start()
+  // 遊戲中播自己陣營的音樂；再玩一局時 GameView 重新掛載，從結算的勝利音樂換回來
+  music.play(props.role)
 })
+// 結算：不論自己是哪一邊，都播獲勝陣營的勝利音樂
+watch(
+  () => hud.result?.winner,
+  (winner) => winner && music.play(winner === 'elf' ? 'elfWin' : 'goblinWin'),
+)
 onBeforeUnmount(() => game?.dispose())
 
 const clock = computed(() => {
