@@ -3,7 +3,7 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import type { AnimFlags, CharacterModel, Pose } from '../models'
 import { CLIP_SPECS, ElfAnimState } from './ElfAnimState'
-import { ELF_ASSETS, ELF_CLIPS, ELF_NODES, ELF_SPRING_CHAINS, type ElfClip } from './assets'
+import { ELF_ASSETS, ELF_CLIPS, ELF_COLLIDERS, ELF_NODES, ELF_SPRING_CHAINS, type ElfClip } from './assets'
 import { disposeObject } from './dispose'
 import { SPRINGS, SecondaryMotion } from './SecondaryMotion'
 
@@ -23,7 +23,7 @@ export type ElfStatus = 'loading' | 'ready' | 'fallback' | 'disposed'
 
 // 豎琴掛在 prop_harp 骨（左手）上的偏移；在 elf-preview.html 中調整
 export const HARP_OFFSET = {
-  position: new THREE.Vector3(-0.005, 0.085, -0.032),
+  position: new THREE.Vector3(-0.036, -0.059, -0.065),
   rotation: new THREE.Euler(0.138, 0.409, -0.054),
   scale: 0.95,
 }
@@ -71,6 +71,10 @@ export class ElfCharacter implements CharacterModel {
   private camera: THREE.Camera | null = null
   private forcedLod: number | null = null
   private readonly lowEnd: boolean
+  // 以根節點的實際位移量測水平速度（玩家 / AI / 網路同步的速度都不同），讓步態播放速率對上地面
+  private lastPos = new THREE.Vector3()
+  private hasLast = false
+  private groundSpeed = 0
   private readonly opts: ElfCharacterOptions
 
   constructor(opts: ElfCharacterOptions = {}) {
@@ -124,7 +128,7 @@ export class ElfCharacter implements CharacterModel {
     for (const clip of gltf.animations) {
       const name = clip.name as ElfClip
       if (!ELF_CLIPS.includes(name)) continue
-      // 次級動畫骨由程式驅動：移除動作中這些骨頭的軌道，避免 mixer 每幀蓋回 rest pose
+      // 次級動畫骨由程式驅動：移除動作中這些骨頭的軌道，避免 mixer 每幀蓋回 rest pose / 覆蓋彈簧結果
       clip.tracks = clip.tracks.filter((t) => !/^(hair_|skirt_|sleeve|prop_)/.test(t.name))
       const a = this.mixer.clipAction(clip)
       const spec = CLIP_SPECS[name]
@@ -135,7 +139,7 @@ export class ElfCharacter implements CharacterModel {
     this.active = this.actions.get('Idle') ?? null
     this.active?.play()
 
-    // 次級動畫骨鏈
+    // 次級動畫骨鏈與碰撞體
     const bone = (n: string) => scene.getObjectByName(n) as THREE.Bone | undefined
     for (const [kind, chains] of Object.entries(ELF_SPRING_CHAINS) as [keyof typeof ELF_SPRING_CHAINS, readonly (readonly string[])[]][]) {
       for (const chain of chains) {
@@ -143,6 +147,7 @@ export class ElfCharacter implements CharacterModel {
         if (bones.length) this.springs.addChain(bones, SPRINGS[kind])
       }
     }
+    for (const c of ELF_COLLIDERS) this.springs.addCollider(c, bone)
 
     // 豎琴
     const socket = scene.getObjectByName(ELF_NODES.harpSocket)
@@ -199,7 +204,16 @@ export class ElfCharacter implements CharacterModel {
       this.fallback?.animate(dt, moveSpeed01, pose, flags)
       return
     }
-    const d = this.anim.update(pose, moveSpeed01)
+    const p = this.root.position
+    if (this.hasLast && dt > 0) {
+      const v = Math.hypot(p.x - this.lastPos.x, p.z - this.lastPos.z) / dt
+      if (v < 30) this.groundSpeed += (v - this.groundSpeed) * Math.min(1, dt * 10) // 瞬移不算
+    }
+    this.lastPos.copy(p)
+    this.hasLast = true
+    // 原地動作（moveSpeed01 ≈ 0）不採用量測值；有移動量但位置沒變（預覽頁滑桿）時以移動量推估
+    const speed = moveSpeed01 > 0.05 && this.groundSpeed > 0.2 ? this.groundSpeed : undefined
+    const d = this.anim.update(pose, moveSpeed01, speed)
     const next = this.actions.get(d.clip)
     if (next && (d.changed || d.restart || next !== this.active)) {
       next.reset()
@@ -277,6 +291,15 @@ export function optimizeMaterial(mat: THREE.MeshStandardMaterial) {
     mat.userData.outlineParameters = { visible: false }
   } else {
     mat.userData.outlineParameters = { thickness: 0.0022, color: [0.22, 0.15, 0.1], alpha: 1, visible: true }
+  }
+  if (name === 'M_Elf') {
+    // Meshy 單張貼圖集（臉、頭髮、布料都在同一張）：以貼圖本身做微弱自發光，陰影中不發灰，維持插畫感
+    mat.emissiveMap = mat.map
+    mat.emissive = new THREE.Color(0x383430)
+    mat.envMapIntensity = 0.8
+    mat.side = THREE.DoubleSide // 裙擺 / 袖子是單層布片，背面也要畫
+    mat.userData.outlineParameters = { thickness: 0.0016, color: [0.22, 0.15, 0.1], alpha: 1, visible: true }
+    return
   }
   if (name === 'M_Hair' || name === 'M_Face' || name === 'M_Skin') {
     // 臉與頭髮用微弱自發光避免在陰影中發灰，維持插畫感

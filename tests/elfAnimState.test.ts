@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CLIP_SPECS, ElfAnimState, LOCO } from '../src/game/elf/ElfAnimState'
+import { CLIP_SPECS, ElfAnimState, GAIT_REF, LOCO } from '../src/game/elf/ElfAnimState'
 import type { Pose } from '../src/game/models'
 
 describe('ElfAnimState 動畫狀態機', () => {
@@ -64,7 +64,20 @@ describe('ElfAnimState 動畫狀態機', () => {
   it('走路 / 跑步的播放速度跟著移動量', () => {
     const s = new ElfAnimState()
     const slow = s.update('normal', 0.2).timeScale
-    const fast = s.update('normal', 0.55).timeScale
+    const fast = s.update('normal', 0.3).timeScale
     expect(fast).toBeGreaterThan(slow)
+  })
+
+  it('依實際速度播放步態：腳底速度 = 地面速度（不滑步）', () => {
+    const s = new ElfAnimState()
+    const w = s.update('normal', 0.3, 2.2)
+    expect(w.clip).toBe('Walk')
+    expect(w.timeScale * GAIT_REF.Walk).toBeCloseTo(2.2, 5)
+    for (const v of [6.2, 7.4]) {
+      // AI 精靈 6.2 m/s、玩家 7.4 m/s
+      const r = s.update('normal', 1, v)
+      expect(r.clip).toBe('Run')
+      expect(r.timeScale * GAIT_REF.Run).toBeCloseTo(v, 5)
+    }
   })
 })

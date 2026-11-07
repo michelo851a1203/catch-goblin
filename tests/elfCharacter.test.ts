@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { ElfCharacter } from '../src/game/elf/ElfCharacter'
-import { ELF_CLIPS } from '../src/game/elf/assets'
+import { ELF_CLIPS, ELF_COLLIDERS } from '../src/game/elf/assets'
 import type { CharacterModel, Pose } from '../src/game/models'
 import { fakeFallback, fileLoad } from './helpers'
 
@@ -112,7 +112,99 @@ describe('ElfCharacter 動畫轉換', () => {
       elf.animate(0.016, 1, 'normal')
     }
     expect(hair.quaternion.angleTo(rest)).toBeGreaterThan(0.05)
-    expect(elf.springs.count).toBe(19)
+    // 頭髮 5×3 + 裙擺 8×3 + 袖子 2×2
+    expect(elf.springs.count).toBe(43)
+    expect(elf.springs.colliderCount).toBe(ELF_COLLIDERS.length)
+  })
+
+  it('rest pose 下彈簧骨尖端不在碰撞體內（否則待機時會抖動 / 被推歪）', async () => {
+    const { elf } = await loaded()
+    elf.animate(0.016, 0, 'normal')
+    const { worst, name } = elf.springs.restClearance(elf.root)
+    expect(worst, name).toBeGreaterThan(0)
+  })
+
+  it('布料模擬：靜止時穩定，不會發散', async () => {
+    const { elf } = await loaded()
+    for (let i = 0; i < 240; i++) elf.animate(1 / 60, 0, 'normal')
+    const sk = elf.root.getObjectByName('skirt_L3')!
+    const a = sk.getWorldPosition(new THREE.Vector3())
+    for (let i = 0; i < 30; i++) elf.animate(1 / 60, 0, 'normal')
+    const b = sk.getWorldPosition(new THREE.Vector3())
+    expect(a.distanceTo(b)).toBeLessThan(0.02)
+    elf.root.traverse((o) => {
+      if ((o as THREE.Bone).isBone) expect(Number.isFinite(o.quaternion.x)).toBe(true)
+    })
+  })
+
+  it('袖子受重力：手舉高（勝利動作）時袖子仍往下垂', async () => {
+    const { elf } = await loaded()
+    elf.setVictory(true)
+    for (let i = 0; i < 120; i++) elf.animate(1 / 60, 0, 'normal')
+    const s1 = elf.root.getObjectByName('sleeveL')!.getWorldPosition(new THREE.Vector3())
+    const s2 = elf.root.getObjectByName('sleeve2L')!.getWorldPosition(new THREE.Vector3())
+    expect(s2.y).toBeLessThan(s1.y) // 第二節在第一節下方
+  })
+
+  it('跑步時裙擺被腿推開：裙擺骨尖端不會穿進腿裡', async () => {
+    const { elf } = await loaded()
+    const legs = ['thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR'].map((n) => elf.root.getObjectByName(n)!)
+    const skirt: THREE.Object3D[] = []
+    elf.root.traverse((o) => /^skirt_.*[23]$/.test(o.name) && skirt.push(o))
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), p = new THREE.Vector3(), c = new THREE.Vector3()
+    let worst = Infinity
+    let moved = 0
+    const start = skirt.map((o) => o.getWorldPosition(new THREE.Vector3()))
+    for (let i = 0; i < 180; i++) {
+      elf.root.position.z += 0.07 // 約 4 m/s
+      elf.animate(1 / 60, 1, 'normal')
+      if (i < 60) continue
+      for (const [k, o] of skirt.entries()) {
+        o.getWorldPosition(p)
+        moved = Math.max(moved, p.clone().sub(elf.root.position).distanceTo(start[k]))
+        for (let l = 0; l < legs.length; l += 3) {
+          for (const [from, to, r] of [[legs[l], legs[l + 1], 0.075], [legs[l + 1], legs[l + 2], 0.055]] as const) {
+            from.getWorldPosition(a)
+            to.getWorldPosition(b)
+            const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(b.clone().sub(a)) / b.distanceToSquared(a), 0, 1)
+            c.copy(a).lerp(b, t)
+            worst = Math.min(worst, p.distanceTo(c) - r)
+          }
+        }
+      }
+    }
+    expect(worst).toBeGreaterThan(0) // 骨頭尖端（裙擺節點）永遠在腿的外面
+    expect(moved).toBeGreaterThan(0.03) // 而且裙擺確實在擺動
+  })
+
+  it('走路 / 跑步時支撐腳貼地（不浮空）', async () => {
+    const { elf } = await loaded()
+    const feet = ['footL', 'footR'].map((n) => elf.root.getObjectByName(n)!)
+    const rest = feet.map((f) => f.getWorldPosition(new THREE.Vector3()).y) // 待機時腳踝高度
+    for (const move of [0.3, 1]) {
+      let maxLow = -Infinity
+      for (let i = 0; i < 90; i++) {
+        elf.root.position.z += (move === 1 ? 7.4 : 2) / 60
+        elf.animate(1 / 60, move, 'normal')
+        elf.root.updateMatrixWorld(true)
+        if (i < 30) continue
+        const low = Math.min(...feet.map((f, k) => f.getWorldPosition(new THREE.Vector3()).y - rest[k]))
+        maxLow = Math.max(maxLow, low)
+      }
+      // 較低的那隻腳的腳踝幾乎不會高於待機高度（跑步騰空期只允許幾公分）
+      expect(maxLow).toBeLessThan(move === 1 ? 0.09 : 0.02)
+    }
+  })
+
+  it('瞬移（重生）時布料重設，不會甩出去', async () => {
+    const { elf } = await loaded()
+    for (let i = 0; i < 30; i++) elf.animate(1 / 60, 0, 'normal')
+    const hair = elf.root.getObjectByName('hair_C3')!
+    elf.root.position.set(20, 0, -15)
+    elf.root.updateMatrixWorld(true)
+    elf.animate(1 / 60, 0, 'normal')
+    const head = elf.root.getObjectByName('head')!.getWorldPosition(new THREE.Vector3())
+    expect(hair.getWorldPosition(new THREE.Vector3()).distanceTo(head)).toBeLessThan(0.8)
   })
 
   it('LOD 依相機距離切換（含遲滯）', async () => {
