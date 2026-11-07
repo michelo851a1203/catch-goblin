@@ -10,6 +10,8 @@ import { keyLabel, loadKeybinds } from '../keybinds'
 import KeybindSettings from './KeybindSettings.vue'
 import { locale, setLocale, t } from '../i18n'
 import { touchMode } from '../input/touch'
+import { fullscreenSupported } from '../input/fullscreen'
+import FullscreenButton from './FullscreenButton.vue'
 import { displayName, type Room } from '../net/room'
 import type { Pick } from '../net/assign'
 
@@ -127,7 +129,8 @@ function back() {
 <template>
   <div class="select" :class="{ entered, picked: chosen }">
     <div class="glow"></div>
-    <button class="lang" :class="{ solo: touchMode }" @click="toggleLocale">{{ t('langSwitch') }}</button>
+    <button class="lang" :class="{ solo: touchMode, 'with-fs': touchMode && fullscreenSupported }" @click="toggleLocale">{{ t('langSwitch') }}</button>
+    <FullscreenButton class="menu-fs" />
     <!-- 已在房間內：點房號打開大廳，✕ 離開房間回到單機 -->
     <div v-if="lobby" class="mp on">
       <button class="mp-open" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpJoined', { code: lobby.code }) }}</button>
@@ -259,6 +262,16 @@ function back() {
 .lang.solo {
   top: calc(16px + env(safe-area-inset-top));
   right: calc(16px + env(safe-area-inset-right));
+}
+/* 觸控模式右上角放全螢幕鈕，語言鈕往左讓位 */
+.lang.solo.with-fs {
+  right: calc(70px + env(safe-area-inset-right));
+}
+.menu-fs {
+  position: absolute;
+  top: calc(16px + env(safe-area-inset-top));
+  right: calc(16px + env(safe-area-inset-right));
+  z-index: 10;
 }
 .mp {
   position: absolute;

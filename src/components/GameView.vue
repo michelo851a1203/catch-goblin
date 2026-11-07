@@ -8,6 +8,7 @@ import { keyLabel, loadKeybinds } from '../keybinds'
 import { t } from '../i18n'
 import { touchMode } from '../input/touch'
 import TouchControls from './TouchControls.vue'
+import FullscreenButton from './FullscreenButton.vue'
 
 const props = defineProps<{ role: Role; net?: NetLink }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
@@ -80,6 +81,9 @@ function toggleSpeed() {
     </div>
 
     <canvas ref="minimap" class="minimap" width="180" height="180"></canvas>
+
+    <!-- 手機：左上角全螢幕鈕，隱藏瀏覽器導覽列 -->
+    <FullscreenButton class="game-fs" />
 
     <div class="toasts">
       <TransitionGroup name="toast">
@@ -200,6 +204,12 @@ function toggleSpeed() {
   width: 180px;
   height: 180px;
   pointer-events: none;
+}
+.game-fs {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  left: calc(14px + env(safe-area-inset-left));
+  z-index: 5;
 }
 .toasts {
   position: absolute;
@@ -509,6 +519,12 @@ function toggleSpeed() {
   .goblins i {
     font-size: 11px;
     margin: 0;
+  }
+  .game-fs {
+    top: calc(8px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    transform: scale(0.85);
+    transform-origin: top left;
   }
   .minimap {
     width: 104px;

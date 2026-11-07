@@ -19,6 +19,8 @@ const zh = {
   passive: '被動',
   controlsTouch: '左側搖桿移動・右側拖曳轉視角・雙指縮放',
   rotate: '請將裝置轉為橫向遊玩',
+  fullscreenEnter: '全螢幕',
+  fullscreenExit: '離開全螢幕',
 
   elfName: '女精靈',
   elfTagline: '以琴聲與凝視狩獵的森林守護者',
@@ -201,6 +203,8 @@ const en: Dict = {
   passive: 'Passive',
   controlsTouch: 'Left stick to move · Drag right side to look · Pinch to zoom',
   rotate: 'Rotate your device to landscape',
+  fullscreenEnter: 'Fullscreen',
+  fullscreenExit: 'Exit fullscreen',
 
   elfName: 'Elf',
   elfTagline: 'A forest guardian who hunts with her harp and gaze',

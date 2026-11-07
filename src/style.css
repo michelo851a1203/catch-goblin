@@ -23,6 +23,12 @@ body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
 }
+/* 禁止雙擊放大（iOS 13+ / Android Chrome 都支援）；雙指縮放另由 main.ts 攔截 */
+html,
+body,
+#app {
+  touch-action: manipulation;
+}
 button {
   touch-action: manipulation;
 }
