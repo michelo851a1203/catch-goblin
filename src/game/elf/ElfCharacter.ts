@@ -2,14 +2,16 @@ import * as THREE from 'three'
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import type { AnimFlags, CharacterModel, Pose } from '../models'
-import { CLIP_SPECS, ElfAnimState } from './ElfAnimState'
-import { ELF_ASSETS, ELF_CLIPS, ELF_COLLIDERS, ELF_NODES, ELF_SPRING_CHAINS, type ElfClip } from './assets'
+import { ElfAnimState } from './ElfAnimState'
 import { disposeObject } from './dispose'
+import { HARP_RIG, type ElfRig } from './rigs'
 import { SPRINGS, SecondaryMotion } from './SecondaryMotion'
 
 export type GltfLoad = (url: string) => Promise<Pick<GLTF, 'scene' | 'animations'>>
 
 export interface ElfCharacterOptions {
+  // 角色規格（預設豎琴精靈）；url / harpUrl 可再覆蓋其中的路徑
+  rig?: ElfRig
   url?: string
   harpUrl?: string
   // 載入期間 / 載入失敗時顯示的程序化模型（現有的 createElf）
@@ -47,15 +49,16 @@ export function isLowEndDevice() {
   return coarse || (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
 }
 
-// 女精靈角色：載入綁骨 GLB，以 AnimationMixer 播放骨架動畫，疊加頭髮 / 裙擺 / 袖子的彈簧次級動畫，
-// 並把豎琴道具掛在手骨上。實作 CharacterModel，與遊戲端（Game / Elf）介面相容。
+// 精靈角色：載入綁骨 GLB，以 AnimationMixer 播放骨架動畫，疊加頭髮 / 裙擺 / 袖子的彈簧次級動畫，
+// 並把豎琴道具掛在手骨上（紫晶精靈的小提琴 / 琴弓已內嵌在 GLB）。實作 CharacterModel，與遊戲端（Game / Elf）介面相容。
 export class ElfCharacter implements CharacterModel {
   readonly root = new THREE.Group()
   status: ElfStatus = 'loading'
   readonly ready: Promise<void>
-  readonly anim = new ElfAnimState()
+  readonly rig: ElfRig
+  readonly anim: ElfAnimState
   mixer: THREE.AnimationMixer | null = null
-  readonly actions = new Map<ElfClip, THREE.AnimationAction>()
+  readonly actions = new Map<string, THREE.AnimationAction>()
   readonly springs = new SecondaryMotion()
   lodLevel = 0
   error: unknown = null
@@ -76,9 +79,13 @@ export class ElfCharacter implements CharacterModel {
   private hasLast = false
   private groundSpeed = 0
   private readonly opts: ElfCharacterOptions
+  // 隱身：1 = 正常、0~1 = 半透明（精靈玩家自己看）、0 = 完全看不見
+  private opacity = 1
 
   constructor(opts: ElfCharacterOptions = {}) {
     this.opts = opts
+    this.rig = opts.rig ?? HARP_RIG
+    this.anim = new ElfAnimState(this.rig.anim)
     this.lowEnd = opts.lowEnd ?? isLowEndDevice()
     this.fallback = opts.fallback ?? null
     this.root.name = 'ElfCharacter'
@@ -94,9 +101,10 @@ export class ElfCharacter implements CharacterModel {
   async load() {
     const load = this.opts.load ?? defaultLoad
     try {
+      const propUrl = this.opts.harpUrl ?? this.rig.propUrl
       const [gltf, harp] = await Promise.all([
-        load(this.opts.url ?? ELF_ASSETS.character),
-        load(this.opts.harpUrl ?? ELF_ASSETS.harp).catch(() => null),
+        load(this.opts.url ?? this.rig.url),
+        propUrl ? load(propUrl).catch(() => null) : Promise.resolve(null),
       ])
       if (this.status === 'disposed') {
         disposeObject(gltf.scene)
@@ -113,25 +121,26 @@ export class ElfCharacter implements CharacterModel {
 
   private install(gltf: Pick<GLTF, 'scene' | 'animations'>, harp: Pick<GLTF, 'scene'> | null) {
     const scene = gltf.scene
+    const rig = this.rig
     scene.name = 'ElfGLB'
-    this.lods = ELF_NODES.lod.map((n) => scene.getObjectByName(n)).filter((o): o is THREE.Object3D => !!o)
+    this.lods = rig.lod.map((n) => scene.getObjectByName(n)).filter((o): o is THREE.Object3D => !!o)
     scene.traverse((o) => {
       const m = o as THREE.Mesh
       if (!m.isMesh) return
       m.castShadow = true
       m.receiveShadow = true
-      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) optimizeMaterial(mat as THREE.MeshStandardMaterial)
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) optimizeMaterial(mat as THREE.MeshStandardMaterial, rig.atlasMaterial)
     })
 
     // 動作
     this.mixer = new THREE.AnimationMixer(scene)
     for (const clip of gltf.animations) {
-      const name = clip.name as ElfClip
-      if (!ELF_CLIPS.includes(name)) continue
+      const name = clip.name
+      if (!rig.clips.includes(name)) continue
       // 次級動畫骨由程式驅動：移除動作中這些骨頭的軌道，避免 mixer 每幀蓋回 rest pose / 覆蓋彈簧結果
-      clip.tracks = clip.tracks.filter((t) => !/^(hair_|skirt_|sleeve|prop_)/.test(t.name))
+      clip.tracks = clip.tracks.filter((t) => !rig.stripTracks.test(t.name))
       const a = this.mixer.clipAction(clip)
-      const spec = CLIP_SPECS[name]
+      const spec = rig.anim.clips[name] ?? { loop: true, fade: 0.2 }
       a.setLoop(spec.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
       a.clampWhenFinished = !spec.loop
       this.actions.set(name, a)
@@ -141,16 +150,18 @@ export class ElfCharacter implements CharacterModel {
 
     // 次級動畫骨鏈與碰撞體
     const bone = (n: string) => scene.getObjectByName(n) as THREE.Bone | undefined
-    for (const [kind, chains] of Object.entries(ELF_SPRING_CHAINS) as [keyof typeof ELF_SPRING_CHAINS, readonly (readonly string[])[]][]) {
+    for (const [kind, chains] of Object.entries(rig.springChains)) {
+      const params = SPRINGS[kind as keyof typeof SPRINGS]
+      if (!params) continue
       for (const chain of chains) {
         const bones = chain.map(bone).filter((b): b is THREE.Bone => !!b)
-        if (bones.length) this.springs.addChain(bones, SPRINGS[kind])
+        if (bones.length) this.springs.addChain(bones, params)
       }
     }
-    for (const c of ELF_COLLIDERS) this.springs.addCollider(c, bone)
+    for (const c of rig.colliders) this.springs.addCollider(c, bone)
 
     // 豎琴
-    const socket = scene.getObjectByName(ELF_NODES.harpSocket)
+    const socket = rig.propSocket ? scene.getObjectByName(rig.propSocket) : undefined
     if (socket && harp) {
       this.harp = harp.scene
       this.harp.name = 'Harp'
@@ -158,7 +169,7 @@ export class ElfCharacter implements CharacterModel {
         const m = o as THREE.Mesh
         if (!m.isMesh) return
         m.castShadow = true
-        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) optimizeMaterial(mat as THREE.MeshStandardMaterial)
+        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) optimizeMaterial(mat as THREE.MeshStandardMaterial, rig.atlasMaterial)
       })
       this.harpPivot.add(this.harp)
       socket.add(this.harpPivot)
@@ -174,6 +185,52 @@ export class ElfCharacter implements CharacterModel {
     }
     this.applyLod(this.lowEnd ? 1 : 0)
     this.status = 'ready'
+    if (this.opacity < 1) this.applyOpacity()
+  }
+
+  // 隱身：0 = 看不見（哥布林視角）、0~1 = 半透明（精靈玩家自己看）、1 = 正常
+  setOpacity(a: number) {
+    if (a === this.opacity) return
+    this.opacity = a
+    this.applyOpacity()
+  }
+
+  get currentOpacity() {
+    return this.opacity
+  }
+
+  private applyOpacity() {
+    const a = this.opacity
+    this.root.visible = a > 0
+    // 程序化替身的材質與其他角色共用（toon 快取），只切換顯示
+    const target = this.model
+    if (!target || a <= 0) return
+    const seen = new Set<THREE.Material>()
+    target.traverse((o) => {
+      const m = o as THREE.Mesh
+      if (!m.isMesh) return
+      m.castShadow = a >= 1
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        if (seen.has(mat)) continue
+        seen.add(mat)
+        const u = mat.userData
+        if (u.ghostBase === undefined) u.ghostBase = { opacity: mat.opacity, transparent: mat.transparent, depthWrite: mat.depthWrite, outline: u.outlineParameters }
+        const b = u.ghostBase as { opacity: number; transparent: boolean; depthWrite: boolean; outline: unknown }
+        if (a >= 1) {
+          mat.opacity = b.opacity
+          mat.transparent = b.transparent
+          mat.depthWrite = b.depthWrite
+          u.outlineParameters = b.outline
+        } else {
+          // 半透明但仍寫入深度：只看得到最前面一層，像一道淡淡的殘影而不是看穿身體
+          mat.opacity = b.opacity * a
+          mat.transparent = true
+          mat.depthWrite = b.depthWrite
+          u.outlineParameters = { visible: false }
+        }
+        mat.needsUpdate = true
+      }
+    })
   }
 
   setCamera(camera: THREE.Camera | null) {
@@ -271,7 +328,7 @@ export class ElfCharacter implements CharacterModel {
 }
 
 // 材質最佳化：sRGB 貼圖、各向異性、半透明紗只畫一次不寫深度、描邊參數
-export function optimizeMaterial(mat: THREE.MeshStandardMaterial) {
+export function optimizeMaterial(mat: THREE.MeshStandardMaterial, atlas = 'M_Elf') {
   if (!mat || mat.userData.elfOptimized) return
   mat.userData.elfOptimized = true
   if (mat.map) {
@@ -287,12 +344,12 @@ export function optimizeMaterial(mat: THREE.MeshStandardMaterial) {
     mat.userData.outlineParameters = { visible: false }
     return
   }
-  if (/Hair|Leaf|Petal|String|Gem|Face/.test(name)) {
+  if (/Hair|Leaf|Petal|String|Gem|Face|Bow/.test(name)) {
     mat.userData.outlineParameters = { visible: false }
   } else {
     mat.userData.outlineParameters = { thickness: 0.0022, color: [0.22, 0.15, 0.1], alpha: 1, visible: true }
   }
-  if (name === 'M_Elf') {
+  if (name === atlas) {
     // Meshy 單張貼圖集（臉、頭髮、布料都在同一張）：以貼圖本身做微弱自發光，陰影中不發灰，維持插畫感
     mat.emissiveMap = mat.map
     mat.emissive = new THREE.Color(0x383430)

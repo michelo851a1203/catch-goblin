@@ -32,7 +32,7 @@ const C = {
   gem: 0x5cc8f0,
 }
 
-export type Pose = 'normal' | 'stunned' | 'rooted' | 'held' | 'cast' | 'play' | 'attack' | 'pack'
+export type Pose = 'normal' | 'stunned' | 'rooted' | 'held' | 'cast' | 'play' | 'attack' | 'pack' | 'windup' | 'dash' | 'recover'
 
 export interface AnimFlags {
   scared?: boolean

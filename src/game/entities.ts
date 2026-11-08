@@ -1,7 +1,8 @@
 import * as THREE from 'three'
-import { CONFIG } from './config'
+import { CONFIG, type ElfKind } from './config'
 import { createElf, createGoblin, type CharacterModel, type Pose } from './models'
 import { ElfCharacter } from './elf/ElfCharacter'
+import { rigOf } from './elf/rigs'
 import { makeSprite } from './toon'
 import { t } from '../i18n'
 
@@ -69,6 +70,8 @@ export class Goblin extends Actor {
   captured = false
   stun = 0
   rooted = 0
+  // 紫晶精靈現身時的恐懼：緩慢遠離精靈、不受控制
+  terror = 0
   attract = 0
   charm = 0
   held = false
@@ -82,6 +85,8 @@ export class Goblin extends Actor {
   ai: GoblinAIState
   fx: {
     radar: THREE.Sprite
+    // 刺客之眼的警告（只在操控這隻哥布林的玩家畫面顯示）
+    eyeWarn: THREE.Sprite
     bar: ReturnType<typeof barSprites>
   }
   // 捕獲後飛向牢籠的動畫
@@ -113,21 +118,39 @@ export class Goblin extends Actor {
     const bar = barSprites()
     radar.visible = false
     radar.position.y = 2.15
+    const eyeWarn = makeSprite(t('eyeWarn'), 0.42, { w: 640, h: 128, font: 54, bg: 'rgba(110,40,190,0.92)' })
+    eyeWarn.visible = false
+    eyeWarn.position.y = 2.55
     bar.group.position.y = 1.95
-    this.root.add(radar, bar.group)
-    this.fx = { radar, bar }
+    this.root.add(radar, eyeWarn, bar.group)
+    this.fx = { radar, eyeWarn, bar }
   }
 
   get free() {
     return !this.captured
   }
   get disabled() {
-    return this.stun > 0 || this.rooted > 0 || this.held || this.captured
+    return this.stun > 0 || this.rooted > 0 || this.terror > 0 || this.held || this.captured
   }
 }
 
+export type ChargePhase = 'windup' | 'dash' | 'recover'
+export interface ChargeState {
+  phase: ChargePhase
+  t: number
+  dir: THREE.Vector3
+  done: number // 已衝刺的距離
+  hit: number // 命中的哥布林編號，-1 = 落空
+}
+
 export class Elf extends Actor {
-  cd = { gaze: 0, music: 0, stun: 0, capture: 0 }
+  readonly kind: ElfKind
+  cd = { gaze: 0, music: 0, stun: 0, capture: 0, stealth: 0, eye: 0, charge: 0 }
+  // 紫晶精靈：拉琴準備隱身（≥0 = 拉琴中經過的秒數）、隱身剩餘秒數、刺客之眼剩餘秒數、衝鋒
+  stealthCast = -1
+  stealth = 0
+  eye = 0
+  charge: ChargeState | null = null
   channel = -1
   musicAffected = new Set<Goblin>()
   musicNoteT = 0
@@ -149,9 +172,10 @@ export class Elf extends Actor {
   // GLB 綁骨角色；載入完成前（或失敗時）顯示程序化的 createElf()
   readonly character: ElfCharacter
 
-  constructor() {
-    const character = new ElfCharacter({ fallback: createElf() })
+  constructor(kind: ElfKind = 'harp') {
+    const character = new ElfCharacter({ rig: rigOf(kind), fallback: createElf() })
     super(character, CONFIG.elf.radius)
+    this.kind = kind
     this.character = character
     const bar = barSprites()
     bar.group.position.y = 2.25
@@ -163,6 +187,10 @@ export class Elf extends Actor {
   }
 
   get busy() {
-    return this.packing !== null || this.channel >= 0 || this.stagger > 0
+    return this.packing !== null || this.channel >= 0 || this.stagger > 0 || this.stealthCast >= 0 || this.charge !== null
+  }
+
+  get stealthed() {
+    return this.stealth > 0
   }
 }

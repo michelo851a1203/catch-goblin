@@ -2,8 +2,11 @@ import * as THREE from 'three'
 import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { ElfMagicFx } from './elf/ElfMagicFx'
-import { CONFIG, type Role } from './config'
-import { Actor, Elf, Goblin } from './entities'
+import { ViolinFx } from './elf/ViolinFx'
+import { GHOST_OPACITY } from './elf/rigs'
+import { CONFIG, type ElfKind, type Role } from './config'
+import { Actor, Elf, Goblin, type ChargePhase } from './entities'
+import { behindSpot, fearTargets, nearestTarget, sweepHit } from './violin'
 import { GAP_HALF, World } from './world'
 import { makeSprite, noOutline } from './toon'
 import { updateElfAI, updateGoblinAI } from './ai'
@@ -34,11 +37,21 @@ export type GameEvent =
   | { e: 'dash'; g: number }
   | { e: 'charm'; g: number }
   | { e: 'say'; s: Slot; k: TKey }
+  // 紫晶精靈：開始拉琴、隱身 / 現身（fear＝被嚇到的哥布林）、刺客之眼、瞬移、衝鋒前搖、衝鋒結束（g＝命中的哥布林）
+  | { e: 'vcast' }
+  | { e: 'stealth'; on: boolean; p: V2; fear: number[] }
+  | { e: 'eye'; on: boolean }
+  | { e: 'blink'; from: V2; to: V2; yaw: number }
+  | { e: 'charge'; o: V2; d: V2 }
+  | { e: 'chargeEnd'; p: V2; g: number }
   | { e: 'left'; name: string }
   | { e: 'end'; w: Role; c: number; time: number }
 // 真人玩家名單：[角色, 暱稱, 玩家編號]
 type Roster = [Slot, string, number][]
-type Act = 'gaze' | 'music' | 'musicStop' | 'stun' | 'capture' | 'dash' | 'interfere' | 'ult'
+type Act = 'gaze' | 'music' | 'musicStop' | 'stun' | 'capture' | 'dash' | 'interfere' | 'ult' | 'stealth' | 'eye' | 'charge'
+const HARP_ACTS: Act[] = ['gaze', 'music', 'musicStop', 'stun', 'capture']
+const VIOLIN_ACTS: Act[] = ['stealth', 'eye', 'charge', 'capture']
+const CHARGE_PHASES: ChargePhase[] = ['windup', 'dash', 'recover']
 interface Snapshot {
   t: 's'
   q: number
@@ -77,6 +90,10 @@ export interface HudState {
   countdown: number
   timeLeft: number
   role: Role
+  elfKind: ElfKind
+  // 紫晶精靈玩家：刺客之眼開圖中（畫面加上紫色暈影）／隱身中
+  eye: boolean
+  stealth: boolean
   free: number
   total: number
   skills: SkillView[]
@@ -91,12 +108,15 @@ export interface HudState {
   result: null | { winner: Role; title: string; detail: string }
 }
 
-export function createHudState(role: Role): HudState {
+export function createHudState(role: Role, elfKind: ElfKind = 'harp'): HudState {
   return {
     phase: 'countdown',
     countdown: CONFIG.startCountdown,
     timeLeft: CONFIG.matchDuration,
     role,
+    elfKind,
+    eye: false,
+    stealth: false,
     free: CONFIG.goblinCount,
     total: CONFIG.goblinCount,
     skills: [],
@@ -148,6 +168,7 @@ export class Game {
   private toastId = 0
   fx: FxSystem
   elfFx: ElfMagicFx
+  violinFx: ViolinFx
   private envMap: THREE.Texture
   private staff: ReturnType<FxSystem['createStaff']>
   private shake = 0
@@ -181,6 +202,11 @@ export class Game {
   // 真人玩家頭上的暱稱
   private tags = new Map<Slot, THREE.Sprite>()
   private defaultNames: string[] = []
+  // 紫晶精靈：刺客之眼的哥布林輪廓（穿牆可見）、拉琴音符計時
+  private xray = new Map<Goblin, THREE.Object3D[]>()
+  private xrayMat: THREE.MeshBasicMaterial | null = null
+  private xrayOn = false
+  private violinNoteT = 0
 
   constructor(
     container: HTMLElement,
@@ -189,6 +215,7 @@ export class Game {
     hud: HudState,
     onEnd: (winner: Role, stats: { captured: number; time: number }) => void,
     net: NetLink | null = null,
+    elfKind: ElfKind = 'harp',
   ) {
     this.container = container
     this.minimap = minimap
@@ -231,6 +258,7 @@ export class Game {
     this.fx.caves = this.world.caves
     this.staff = this.fx.createStaff()
     this.elfFx = new ElfMagicFx(this.scene, this.fx)
+    this.violinFx = new ViolinFx(this.scene, this.fx, this.elfFx)
     // 環境光反射只影響 PBR 材質（GLB 精靈），場景其他卡通材質不受影響
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
@@ -239,7 +267,9 @@ export class Game {
     this.scene.environmentIntensity = 0.55
 
     // 精靈：在草原中央、牢籠旁
-    this.elf = new Elf()
+    const kind = net?.elfKind ?? elfKind
+    this.hud.elfKind = kind
+    this.elf = new Elf(kind)
     this.elf.pos.set(0, 0, 7)
     this.elf.isPlayer = this.me === 'elf'
     this.elf.character.setCamera(this.camera)
@@ -320,6 +350,8 @@ export class Game {
     if (document.pointerLockElement) document.exitPointerLock()
     this.fx.dispose()
     this.elfFx.dispose()
+    this.violinFx.dispose()
+    this.xrayMat?.dispose()
     this.elf.character.dispose()
     this.envMap.dispose()
     this.staff.dispose()
@@ -438,9 +470,11 @@ export class Game {
     let act: Act | null = null
     if (this.role === 'elf') {
       const b = this.binds.elf
-      if (hit(b.gaze, 'Digit1')) act = 'gaze'
-      else if (hit(b.music, 'Digit2')) act = 'music'
-      else if (hit(b.stun, 'Digit3', 'Mouse0')) act = 'stun'
+      // 紫晶精靈沿用同一組四個技能鍵：隱身 / 刺客之眼 / 衝鋒擊暈 / 捕獲
+      const v = this.elf.kind === 'violin'
+      if (hit(b.gaze, 'Digit1')) act = v ? 'stealth' : 'gaze'
+      else if (hit(b.music, 'Digit2')) act = v ? 'eye' : 'music'
+      else if (hit(b.stun, 'Digit3', 'Mouse0')) act = v ? 'charge' : 'stun'
       else if (hit(b.capture, 'Digit4', 'Mouse2')) act = 'capture'
     } else {
       const g = this.playerGoblin!
@@ -456,7 +490,7 @@ export class Game {
 
   // 本機玩家的技能：房主 / 單機直接執行，加入者送給房主判定
   private act(act: Act) {
-    const d = act === 'gaze' ? this.camForward() : null
+    const d = act === 'gaze' || act === 'charge' ? this.camForward() : null
     const dir: V2 | undefined = d ? [r2(d.x), r2(d.z)] : undefined
     if (this.authority) this.perform(this.me, act, dir)
     else this.net!.send({ t: 'act', a: act, d: dir }, true)
@@ -466,7 +500,16 @@ export class Game {
     if (this.hud.phase !== 'play') return
     if (slot === 'elf') {
       const elf = this.elf
-      if (act === 'gaze') {
+      if (!(elf.kind === 'violin' ? VIOLIN_ACTS : HARP_ACTS).includes(act)) return
+      const dirOf = () => {
+        const dir = Array.isArray(d) ? new THREE.Vector3(Number(d[0]) || 0, 0, Number(d[1]) || 0) : new THREE.Vector3()
+        if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
+        return dir.normalize()
+      }
+      if (act === 'stealth') this.violinStealth()
+      else if (act === 'eye') this.violinEye()
+      else if (act === 'charge') this.violinCharge(dirOf())
+      else if (act === 'gaze') {
         const dir = Array.isArray(d) ? new THREE.Vector3(Number(d[0]) || 0, 0, Number(d[1]) || 0) : new THREE.Vector3()
         if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
         this.elfGaze(dir.normalize())
@@ -590,6 +633,9 @@ export class Game {
   elfStartCapture() {
     const elf = this.elf
     const C = CONFIG.elf.capture
+    // 紫晶精靈：捕獲可以取消衝鋒的收招（暈眩只有 1.5 秒，收招 0.4 秒不該吃掉捕獲時間）
+    if (elf.charge?.phase === 'recover' && this.authority && elf.cd.capture <= 0 && this.goblins.some((g) => !g.captured && !g.held && g.stun > 0 && d2(g.pos, elf.pos) < C.range))
+      elf.charge = null
     if (!this.elfCanAct() || elf.cd.capture > 0) return false
     let best: Goblin | null = null
     let bd = C.range
@@ -605,12 +651,193 @@ export class Game {
       this.say(elf, 'elf', 'fNoStunned')
       return false
     }
+    this.breakStealth()
     best.held = true
     this.packId++
     const total = best.charm > 0 ? C.charmedPackTime : C.packTime
     elf.packing = { g: best, t: 0, total }
     this.emit({ e: 'pack', g: best.id })
     return true
+  }
+
+  // ───────────────────────── 紫晶精靈技能 ─────────────────────────
+  // 隱身：隱身中再按一次＝現身（嚇到身邊的哥布林）；否則拉琴 castTime 秒後隱身
+  violinStealth() {
+    const elf = this.elf
+    if (!this.authority || this.hud.phase !== 'play') return false
+    if (elf.stealthed) {
+      this.breakStealth()
+      return true
+    }
+    if (!this.elfCanAct() || elf.cd.stealth > 0) return false
+    elf.stealthCast = 0
+    this.emit({ e: 'vcast' })
+    return true
+  }
+
+  // 結束隱身。fear：手動取消 / 施放其他技能時嚇到身邊的哥布林；時間到自然現身則不會
+  breakStealth(fear = true) {
+    const elf = this.elf
+    if (!this.authority || !elf.stealthed) return
+    const S = CONFIG.violin.stealth
+    elf.stealth = 0
+    elf.cd.stealth = S.cooldown
+    const hits = fear ? fearTargets(elf.pos, this.goblins, S.fearRadius) : []
+    for (const g of hits) {
+      g.terror = S.fearTime
+      g.attract = 0
+      g.dashT = 0
+    }
+    this.emit({ e: 'stealth', on: false, p: [r2(elf.pos.x), r2(elf.pos.z)], fear: hits.map((g) => g.id) })
+  }
+
+  // 刺客之眼：第一次按＝開圖 7 秒；開圖中再按＝瞬移到最近的哥布林身後並進入冷卻
+  violinEye() {
+    const elf = this.elf
+    const E = CONFIG.violin.eye
+    if (!this.elfCanAct()) return false
+    if (elf.eye > 0) return this.violinBlink()
+    if (elf.cd.eye > 0) return false
+    this.breakStealth()
+    elf.eye = E.duration
+    elf.castT = 0.45
+    elf.castPose = 'cast'
+    this.emit({ e: 'eye', on: true })
+    return true
+  }
+
+  private violinBlink() {
+    const elf = this.elf
+    const E = CONFIG.violin.eye
+    const g = nearestTarget(elf.pos, this.goblins, E.blinkRange)
+    if (!g) {
+      this.say(elf, 'elf', 'fNoBlink')
+      return false
+    }
+    const from = elf.pos.clone()
+    // 身後被牆擋住時改試左右兩側、最後才站在原地附近
+    const to = new THREE.Vector3()
+    const tries = [0, 0.9, -0.9, 1.8, -1.8, Math.PI]
+    for (const a of tries) {
+      behindSpot({ ...g, yaw: g.yaw + a }, E.behind, to)
+      if (!this.world.blockedAt(to.x, to.z, elf.radius)) break
+    }
+    this.world.resolve(to, elf.radius)
+    elf.pos.copy(to)
+    elf.vel.set(0, 0, 0)
+    elf.yaw = Math.atan2(g.pos.x - to.x, g.pos.z - to.z)
+    elf.corr++
+    elf.eye = 0
+    elf.cd.eye = E.cooldown
+    this.emit({ e: 'blink', from: [r2(from.x), r2(from.z)], to: [r2(to.x), r2(to.z)], yaw: r2(elf.yaw) })
+    this.emit({ e: 'eye', on: false })
+    return true
+  }
+
+  // 衝鋒擊暈：0.5 秒前搖 → 朝 dir 衝刺中距離，撞到的第一隻哥布林暈 1.5 秒
+  violinCharge(dir: THREE.Vector3) {
+    const elf = this.elf
+    if (!this.elfCanAct() || elf.cd.charge > 0) return false
+    this.breakStealth()
+    elf.yaw = Math.atan2(dir.x, dir.z)
+    elf.charge = { phase: 'windup', t: 0, dir: dir.clone(), done: 0, hit: -1 }
+    elf.vel.set(0, 0, 0)
+    this.emit({ e: 'charge', o: [r2(elf.pos.x), r2(elf.pos.z)], d: [r2(dir.x), r2(dir.z)] })
+    return true
+  }
+
+  // 每個子步驟：前搖 → 突刺 → 收招。移動由房主 / 單機計算（精靈玩家是加入者時也在本機預測，結束時以房主位置為準）
+  private updateCharge(dt: number) {
+    const elf = this.elf
+    const c = elf.charge
+    if (!c) return
+    const C = CONFIG.violin.charge
+    c.t += dt
+    elf.yaw = Math.atan2(c.dir.x, c.dir.z)
+    if (c.phase === 'windup') {
+      this.violinFx.windupTick(dt, elf.pos)
+      elf.vel.set(0, 0, 0)
+      if (c.t >= C.windup) {
+        c.phase = 'dash'
+        c.t = 0
+        sfx.charge()
+        this.violinFx.dashStart(elf.pos, c.dir)
+      }
+      return
+    }
+    if (c.phase === 'dash') {
+      const moves = this.authority || elf.isPlayer
+      const left = C.distance - c.done
+      if (moves && left > 0) {
+        const step = Math.min(C.speed * dt, left)
+        const from = v1.copy(elf.pos)
+        elf.pos.addScaledVector(c.dir, step)
+        this.world.resolve(elf.pos, elf.radius)
+        const moved = d2(from, elf.pos)
+        c.done += step
+        elf.vel.copy(c.dir).multiplyScalar(C.speed)
+        if (this.authority) {
+          const g = sweepHit(from, elf.pos, this.goblins, C.hitRadius + 0.3)
+          if (g) {
+            // 停在哥布林面前
+            elf.pos.copy(g.pos).addScaledVector(c.dir, -(elf.radius + g.radius + 0.1))
+            this.world.resolve(elf.pos, elf.radius)
+            g.stun = C.stun
+            g.rooted = g.attract = g.dashT = g.terror = 0
+            this.endCharge(g.id)
+          } else if (moved < step * 0.4 || c.done >= C.distance - 1e-4) this.endCharge(-1)
+        }
+      } else elf.vel.set(0, 0, 0)
+      this.violinFx.dashTick(dt, elf.pos, c.dir)
+      return
+    }
+    elf.vel.set(0, 0, 0)
+    if (c.t >= C.recover) elf.charge = null
+  }
+
+  private endCharge(hit: number) {
+    const elf = this.elf
+    if (!elf.charge) return
+    elf.charge.phase = 'recover'
+    elf.charge.t = 0
+    elf.charge.hit = hit
+    elf.vel.set(0, 0, 0)
+    elf.cd.charge = CONFIG.violin.charge.cooldown
+    elf.corr++
+    this.emit({ e: 'chargeEnd', p: [r2(elf.pos.x), r2(elf.pos.z)], g: hit })
+  }
+
+  // 刺客之眼：哥布林的穿牆輪廓（只有精靈玩家看得到）
+  private updateXray(on: boolean) {
+    if (on === this.xrayOn && !on) return
+    this.xrayOn = on
+    if (on && !this.xrayMat)
+      this.xrayMat = noOutline(
+        new THREE.MeshBasicMaterial({ color: 0xc08cff, transparent: true, opacity: 0.5, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending }),
+      )
+    if (this.xrayMat) this.xrayMat.opacity = 0.38 + Math.sin(this.elapsed * 6) * 0.12
+    for (const g of this.goblins) {
+      let list = this.xray.get(g)
+      const show = on && !g.captured
+      if (!list && show) {
+        list = []
+        const meshes: THREE.Mesh[] = []
+        g.model.root.traverse((o) => {
+          const m = o as THREE.Mesh
+          if (m.isMesh && !(o as unknown as THREE.Sprite).isSprite && m.visible) meshes.push(m)
+        })
+        for (const m of meshes) {
+          const x = new THREE.Mesh(m.geometry, this.xrayMat!)
+          x.renderOrder = 30
+          x.frustumCulled = false
+          x.userData.xray = true
+          m.add(x)
+          list.push(x)
+        }
+        this.xray.set(g, list)
+      }
+      if (list) for (const x of list) x.visible = show
+    }
   }
 
   private interruptPacking(reason: 'ult' | 'interfere', by?: Goblin) {
@@ -762,6 +989,7 @@ export class Game {
       }
       case 'pack': {
         const g = this.goblins[ev.g]
+        elf.charge = null
         this.fx.dust(g.pos.x, g.pos.z, 10, 1.4)
         this.fx.sparkles(g.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
         this.elfFx.capture(g.pos)
@@ -820,6 +1048,113 @@ export class Game {
       case 'charm':
         if (this.goblins[ev.g]?.isPlayer) this.toast(t('tYouCharmed'), 'bad')
         return
+      case 'vcast':
+        if (!this.authority) elf.stealthCast = 0
+        this.violinNoteT = 0
+        this.violinFx.castStart(elf.pos)
+        return
+      case 'stealth': {
+        const p = new THREE.Vector3(ev.p[0], 0, ev.p[1])
+        const S = CONFIG.violin.stealth
+        if (ev.on) {
+          if (!this.authority) {
+            elf.stealthCast = -1
+            elf.stealth = S.duration
+          }
+          // 隱身的瞬間：紫霧所有人都看得到，然後迅速散去
+          this.violinFx.vanish(p)
+          sfx.vanish()
+          if (this.role === 'elf') this.toast(t('tStealthOn'), 'good')
+          else this.toast(t('tElfVanished'), 'warn')
+          return
+        }
+        if (!this.authority) {
+          elf.stealth = 0
+          elf.cd.stealth = S.cooldown
+          for (const id of ev.fear) if (this.goblins[id]) this.goblins[id].terror = S.fearTime
+        }
+        this.violinFx.reveal(p, ev.fear.length ? S.fearRadius : 0)
+        sfx.reveal(ev.fear.length > 0)
+        for (const id of ev.fear) {
+          const g = this.goblins[id]
+          if (!g) continue
+          this.floatText(t('fFear'), g.pos, '#c89bff')
+          if (g.isPlayer) {
+            this.shake = Math.max(this.shake, 0.4)
+            this.toast(t('tYouFeared'), 'bad')
+          }
+        }
+        if (this.role === 'elf') this.toast(ev.fear.length ? t('tFeared', { n: ev.fear.length }) : t('tStealthOff'), ev.fear.length ? 'good' : 'info')
+        else if (!me?.captured) this.toast(t('tElfRevealed'), 'warn')
+        return
+      }
+      case 'eye':
+        if (!this.authority) elf.eye = ev.on ? CONFIG.violin.eye.duration : 0
+        if (!ev.on) return
+        elf.castT = 0.45
+        elf.castPose = 'cast'
+        this.violinFx.eyeCast(elf.pos)
+        if (this.role === 'elf') {
+          sfx.eye()
+          this.toast(touchMode.value ? t('tEyeOnTouch') : t('tEyeOn', { key: keyLabel(this.binds.elf.music) }), 'good')
+        } else if (me && !me.captured) {
+          sfx.eyeWarn()
+          this.toast(t('tEyeWarn'), 'warn')
+        }
+        return
+      case 'blink': {
+        const from = new THREE.Vector3(ev.from[0], 0, ev.from[1])
+        const to = new THREE.Vector3(ev.to[0], 0, ev.to[1])
+        if (!this.authority) {
+          if (!elf.isPlayer) {
+            elf.pos.copy(to)
+            if (elf.net) Object.assign(elf.net, { x: to.x, z: to.z, yaw: ev.yaw, t: 0 })
+          }
+          elf.yaw = ev.yaw
+        }
+        this.violinFx.blink(from, to)
+        sfx.blink()
+        if (me && !me.captured && d2(me.pos, to) < 4) {
+          this.shake = Math.max(this.shake, 0.3)
+          this.toast(t('tBlinkBehind'), 'bad')
+        }
+        return
+      }
+      case 'charge': {
+        const dir = new THREE.Vector3(ev.d[0], 0, ev.d[1]).normalize()
+        if (!this.authority) {
+          elf.charge = { phase: 'windup', t: 0, dir, done: 0, hit: -1 }
+          if (elf.isPlayer) elf.pos.set(ev.o[0], 0, ev.o[1])
+        }
+        elf.yaw = Math.atan2(dir.x, dir.z)
+        this.violinFx.windupStart(elf.pos)
+        sfx.windup()
+        return
+      }
+      case 'chargeEnd': {
+        if (!this.authority) {
+          if (!elf.charge) elf.charge = { phase: 'recover', t: 0, dir: new THREE.Vector3(Math.sin(elf.yaw), 0, Math.cos(elf.yaw)), done: 0, hit: ev.g }
+          elf.charge.phase = 'recover'
+          elf.charge.t = 0
+          elf.charge.hit = ev.g
+          elf.cd.charge = CONFIG.violin.charge.cooldown
+        }
+        const g = ev.g >= 0 ? this.goblins[ev.g] : undefined
+        if (!g) {
+          const at = new THREE.Vector3(ev.p[0], 0, ev.p[1])
+          this.fx.dust(at.x, at.z, 6, 1)
+          this.floatText(t('fMiss'), at, '#dddddd')
+          return
+        }
+        if (!this.authority) g.stun = CONFIG.violin.charge.stun
+        sfx.chargeHit()
+        this.violinFx.chargeHit(g.pos)
+        this.fx.starBurst(g.pos, 0xd8a8ff)
+        this.fx.pow(g.pos, t('fBonk'), '#d8a8ff')
+        if (g.isPlayer || this.role === 'elf') this.shake = Math.max(this.shake, g.isPlayer ? 0.5 : 0.28)
+        if (g.isPlayer) this.toast(t('tYouCharged'), 'bad')
+        return
+      }
       case 'say':
         if (ev.s === this.me) this.floatText(t(ev.k), this.actorOf(this.me).pos, '#dddddd')
         return
@@ -966,11 +1301,15 @@ export class Game {
         r2(e.cd.gaze), r2(e.cd.music), r2(e.cd.stun), r2(e.cd.capture),
         r2(e.channel), r2(e.stagger), r2(e.castT), Math.max(0, CAST_POSES.indexOf(e.castPose)),
         p ? p.g.id : -1, p ? r2(p.t) : 0, p ? p.total : 0, e.corr,
+        // 17~24：紫晶精靈
+        r2(e.cd.stealth), r2(e.cd.eye), r2(e.cd.charge), r2(e.stealthCast), r2(e.stealth), r2(e.eye),
+        e.charge ? CHARGE_PHASES.indexOf(e.charge.phase) : -1, e.charge ? r2(e.charge.t) : 0,
       ],
       g: this.goblins.map((g) => [
         r2(g.pos.x), r2(g.pos.z), r2(g.yaw), r2(g.vel.x), r2(g.vel.z),
         (g.captured ? 1 : 0) | (g.held ? 2 : 0) | (g.ultUsed ? 4 : 0),
         r2(g.stun), r2(g.rooted), r2(g.attract), r2(g.charm), r2(g.grace), r2(g.dashT), r2(g.dashCd), r2(g.interfereCd), g.corr,
+        r2(g.terror),
       ]),
     }
   }
@@ -998,7 +1337,18 @@ export class Game {
     elf.castT = E[11]
     elf.castPose = CAST_POSES[E[12]] ?? 'normal'
     elf.packing = E[13] >= 0 && this.goblins[E[13]] ? { g: this.goblins[E[13]], t: E[14], total: E[15] } : null
-    this.follow(elf, E, E[16], elf.busy)
+    if (E.length > 24) {
+      elf.cd.stealth = E[17]
+      elf.cd.eye = E[18]
+      elf.cd.charge = E[19]
+      elf.stealthCast = E[20]
+      elf.stealth = E[21]
+      elf.eye = E[22]
+      // 衝鋒由事件驅動（本機預測移動）；房主已經結束、本機卻還在衝鋒時（漏掉事件）才清掉
+      if (E[23] < 0 && elf.charge && elf.charge.phase !== 'windup' && elf.charge.t > 0.6) elf.charge = null
+    }
+    // 衝鋒中的精靈玩家（加入者）由本機預測位置，結束時房主會 corr++ 讓位置一致
+    this.follow(elf, E, E[16], elf.busy && !elf.charge)
     m.g.forEach((G, i) => {
       const g = this.goblins[i]
       if (!g) return
@@ -1006,6 +1356,7 @@ export class Game {
       g.held = !!(G[5] & 2)
       g.ultUsed = !!(G[5] & 4)
       ;[g.stun, g.rooted, g.attract, g.charm, g.grace, g.dashT, g.dashCd, g.interfereCd] = G.slice(6, 14)
+      g.terror = G[15] ?? 0
       if (g.captured) {
         g.zone = -2
         g.net = null
@@ -1221,12 +1572,13 @@ export class Game {
     const elf = this.elf
 
     // 狀態計時
-    for (const k of ['gaze', 'music', 'stun', 'capture'] as const) elf.cd[k] = Math.max(0, elf.cd[k] - dt)
+    for (const k of ['gaze', 'music', 'stun', 'capture', 'stealth', 'eye', 'charge'] as const) elf.cd[k] = Math.max(0, elf.cd[k] - dt)
     elf.stagger = Math.max(0, elf.stagger - dt)
     elf.castT = Math.max(0, elf.castT - dt)
     for (const g of this.goblins) {
       if (!g.held) g.stun = Math.max(0, g.stun - dt)
       g.rooted = Math.max(0, g.rooted - dt)
+      g.terror = Math.max(0, g.terror - dt)
       g.attract = Math.max(0, g.attract - dt)
       g.charm = Math.max(0, g.charm - dt)
       g.grace = Math.max(0, g.grace - dt)
@@ -1259,6 +1611,40 @@ export class Game {
       if (Math.floor(elf.channel / 1.2) !== Math.floor((elf.channel - dt) / 1.2)) this.fx.ring(elf.pos, M.radius, 0xffe9a0, 1.4, 0.05)
       this.elfFx.musicTick(dt, elf.pos, M.radius)
       if (elf.channel >= M.maxChannel) this.elfStopMusic()
+    }
+
+    // 紫晶精靈：拉琴準備隱身 → 隱身 → 自然現身；刺客之眼計時；衝鋒
+    if (elf.kind === 'violin' && hud.phase === 'play') {
+      const V = CONFIG.violin
+      if (elf.stealthCast >= 0) {
+        elf.stealthCast += dt
+        this.violinNoteT -= dt
+        if (this.violinNoteT <= 0) {
+          this.violinNoteT = 0.2
+          sfx.violinNote(elf.musicNote++)
+        }
+        this.violinFx.castTick(dt, elf.pos, Math.min(1, elf.stealthCast / V.stealth.castTime))
+        if (elf.stealthCast >= V.stealth.castTime && auth) {
+          elf.stealthCast = -1
+          elf.stealth = V.stealth.duration
+          this.emit({ e: 'stealth', on: true, p: [r2(elf.pos.x), r2(elf.pos.z)], fear: [] })
+        }
+      }
+      if (elf.stealth > 0) {
+        elf.stealth = Math.max(0, elf.stealth - dt)
+        if (elf.stealth <= 0 && auth) {
+          elf.stealth = 0.001
+          this.breakStealth(false)
+        }
+      }
+      if (elf.eye > 0) {
+        elf.eye = Math.max(0, elf.eye - dt)
+        if (elf.eye <= 0 && auth) {
+          elf.cd.eye = V.eye.cooldown
+          this.emit({ e: 'eye', on: false })
+        }
+      }
+      if (elf.charge) this.updateCharge(dt)
     }
 
     // 打包
@@ -1302,20 +1688,32 @@ export class Game {
 
     // 移動
     const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : CONFIG.elf.aiSpeed
-    if (elf.netDriven) this.netFollow(elf, dt, elfSpeed)
+    if (elf.charge && (auth || elf.isPlayer)) {
+      // 衝鋒的位移在 updateCharge 處理
+      elf.wish.set(0, 0, 0)
+      elf.moveAmt = elf.charge.phase === 'dash' ? 1.3 : 0
+    } else if (elf.netDriven) this.netFollow(elf, dt, elfSpeed)
     else {
       if (elf.busy) elf.wish.set(0, 0, 0)
       this.moveActor(elf, elfSpeed * (elf.castT > 0 ? 0.35 : 1), dt, elfSpeed)
     }
     for (const g of this.goblins) {
       if (g.captured) continue
-      if (g.netDriven) {
+      // 恐懼中的真人哥布林由房主移動（操控者端以房主位置為準）
+      if (g.netDriven && !(auth && g.terror > 0 && !g.held && g.stun <= 0 && g.rooted <= 0)) {
         this.netFollow(g, dt, CONFIG.goblin.speed)
         continue
       }
       let sp = CONFIG.goblin.speed
       if (g.held || g.stun > 0 || g.rooted > 0) g.wish.set(0, 0, 0)
-      else if (g.attract > 0) {
+      else if (g.terror > 0) {
+        // 恐懼：不受控制，緩慢遠離精靈
+        v2.subVectors(g.pos, elf.pos).setY(0)
+        if (v2.lengthSq() < 1e-4) v2.set(Math.sin(g.yaw), 0, Math.cos(g.yaw))
+        v2.normalize().multiplyScalar(6).add(g.pos)
+        g.wish.copy(this.navigate(g, v2))
+        sp *= CONFIG.violin.stealth.fearSpeed
+      } else if (g.attract > 0) {
         const dd = d2(g.pos, elf.pos)
         if (dd > 2.2) g.wish.copy(this.navigate(g, elf.pos))
         else g.wish.set(0, 0, 0)
@@ -1326,14 +1724,32 @@ export class Game {
     this.separate()
 
     // 姿勢與動畫
-    elf.pose = elf.stagger > 0 ? 'stunned' : elf.channel >= 0 ? 'play' : elf.packing ? 'pack' : elf.castT > 0 ? elf.castPose : 'normal'
+    elf.pose = elf.stagger > 0 ? 'stunned'
+      : elf.charge ? elf.charge.phase
+      : elf.channel >= 0 || elf.stealthCast >= 0 ? 'play'
+      : elf.packing ? 'pack'
+      : elf.castT > 0 ? elf.castPose
+      : 'normal'
     elf.root.position.copy(elf.pos)
     elf.root.rotation.y = elf.yaw
+    // 隱身：哥布林（含觀戰中）看不見；精靈玩家自己看到半透明
+    const viewerIsElf = this.me === 'elf'
+    const hidden = elf.stealthed && !viewerIsElf
+    elf.character.setOpacity(hidden ? 0 : elf.stealthed ? GHOST_OPACITY : 1)
     elf.model.animate(dt, elf.moveAmt, elf.pose)
     this.staff.update(dt, elf.channel >= 0, elf.pos)
-    for (let k = 0; k < this.fx.rate('elftrail', 2 + elf.moveAmt * 14, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xfff0b0 : 0xc8f0ff, 0.2 + Math.random() * 1.4)
-    this.elfFx.ambient(dt, elf.pos, elf.moveAmt)
+    if (elf.kind === 'violin') {
+      if (!hidden) {
+        for (let k = 0; k < this.fx.rate('elftrail', elf.stealthed ? 0 : 1 + elf.moveAmt * 8, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xd8b8ff : 0xffc8f0, 0.2 + Math.random() * 1.4)
+        this.violinFx.ghostTick(dt, elf.pos, elf.stealthed ? elf.moveAmt : elf.moveAmt * 0.3)
+      }
+    } else {
+      for (let k = 0; k < this.fx.rate('elftrail', 2 + elf.moveAmt * 14, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xfff0b0 : 0xc8f0ff, 0.2 + Math.random() * 1.4)
+      this.elfFx.ambient(dt, elf.pos, elf.moveAmt)
+    }
     this.elfFx.update(dt)
+    this.violinFx.update(dt)
+    this.updateXray(viewerIsElf && elf.eye > 0)
     if (elf.packing) for (let k = 0; k < this.fx.rate('pack', 10, dt); k++) this.fx.dust(elf.packing.g.pos.x, elf.packing.g.pos.z, 1, 0.5, 0xc8a870)
     elf.fx.stunned.visible = elf.stagger > 0
     const eb = elf.fx.bar
@@ -1346,7 +1762,7 @@ export class Game {
       g.root.position.copy(g.pos)
       g.root.rotation.y = g.yaw
       const dElf = d2(g.pos, elf.pos)
-      const scared = g.isPlayer ? (g.zone >= 0 && g.zone === elf.zone) || dElf < 7 : g.ai.fear > 0 && dElf < 12
+      const scared = g.terror > 0 || (g.isPlayer ? (g.zone >= 0 && g.zone === elf.zone) || dElf < 7 : g.ai.fear > 0 && dElf < 12)
       g.model.animate(dt, g.moveAmt, g.pose, { scared, dash: g.dashT > 0 })
       if (g.flight) {
         // 麻袋飛向牢籠
@@ -1388,7 +1804,11 @@ export class Game {
               color: 0xff6fae, size: 0.22, life: 0.9, cell: CELL.heart, wobble: 0.4,
             })
         if (g.grace > 0) for (let k = 0; k < f.rate(`gr${g.id}`, 12, dt); k++) f.trail(g.pos, 0xbfffb0, 0.7)
+        if (g.terror > 0) for (let k = 0; k < f.rate(`fe${g.id}`, 4, dt); k++) this.violinFx.fearNote(g.pos)
       }
+      // 刺客之眼：操控這隻哥布林的玩家頭上跳警告
+      g.fx.eyeWarn.visible = g.isPlayer && !g.captured && elf.eye > 0
+      if (g.fx.eyeWarn.visible) g.fx.eyeWarn.position.y = 2.55 + Math.abs(Math.sin(this.elapsed * 4)) * 0.1
       const radar = g.isPlayer && !g.captured && g.zone >= 0 && g.zone === elf.zone
       g.fx.radar.visible = radar
       g.fx.radar.position.y = 2.15 + Math.abs(Math.sin(this.elapsed * 5)) * 0.12
@@ -1529,6 +1949,14 @@ export class Game {
     this.elapsed = time
     crazygames.gameplayStop()
     this.elf.model.setHarp?.(false)
+    // 結算時精靈一定現身
+    this.elf.stealth = 0
+    this.elf.stealthCast = -1
+    this.elf.eye = 0
+    this.elf.charge = null
+    this.elf.character.setOpacity(1)
+    this.updateXray(false)
+    for (const g of this.goblins) g.fx.eyeWarn.visible = false
     if (winner === 'elf') this.elf.character.setVictory(true)
     const won = winner === this.role
     if (won) sfx.win()
@@ -1555,7 +1983,10 @@ export class Game {
     h.free = this.goblins.filter((g) => !g.captured).length
     const elf = this.elf
     const touch = touchMode.value
-    if (this.role === 'elf') {
+    h.eye = this.role === 'elf' && elf.eye > 0
+    h.stealth = this.role === 'elf' && elf.stealthed
+    if (this.role === 'elf' && elf.kind === 'violin') this.syncVioletHud(h, touch)
+    else if (this.role === 'elf') {
       const E = CONFIG.elf
       const b = this.binds.elf
       h.skills = [
@@ -1587,6 +2018,7 @@ export class Game {
       h.radar = !g.captured && g.zone >= 0 && g.zone === elf.zone
       if (g.captured) h.hint = ''
       else if (g.held) h.hint = g.ultUsed ? t('hUltUsed') : touch ? t('hUltTouch') : t('hUlt', { key: keyLabel(b.ult) })
+      else if (g.terror > 0) h.hint = t('hFeared')
       else if (g.stun > 0) h.hint = t('hStunned')
       else if (g.rooted > 0) h.hint = t('hRooted')
       else if (g.attract > 0) h.hint = t('hCharmed')
@@ -1598,6 +2030,38 @@ export class Game {
       const f = this.focusActor()
       h.spectating = g.captured ? (f instanceof Goblin ? f.name : t('elf')) : ''
     }
+  }
+
+  // 紫晶精靈玩家的技能列與提示
+  private syncVioletHud(h: HudState, touch: boolean) {
+    const elf = this.elf
+    const V = CONFIG.violin
+    const b = this.binds.elf
+    const free = elf.stagger <= 0 && !elf.packing && !elf.charge
+    h.skills = [
+      {
+        key: keyLabel(b.gaze), code: b.gaze, name: elf.stealthed ? t('skillUnstealth') : t('skillStealth'), icon: elf.stealthed ? '🌙' : '🎻',
+        cd: elf.cd.stealth, max: V.stealth.cooldown, active: elf.stealthed || elf.stealthCast >= 0, usable: elf.stealthed || (free && elf.stealthCast < 0),
+      },
+      {
+        key: keyLabel(b.music), code: b.music, name: elf.eye > 0 ? t('skillBlink') : t('skillEye'), icon: elf.eye > 0 ? '✨' : '👁️',
+        cd: elf.cd.eye, max: V.eye.cooldown, active: elf.eye > 0, usable: free && elf.stealthCast < 0,
+      },
+      { key: keyLabel(b.stun), code: b.stun, name: t('skillCharge'), icon: '⚡', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge, usable: free && elf.stealthCast < 0 },
+      { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: '🎒', cd: elf.cd.capture, max: CONFIG.elf.capture.cooldown, active: !!elf.packing, usable: (free || elf.charge?.phase === 'recover') && elf.stealthCast < 0 },
+    ]
+    h.radar = false
+    const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < CONFIG.elf.capture.range)
+    if (elf.stagger > 0) h.hint = t('hInterrupted')
+    else if (elf.packing) h.hint = ''
+    else if (elf.stealthCast >= 0) h.hint = t('hStealthCast')
+    else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.capture) })
+    else if (elf.eye > 0) h.hint = touch ? t('hEyeTouch', { s: Math.ceil(elf.eye) }) : t('hEye', { key: keyLabel(b.music), s: Math.ceil(elf.eye) })
+    else if (elf.stealthed) h.hint = touch ? t('hStealthTouch', { s: Math.ceil(elf.stealth) }) : t('hStealth', { key: keyLabel(b.gaze), s: Math.ceil(elf.stealth) })
+    else h.hint = ''
+    h.progress = elf.packing ? elf.packing.t / elf.packing.total : -1
+    h.progressLabel = elf.packing ? t('hPacking', { name: elf.packing.g.name }) : ''
+    h.spectating = ''
   }
 
   private drawMinimap() {
@@ -1645,13 +2109,15 @@ export class Game {
     if (this.role === 'elf') {
       for (const gb of this.goblins) {
         if (gb.captured) continue
-        const vis = d2(gb.pos, elf.pos) < 28 && this.world.lineOfSight(elf.pos, gb.pos)
-        if (vis) dot(gb.pos, '#9effa0', 3)
+        // 刺客之眼：所有哥布林都顯示（紫色）
+        if (elf.eye > 0) dot(gb.pos, '#d0a0ff', 3.2)
+        else if (d2(gb.pos, elf.pos) < 28 && this.world.lineOfSight(elf.pos, gb.pos)) dot(gb.pos, '#9effa0', 3)
       }
     } else {
       const me = this.playerGoblin!
       for (const gb of this.goblins) if (!gb.captured && gb !== me) dot(gb.pos, '#9effa0', 2.6)
-      const seeElf = me.captured || (me.zone >= 0 && me.zone === elf.zone) || (d2(me.pos, elf.pos) < 30 && this.world.lineOfSight(me.pos, elf.pos))
+      // 隱身中的精靈不會出現在小地圖（雷達警告仍然有效）
+      const seeElf = !elf.stealthed && (me.captured || (me.zone >= 0 && me.zone === elf.zone) || (d2(me.pos, elf.pos) < 30 && this.world.lineOfSight(me.pos, elf.pos)))
       if (seeElf) dot(elf.pos, '#ff6fb5', 3.6)
     }
     const me = this.focusActor()

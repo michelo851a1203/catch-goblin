@@ -6,6 +6,7 @@ import { createElfLoader } from '../src/game/elf/ElfCharacter'
 export const ROOT = resolve(__dirname, '..')
 export const ELF_GLB = resolve(ROOT, 'public/models/elf/elf.glb')
 export const HARP_GLB = resolve(ROOT, 'public/models/elf/harp.glb')
+export const VIOLINIST_GLB = resolve(ROOT, 'public/models/violinist/violinist.glb')
 
 // Node 沒有 Image / createImageBitmap：以外掛攔截貼圖載入，其餘照真實 GLTFLoader 流程解析
 export function parseGlb(file: string) {
@@ -26,6 +27,7 @@ export function parseGlb(file: string) {
 export function fileLoad(url: string) {
   if (url.endsWith('elf.glb')) return parseGlb(ELF_GLB)
   if (url.endsWith('harp.glb')) return parseGlb(HARP_GLB)
+  if (url.endsWith('violinist.glb')) return parseGlb(VIOLINIST_GLB)
   return Promise.reject(new Error(`404 ${url}`))
 }
 

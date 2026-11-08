@@ -25,7 +25,8 @@ export const DEFAULT_KEYBINDS: Keybinds = {
 // 動作名稱的翻譯 key，顯示時用 labelOf() 取得目前語系的文字
 export const ACTION_LABELS: { [G in Group]: Record<keyof Keybinds[G], TKey> } = {
   move: { up: 'moveUp', down: 'moveDown', left: 'moveLeft', right: 'moveRight' },
-  elf: { gaze: 'skillGaze', music: 'skillMusic', stun: 'skillStun', capture: 'skillCapture' },
+  // 兩種精靈共用同一組按鍵：豎琴精靈 / 紫晶精靈
+  elf: { gaze: 'bindGaze', music: 'bindMusic', stun: 'bindStun', capture: 'skillCapture' },
   goblin: { dash: 'skillDash', interfere: 'skillInterfere', ult: 'skillUlt' },
 }
 

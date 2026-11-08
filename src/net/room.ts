@@ -4,6 +4,7 @@ import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assig
 import { store } from '../crazygames'
 import { iceServers } from './ice'
 import { t } from '../i18n'
+import { isElfKind, type ElfKind } from '../game/config'
 
 // 多人連線：使用 PeerJS（WebRTC P2P）。預設使用 PeerJS 的公用信令伺服器，可用 VITE_PEER_* 改成自架的 PeerServer。
 // PeerJS 內建的 TURN 網域已無法解析，TURN 改由 Cloudflare 提供（見 ./ice.ts 與 worker/turn）。
@@ -24,7 +25,7 @@ async function peerOptions(): Promise<PeerOptions> {
   return { ...SIGNALING, config: { iceServers: await iceServers() } }
 }
 // 通訊格式版本：不同版本的遊戲不能同房
-const PROTO = 3
+const PROTO = 4
 const TIMEOUT = 15000
 // ICE 斷線後等待恢復的時間，超過就視為對方離線
 const ICE_GRACE = 8000
@@ -80,6 +81,8 @@ export interface LobbyPlayer {
   id: string
   n: number // 玩家編號 1~9（房主是 1）
   pick: Pick
+  // 選精靈時的角色（豎琴 / 紫晶）
+  elf?: ElfKind
   name: string // 空字串時顯示「玩家N」
 }
 
@@ -87,6 +90,8 @@ export interface LobbyPlayer {
 export interface NetLink {
   host: boolean
   me: Slot
+  // 這一局的精靈角色（選精靈的玩家決定；精靈由 AI 控制時由房主隨機）
+  elfKind: ElfKind
   // 其他真人玩家：peer id → 角色
   peers: Map<string, Slot>
   // 角色 → 玩家編號（含自己）
@@ -103,11 +108,11 @@ export interface NetLink {
 
 type LobbyMsg =
   | { t: 'hello'; v: number; name: string; token: string }
-  | { t: 'pick'; pick: Pick }
+  | { t: 'pick'; pick: Pick; elf?: ElfKind }
   | { t: 'name'; name: string }
   | { t: 'lobby'; players: LobbyPlayer[] }
   | { t: 'reject'; why: RoomError }
-  | { t: 'start'; slots: [string, Slot][] }
+  | { t: 'start'; slots: [string, Slot][]; kind?: ElfKind }
 
 class RoomFail extends Error {
   why: RoomError
@@ -221,10 +226,10 @@ export class Room {
     return this.state.host
   }
 
-  setPick(pick: Pick) {
+  setPick(pick: Pick, elf?: ElfKind) {
     if (this.state.phase !== 'lobby') return
-    if (this.state.host) this.applyPick(this.state.me, pick)
-    else this.sendTo(this.hostId, { t: 'pick', pick })
+    if (this.state.host) this.applyPick(this.state.me, pick, elf)
+    else this.sendTo(this.hostId, { t: 'pick', pick, elf })
   }
 
   get myName() {
@@ -248,9 +253,12 @@ export class Room {
   start() {
     if (!this.state.host || this.state.phase !== 'lobby') return
     const slots = [...assignSlots(this.state.players)]
-    this.broadcast({ t: 'start', slots })
+    const elfId = slots.find(([, slot]) => slot === 'elf')?.[0]
+    const chosen = this.state.players.find((p) => p.id === elfId)?.elf
+    const kind: ElfKind = chosen ?? (Math.random() < 0.5 ? 'harp' : 'violin')
+    this.broadcast({ t: 'start', slots, kind })
     // 遊戲中房間維持可被搜尋，斷線的玩家才能用房號連回來（新玩家仍會被拒絕）
-    this.begin(slots)
+    this.begin(slots, kind)
   }
 
   // 一局結束後回到大廳
@@ -377,7 +385,7 @@ export class Room {
         this.broadcast({ t: 'lobby', players: s.players })
         return
       }
-      if (m.t === 'pick') return this.applyPick(from, (m as { pick: Pick }).pick)
+      if (m.t === 'pick') return this.applyPick(from, (m as { pick: Pick }).pick, (m as { elf?: unknown }).elf)
       if (m.t === 'name') return this.applyName(from, cleanName((m as { name?: unknown }).name))
     } else if (from === this.hostId) {
       if (m.t === 'lobby') {
@@ -390,7 +398,8 @@ export class Room {
       if (m.t === 'reject') return this.close((m as { why: RoomError }).why)
       if (m.t === 'start') {
         // 還在結算畫面的玩家也直接進入下一局
-        if (s.players.some((p) => p.id === s.me)) this.begin((m as { slots: [string, Slot][] }).slots)
+        const kind = (m as { kind?: unknown }).kind
+        if (s.players.some((p) => p.id === s.me)) this.begin((m as { slots: [string, Slot][] }).slots, isElfKind(kind) ? kind : 'harp')
         return
       }
     }
@@ -398,10 +407,14 @@ export class Room {
     if (s.phase === 'playing' && (s.host || from === this.hostId)) for (const fn of this.gameListeners) fn(from, m)
   }
 
-  private applyPick(id: string, pick: Pick) {
+  private applyPick(id: string, pick: Pick, elf?: unknown) {
     const s = this.state
     const p = s.players.find((x) => x.id === id)
-    if (p && (pick === 'elf' || pick === 'goblin' || pick === 'random') && canPick(s.players, id, pick)) p.pick = pick
+    if (p && (pick === 'elf' || pick === 'goblin' || pick === 'random') && canPick(s.players, id, pick)) {
+      p.pick = pick
+      if (pick === 'elf') p.elf = isElfKind(elf) ? elf : 'harp'
+      else delete p.elf
+    }
     // 不合法的選擇也廣播一次，讓對方畫面回到正確狀態
     this.broadcast({ t: 'lobby', players: s.players })
   }
@@ -423,7 +436,7 @@ export class Room {
     s.players.push(player)
     s.players.sort((a, b) => a.n - b.n)
     this.broadcast({ t: 'lobby', players: s.players })
-    this.sendTo(from, { t: 'start', slots: [[s.me, link.me], ...link.peers] })
+    this.sendTo(from, { t: 'start', slots: [[s.me, link.me], ...link.peers], kind: link.elfKind })
   }
 
   private applyName(id: string, name: string) {
@@ -453,7 +466,7 @@ export class Room {
     for (const fn of this.leaveListeners) fn(peer)
   }
 
-  private begin(slots: [string, Slot][]) {
+  private begin(slots: [string, Slot][], elfKind: ElfKind) {
     const s = this.state
     s.phase = 'playing'
     const all = new Map(slots)
@@ -477,6 +490,7 @@ export class Room {
     const link: NetLink = {
       host: s.host,
       me,
+      elfKind,
       peers,
       numbers,
       names,

@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
 import goblinArt from '../assets/art/goblin-card.webp'
-import type { Role } from '../game/config'
+import violinArt from '../assets/art/violin-card.webp'
+import type { ElfKind, Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
@@ -17,10 +18,15 @@ import type { Pick } from '../net/assign'
 
 // room：在多人房間大廳時，卡片改為選角（精靈 / 哥布林），選擇結果標示在卡片邊框上
 const props = defineProps<{ room?: Room | null }>()
-const emit = defineEmits<{ start: [role: Role]; multiplayer: []; leave: [] }>()
+const emit = defineEmits<{ start: [role: Role, kind: ElfKind]; multiplayer: []; leave: [] }>()
 
-const chosen = ref<Role | null>(null)
-const offsets = ref<Record<Role, number>>({ elf: 0, goblin: 0 })
+// 卡片：精靈 → 點下後飛出兩張精靈卡（豎琴 / 紫晶）；哥布林直接翻牌
+type CardId = 'elf' | 'goblin' | ElfKind
+const chosen = ref<CardId | null>(null)
+const elfMenu = ref(false)
+const offsets = ref<Record<CardId, number>>({ elf: 0, goblin: 0, harp: 0, violin: 0 })
+// 飛出動畫的起點（相對於最終位置的水平位移）
+const flyFrom = ref<Record<CardId, number>>({ elf: 0, goblin: 0, harp: 0, violin: 0 })
 const stage = ref<HTMLElement | null>(null)
 const cardEls = ref<Record<string, HTMLElement | null>>({})
 const stats = loadStats()
@@ -35,34 +41,59 @@ const entered = ref(false)
 onMounted(() => requestAnimationFrame(() => (entered.value = true)))
 
 // 依目前語系與鍵位重新產生卡片內容
-const cards = computed<
-  {
-    role: Role
-    name: string
-    sub: string
-    art: string
-    tagline: string
-    goal: string
-    skills: { icon: string; key: string; name: string; desc: string }[]
-  }[]
->(() => {
+interface Card {
+  id: CardId
+  role: Role
+  kind?: ElfKind
+  name: string
+  sub: string
+  art: string
+  tagline: string
+  goal: string
+  skills: { icon: string; key: string; name: string; desc: string }[]
+}
+const cards = computed<Card[]>(() => {
   const b = binds.value
+  const harp: Card = {
+    id: 'harp',
+    role: 'elf',
+    kind: 'harp',
+    name: t('elfName'),
+    sub: t('harpSub'),
+    art: elfArt,
+    tagline: t('elfTagline'),
+    goal: t('elfGoal'),
+    skills: [
+      { icon: '💗', key: keyLabel(b.elf.gaze), name: t('skillGaze'), desc: t('skillGazeDesc') },
+      { icon: '🎵', key: keyLabel(b.elf.music), name: t('skillMusic'), desc: t('skillMusicDesc') },
+      { icon: '💫', key: keyLabel(b.elf.stun), name: t('skillStun'), desc: t('skillStunDesc') },
+      { icon: '🎒', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+    ],
+  }
+  if (elfMenu.value)
+    return [
+      harp,
+      {
+        id: 'violin',
+        role: 'elf',
+        kind: 'violin',
+        name: t('violinName'),
+        sub: t('violinSub'),
+        art: violinArt,
+        tagline: t('violinTagline'),
+        goal: t('elfGoal'),
+        skills: [
+          { icon: '🎻', key: keyLabel(b.elf.gaze), name: t('skillStealth'), desc: t('skillStealthDesc') },
+          { icon: '👁️', key: keyLabel(b.elf.music), name: t('skillEye'), desc: t('skillEyeDesc') },
+          { icon: '⚡', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc') },
+          { icon: '🎒', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+        ],
+      },
+    ]
   return [
+    { ...harp, id: 'elf', kind: undefined, sub: 'Sylvari Huntress', tagline: t('elfTagline') },
     {
-      role: 'elf',
-      name: t('elfName'),
-      sub: 'Sylvari Huntress',
-      art: elfArt,
-      tagline: t('elfTagline'),
-      goal: t('elfGoal'),
-      skills: [
-        { icon: '💗', key: keyLabel(b.elf.gaze), name: t('skillGaze'), desc: t('skillGazeDesc') },
-        { icon: '🎵', key: keyLabel(b.elf.music), name: t('skillMusic'), desc: t('skillMusicDesc') },
-        { icon: '💫', key: keyLabel(b.elf.stun), name: t('skillStun'), desc: t('skillStunDesc') },
-        { icon: '🎒', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
-      ],
-    },
-    {
+      id: 'goblin',
       role: 'goblin',
       name: t('goblinName'),
       sub: 'Cave Goblin',
@@ -80,22 +111,28 @@ const cards = computed<
 })
 
 const lobby = computed(() => props.room?.state ?? null)
-const myPick = computed(() => lobby.value?.players.find((p) => p.id === lobby.value!.me)?.pick ?? null)
+const me = computed(() => lobby.value?.players.find((p) => p.id === lobby.value!.me) ?? null)
+const myPick = computed(() => me.value?.pick ?? null)
+const kindName = (k?: ElfKind) => (k === 'violin' ? t('violinName') : t('elfName'))
 const myPickLabel = computed(() => {
-  const label: Record<Pick, string> = { elf: `🧝‍♀️ ${t('elfName')}`, goblin: `👺 ${t('goblinName')}`, random: `🎲 ${t('mpPickRandom')}` }
+  const label: Record<Pick, string> = { elf: `🧝‍♀️ ${kindName(me.value?.elf)}`, goblin: `👺 ${t('goblinName')}`, random: `🎲 ${t('mpPickRandom')}` }
   return label[myPick.value ?? 'random']
 })
-function pickers(role: Role) {
-  return lobby.value?.players.filter((p) => p.pick === role) ?? []
+function pickers(c: Card) {
+  return lobby.value?.players.filter((p) => p.pick === c.role && (!c.kind || (p.elf ?? 'harp') === c.kind)) ?? []
+}
+function isMine(c: Card) {
+  return myPick.value === c.role && (!c.kind || (me.value?.elf ?? 'harp') === c.kind)
 }
 function canPick(role: Role) {
   return props.room?.canPick(role) ?? true
 }
-function pickRole(p: Pick) {
+function pickRole(p: Pick, kind?: ElfKind) {
   sfx.unlock()
   sfx.flip()
-  props.room?.setPick(p)
+  props.room?.setPick(p, kind)
   chosen.value = null
+  elfMenu.value = false
 }
 function startRoom() {
   sfx.unlock()
@@ -109,20 +146,35 @@ function toggleLocale() {
   setLocale(locale.value === 'zh' ? 'en' : 'zh')
 }
 
-async function choose(role: Role) {
+async function choose(id: CardId) {
   if (chosen.value) return
   sfx.unlock()
   sfx.flip()
+  if (id === 'elf') {
+    // 精靈卡：從卡片位置飛出兩張精靈卡（豎琴留在原位、紫晶飛到右邊）
+    const from = cardEls.value.elf!.getBoundingClientRect()
+    const right = cardEls.value.goblin!.getBoundingClientRect()
+    flyFrom.value.harp = 0
+    flyFrom.value.violin = from.left - right.left
+    elfMenu.value = true
+    return
+  }
   const st = stage.value!.getBoundingClientRect()
-  const el = cardEls.value[role]!.getBoundingClientRect()
-  offsets.value[role] = st.left + st.width / 2 - (el.left + el.width / 2)
+  const el = cardEls.value[id]!.getBoundingClientRect()
+  offsets.value[id] = st.left + st.width / 2 - (el.left + el.width / 2)
   await nextTick()
-  chosen.value = role
+  chosen.value = id
 }
 
+// 翻面的精靈卡返回 → 回到兩張精靈卡；兩張精靈卡返回 → 回到陣營選擇
 function back() {
   sfx.flip()
-  chosen.value = null
+  if (chosen.value) chosen.value = null
+  else elfMenu.value = false
+}
+
+function start(c: Card) {
+  emit('start', c.role, c.kind ?? 'harp')
 }
 </script>
 
@@ -150,10 +202,16 @@ function back() {
     <header>
       <p class="eyebrow">{{ t('eyebrow') }}</p>
       <h1 :data-text="t('title')">{{ t('title') }}</h1>
-      <p class="lead">{{ t('chooseSide') }}</p>
+      <p class="lead">{{ elfMenu ? t('chooseElf') : t('chooseSide') }}</p>
     </header>
 
     <!-- 翻牌時灑落的夢幻藍色靈粉（Shaders：天藍光暈 + 冰藍光點 + 薰衣草藍光暈 + 閃爍星芒） -->
+    <!-- 精靈卡飛出時的紫色星塵 -->
+    <Shader v-if="elfMenu && !chosen" key="elf-menu" class="fairy-dust violet">
+      <FloatingParticles shape="glow" particle-color="#c9a0ff" :count="160" :particle-size="2.4" :softness="0.9" :speed="0.14" :angle="270" :angle-variance="50" :speed-variance="0.5" :randomness="0.6" :twinkle="0.9" />
+      <FloatingParticles particle-color="#f0e4ff" :count="500" :particle-size="0.9" :softness="0.3" :speed="0.2" :angle="270" :angle-variance="30" :speed-variance="0.6" :randomness="0.45" :twinkle="1" />
+      <Sparkle :size="60" :intensity="7" :threshold="0.5" :ray-length="6" :colorize="0.8" :speed="1.2" />
+    </Shader>
     <Shader v-if="chosen" :key="chosen" class="fairy-dust">
       <FloatingParticles shape="glow" particle-color="#8fd3ff" :count="260" :particle-size="2.6" :softness="0.9" :speed="0.16" :angle="270" :angle-variance="40" :speed-variance="0.5" :randomness="0.6" :twinkle="0.9" />
       <FloatingParticles shape="glow" particle-color="#b4a6ff" :count="90" :particle-size="3.4" :softness="1" :speed="0.1" :angle="270" :angle-variance="50" :speed-variance="0.5" :randomness="0.7" :twinkle="0.7" />
@@ -164,21 +222,27 @@ function back() {
     <div ref="stage" class="stage">
       <div
         v-for="c in cards"
-        :key="c.role"
-        :ref="(el) => (cardEls[c.role] = el as HTMLElement)"
+        :key="c.id"
+        :ref="(el) => (cardEls[c.id] = el as HTMLElement)"
         class="card-wrap"
-        :class="{ chosen: chosen === c.role, hidden: chosen && chosen !== c.role, mine: myPick === c.role, taken: lobby && !canPick(c.role) && myPick !== c.role }"
-        :style="{ '--dx': offsets[c.role] + 'px' }"
+        :class="{
+          chosen: chosen === c.id,
+          hidden: chosen && chosen !== c.id,
+          mine: isMine(c),
+          taken: lobby && !canPick(c.role) && myPick !== c.role,
+          fly: !!c.kind,
+        }"
+        :style="{ '--dx': offsets[c.id] + 'px', '--from': flyFrom[c.id] + 'px' }"
       >
         <!-- 多人大廳：在卡片上緣標示選了這個角色的玩家 -->
-        <div v-if="lobby && pickers(c.role).length" class="pickers">
-          <span v-for="p in pickers(c.role)" :key="p.id" :class="{ me: p.id === lobby.me }">
+        <div v-if="lobby && pickers(c).length" class="pickers">
+          <span v-for="p in pickers(c)" :key="p.id" :class="{ me: p.id === lobby.me }">
             {{ c.role === 'elf' ? t('mpPickedBy', { name: p.id === lobby.me ? t('you') : displayName(p) }) : p.id === lobby.me ? t('you') : displayName(p) }}
           </span>
         </div>
-        <div class="card" :class="c.role" @click="choose(c.role)">
+        <div class="card" :class="[c.role, c.kind]" @click="choose(c.id)">
           <div class="face front">
-            <div class="art" :style="{ backgroundImage: `url(${c.art})` }"></div>
+            <div class="art" :style="{ backgroundImage: `url(${c.art})`, '--art': `url(${c.art})` }"></div>
             <div class="frame"></div>
             <div class="plate">
               <span class="sub">{{ c.sub }}</span>
@@ -204,18 +268,19 @@ function back() {
               <div class="actions">
                 <button class="ghost" @click.stop="back">{{ t('back') }}</button>
                 <template v-if="lobby">
-                  <button v-if="myPick === c.role" class="go" @click.stop="pickRole('random')">{{ t('mpUnpick') }}</button>
-                  <button v-else class="go" :disabled="!canPick(c.role)" @click.stop="pickRole(c.role)">
+                  <button v-if="isMine(c)" class="go" @click.stop="pickRole('random')">{{ t('mpUnpick') }}</button>
+                  <button v-else class="go" :disabled="!canPick(c.role)" @click.stop="pickRole(c.role, c.kind)">
                     {{ canPick(c.role) ? t('mpPickThis') : c.role === 'elf' ? t('mpTaken') : t('mpGoblinFull') }}
                   </button>
                 </template>
-                <button v-else class="go" @click.stop="emit('start', c.role)">{{ t('startAdventure') }}</button>
+                <button v-else class="go" @click.stop="start(c)">{{ t('startAdventure') }}</button>
               </div>
             </div>
           </div>
         </div>
       </div>
     </div>
+    <button v-if="elfMenu && !chosen" class="ghost elf-back" @click="back">← {{ t('back') }}</button>
 
     <footer v-if="lobby" class="lobby-bar">
       <span>{{ t('mpMyPick', { pick: myPickLabel }) }}</span>
@@ -470,6 +535,47 @@ h1::after {
 .card-wrap.chosen {
   transform: translateX(var(--dx)) scale(1.12);
   z-index: 3;
+}
+/* 精靈卡飛出：從被點的精靈卡位置展開成兩張 */
+.card-wrap.fly:not(.chosen):not(.hidden) {
+  animation: fly-out 0.85s cubic-bezier(0.2, 0.9, 0.25, 1.1) both;
+}
+.card-wrap.fly + .card-wrap.fly:not(.chosen):not(.hidden) {
+  animation-delay: 0.08s;
+}
+@keyframes fly-out {
+  0% {
+    opacity: 0;
+    transform: translateX(var(--from)) translateY(10px) scale(0.82) rotateY(-24deg) rotateZ(-6deg);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+.elf-back {
+  z-index: 2;
+  margin-top: -1vh;
+}
+.violin .art {
+  /* 原畫是淺色背景：疊一層紫夜漸層（multiply），中央保持明亮、四周暗下來，和其他卡片的色調一致 */
+  background-image: var(--art), radial-gradient(ellipse 75% 65% at 50% 38%, #fff 30%, #b89ae0 62%, #3d2466 100%) !important;
+  background-blend-mode: multiply;
+}
+.violin .plate {
+  background: linear-gradient(transparent, rgba(36, 18, 60, 0.94) 55%);
+}
+.violin.card .back,
+.card.violin .back {
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.05), transparent 40%),
+    #231833;
+}
+.fairy-dust.violet {
+  animation-duration: 2.4s;
 }
 /* 多人大廳：選角標示 */
 .pickers {

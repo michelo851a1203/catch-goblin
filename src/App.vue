@@ -3,7 +3,7 @@ import { onMounted, ref, shallowRef, watch } from 'vue'
 import CharacterSelect from './components/CharacterSelect.vue'
 import GameView from './components/GameView.vue'
 import RoomSheet from './components/RoomSheet.vue'
-import type { Role } from './game/config'
+import { isElfKind, type ElfKind, type Role } from './game/config'
 import type { NetLink, Room, RoomError } from './net/room'
 import * as crazygames from './crazygames'
 import { MAX_PLAYERS } from './net/assign'
@@ -13,6 +13,9 @@ import { music } from './game/music'
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
 const role = ref<Role | null>(q === 'elf' || q === 'goblin' ? q : null)
+// ?elf=violin / ?elf=harp 指定精靈角色（測試用）；單機當哥布林時，精靈（AI）沒指定就隨機
+const qElf = new URLSearchParams(location.search).get('elf')
+const elfKind = ref<ElfKind>(isElfKind(qElf) ? qElf : 'harp')
 const round = ref(0)
 let busy = false
 
@@ -70,14 +73,18 @@ watch(
 )
 
 // 每回合開始前播插頁廣告（是否真的播放由 CrazyGames 決定）
-async function newRound(r: Role) {
+async function newRound(r: Role, kind?: ElfKind) {
   if (busy) return
   busy = true
   await crazygames.commercialBreak()
   busy = false
   role.value = r
+  if (r === 'elf') elfKind.value = kind ?? elfKind.value
+  else if (!isElfKind(qElf)) elfKind.value = Math.random() < 0.5 ? 'harp' : 'violin'
   round.value++
 }
+// ?role=goblin 直接進入時也要決定 AI 精靈
+if (role.value === 'goblin' && !isElfKind(qElf)) elfKind.value = Math.random() < 0.5 ? 'harp' : 'violin'
 
 // 輸入暱稱並連線成功後收起 sheet，左上角改為「已加入 <房號>」
 function attach(r: Room) {
@@ -133,7 +140,7 @@ function leaveRoom() {
     @restart="backToRoom"
     @menu="leaveRoom"
   />
-  <GameView v-else-if="role" :key="round" :role="role" @restart="newRound(role)" @menu="role = null" />
+  <GameView v-else-if="role" :key="round" :role="role" :elf-kind="elfKind" @restart="newRound(role, elfKind)" @menu="role = null" />
   <template v-else>
     <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" @leave="leaveLobby" />
     <RoomSheet v-if="sheet" :key="auto?.kind === 'join' ? auto.code : ''" :auto="auto" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />

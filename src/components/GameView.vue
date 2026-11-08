@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Game, createHudState } from '../game/Game'
-import type { Role } from '../game/config'
+import type { ElfKind, Role } from '../game/config'
 import type { NetLink } from '../net/room'
 import { recordResult } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
@@ -11,17 +11,20 @@ import { music } from '../game/music'
 import TouchControls from './TouchControls.vue'
 import FullscreenButton from './FullscreenButton.vue'
 
-const props = defineProps<{ role: Role; net?: NetLink }>()
+const props = defineProps<{ role: Role; net?: NetLink; elfKind?: ElfKind }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
 
 const host = ref<HTMLDivElement | null>(null)
 const minimap = ref<HTMLCanvasElement | null>(null)
-const hud = reactive(createHudState(props.role))
+const kind: ElfKind = props.net?.elfKind ?? props.elfKind ?? 'harp'
+const hud = reactive(createHudState(props.role, kind))
 let game: Game | null = null
 
 onMounted(() => {
-  game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null)
+  game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null, kind)
   game.start()
+  // 當哥布林時告訴玩家這一局的精靈是哪一位
+  if (props.role === 'goblin') game.toast(t('tOpponent', { name: kind === 'violin' ? t('violinName') : t('elfName') }), 'info')
   // 遊戲中播自己陣營的音樂；再玩一局時 GameView 重新掛載，從結算的勝利音樂換回來
   music.play(props.role)
 })
@@ -68,6 +71,8 @@ function toggleSpeed() {
 <template>
   <div class="game" :class="{ touch: touchMode }">
     <div ref="host" class="viewport"></div>
+    <!-- 紫晶精靈：刺客之眼開圖 / 隱身中的畫面暈影 -->
+    <div v-if="hud.eye || hud.stealth" class="violet-vignette" :class="{ eye: hud.eye }"></div>
     <TouchControls
       v-if="touchMode && !hud.result"
       @move="touchMove"
@@ -78,7 +83,7 @@ function toggleSpeed() {
     <!-- 上方：時間與剩餘數量 -->
     <div class="top">
       <div class="pill side">
-        <span class="label">{{ role === 'elf' ? t('elfName') : t('goblinName') }}</span>
+        <span class="label">{{ role === 'elf' ? (hud.elfKind === 'violin' ? t('violinName') : t('elfName')) : t('goblinName') }}</span>
       </div>
       <div class="pill timer" :class="{ urgent: hud.timeLeft < 60 }">⏳ {{ clock }}</div>
       <div class="pill side">
@@ -162,6 +167,27 @@ function toggleSpeed() {
 .viewport {
   position: absolute;
   inset: 0;
+}
+.violet-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 80% 70% at 50% 50%, transparent 55%, rgba(80, 30, 150, 0.45) 100%);
+  animation: vignette-in 0.4s ease-out;
+}
+.violet-vignette.eye {
+  background: radial-gradient(ellipse 75% 65% at 50% 50%, transparent 45%, rgba(120, 50, 220, 0.55) 100%);
+  animation: vignette-in 0.4s ease-out, vignette-pulse 1.6s ease-in-out infinite;
+}
+@keyframes vignette-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes vignette-pulse {
+  50% {
+    opacity: 0.7;
+  }
 }
 .top {
   position: absolute;

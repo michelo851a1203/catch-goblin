@@ -20,8 +20,11 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
   ai.wanderT -= dt
 
   const d = dist2d(g.pos, elf.pos)
-  const sameCave = g.zone >= 0 && g.zone === elf.zone // 被動：哥布林雷達
-  const sees = sameCave || d < 6 || (d < 24 && game.world.lineOfSight(g.pos, elf.pos))
+  const sameCave = g.zone >= 0 && g.zone === elf.zone // 被動：哥布林雷達（隱身也擋不住）
+  // 隱身的紫晶精靈：看不到，除非幾乎撞上
+  const sees = elf.stealthed
+    ? sameCave || d < CONFIG.violin.stealth.revealRadius
+    : sameCave || d < 6 || (d < 24 && game.world.lineOfSight(g.pos, elf.pos))
   if (sees) {
     ai.fear = 5
     ai.lastElf = elf.pos.clone()
@@ -35,7 +38,7 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
     return
   }
   ai.ultDelay = -1
-  if (g.stun > 0 || g.rooted > 0 || g.attract > 0) return
+  if (g.stun > 0 || g.rooted > 0 || g.attract > 0 || g.terror > 0) return
 
   const packing = elf.packing
   if (packing && packing.g !== g) {
@@ -129,6 +132,7 @@ export function updateElfAI(game: Game, dt: number) {
   const elf = game.elf
   const ai = elf.ai
   elf.wish.set(0, 0, 0)
+  if (elf.kind === 'violin') return updateVioletAI(game, dt)
   if (elf.stagger > 0 || elf.packing) return
   if (elf.channel >= 0) {
     if (elf.channel > ai.plannedChannel) game.elfStopMusic()
@@ -236,6 +240,182 @@ export function updateElfAI(game: Game, dt: number) {
   const outside = game.goblins.find((g) => !g.captured && g.zone < 0 && dist2d(g.pos, elf.pos) < 40)
   if (outside && Math.random() < 0.005) ai.dest = outside.pos.clone()
 
+  if (!ai.dest) {
+    const weights = game.world.caves.map((c) => {
+      if (c.id === ai.patrolCave) return 0.05
+      let w = 1
+      for (const g of game.goblins) if (!g.captured && g.zone === c.id) w += 0.4
+      if (now < 90 && game.playerGoblin && game.playerGoblin.zone === c.id) w *= 0.25
+      return w
+    })
+    const sum = weights.reduce((a, b) => a + b, 0)
+    let r = Math.random() * sum
+    let pick = 0
+    for (let i = 0; i < weights.length; i++) {
+      r -= weights[i]
+      if (r <= 0) {
+        pick = i
+        break
+      }
+    }
+    ai.patrolCave = pick
+    const c = game.world.caves[pick]
+    const a = Math.random() * Math.PI * 2
+    ai.dest = new THREE.Vector3(c.center.x + Math.cos(a) * 5, 0, c.center.z + Math.sin(a) * 5)
+  }
+  if (dist2d(ai.dest, elf.pos) < 2.5) {
+    ai.dest = null
+    ai.patrolWait = 1.2
+    return
+  }
+  elf.wish.copy(game.navigate(elf, ai.dest))
+}
+
+// ───────────────────────── 紫晶精靈 AI ─────────────────────────
+// 刺客打法：巡邏時隱身靠近 → 近距離衝鋒擊暈 → 捕獲；找不到目標時開刺客之眼，太遠就瞬移過去
+function senseGoblins(game: Game) {
+  const elf = game.elf
+  const ai = elf.ai
+  const E = CONFIG.elf
+  const now = game.elapsed
+  const fwdX = Math.sin(elf.yaw), fwdZ = Math.cos(elf.yaw)
+  for (const g of game.goblins) {
+    if (g.captured) {
+      ai.seen.delete(g)
+      continue
+    }
+    const dx = g.pos.x - elf.pos.x, dz = g.pos.z - elf.pos.z
+    const d = Math.hypot(dx, dz)
+    const facing = (dx * fwdX + dz * fwdZ) / (d || 1)
+    // 刺客之眼開圖中：全部看得到
+    const visible = elf.eye > 0 || d < 4 || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
+    const rec = ai.seen.get(g)
+    if (visible) {
+      if (rec && now - rec.at < 0.5) {
+        rec.pos.copy(g.pos)
+        rec.at = now
+      } else ai.seen.set(g, { pos: g.pos.clone(), at: now, since: now })
+    }
+  }
+}
+
+function updateVioletAI(game: Game, dt: number) {
+  const elf = game.elf
+  const ai = elf.ai
+  const V = CONFIG.violin
+  const E = CONFIG.elf
+  const now = game.elapsed
+  if (elf.stagger > 0 || elf.packing || elf.stealthCast >= 0) return
+  if (elf.charge) {
+    // 收招中撞到的哥布林就在面前：直接捕獲（取消收招）
+    const hit = elf.charge.phase === 'recover' && elf.charge.hit >= 0 ? game.goblins[elf.charge.hit] : null
+    if (hit && hit.stun > 0 && !hit.held && elf.cd.capture <= 0) game.elfStartCapture()
+    return
+  }
+  senseGoblins(game)
+
+  ai.think -= dt
+  if (ai.think <= 0) {
+    ai.think = 0.2
+    let best: Goblin | null = null
+    let bestScore = Infinity
+    for (const [g, rec] of ai.seen) {
+      if (now - rec.at > 0.3 || g.held) continue
+      let s = dist2d(g.pos, elf.pos)
+      if (g.stun > 0) s -= 12
+      if (g.terror > 0) s -= 5
+      // 刺客：偏好落單的目標（身邊同伴越多，捕獲時越容易被攪局）
+      for (const o of game.goblins) if (o !== g && !o.captured && !o.disabled && dist2d(o.pos, g.pos) < 9) s += 3
+      if (g === ai.target) s -= 4
+      if (g.grace > 0) s += 6
+      if (s < bestScore) {
+        bestScore = s
+        best = g
+      }
+    }
+    ai.target = best
+  }
+
+  const t = ai.target
+  if (t && !t.captured && !t.held) {
+    const rec = ai.seen.get(t)
+    const d = dist2d(t.pos, elf.pos)
+    const visibleFor = rec ? now - rec.since : 0
+    faceTo(elf, t.pos)
+    // 目標還遠：先隱身再摸過去（衝鋒時現身，順便嚇住旁邊想救人的哥布林）
+    if (!elf.stealthed && elf.cd.stealth <= 0 && d > 11 && t.stun <= 0) {
+      game.violinStealth()
+      return
+    }
+    if (t.stun > 0) {
+      if (d < E.capture.range - 0.3 && elf.cd.capture <= 0) {
+        game.elfStartCapture()
+        return
+      }
+    } else if (
+      elf.cd.charge <= 0 && t.grace <= 0 && d < V.charge.distance - 1 && (visibleFor > E.aiReaction * 0.6 || elf.stealthed || d < 3) &&
+      game.world.lineOfSight(elf.pos, t.pos)
+    ) {
+      // 預判：衝鋒前搖 0.5 秒，瞄準哥布林屆時的位置（恐懼中的哥布林走得很慢）
+      const lead = t.terror > 0 ? 0.3 : 0.45
+      tmp.copy(t.pos).addScaledVector(t.vel, lead).sub(elf.pos).setY(0)
+      if (tmp.lengthSq() > 0.01) {
+        game.violinCharge(tmp.normalize())
+        return
+      }
+    } else if (elf.stealthed && d < V.stealth.fearRadius - 1.5 && elf.cd.charge > 1.5) {
+      // 隱身摸到身邊但衝鋒還在冷卻：現身嚇住一群，等衝鋒好了再撞
+      game.violinStealth()
+    }
+    // 開圖中目標很遠：瞬移
+    if (elf.eye > 0 && d > 14) {
+      game.violinEye()
+      return
+    }
+    tmp.copy(t.pos).addScaledVector(t.vel, Math.min(0.6, d / 12))
+    elf.wish.copy(game.navigate(elf, tmp))
+    return
+  }
+
+  // 沒有目標：先隱身巡邏；隱身用完才開刺客之眼找人，開圖中瞬移到最近的哥布林身後（衝鋒好了才瞬移）
+  if (elf.eye > 0) {
+    if (V.eye.duration - elf.eye > 0.8 && elf.cd.charge <= 0.5) game.violinEye()
+    return
+  }
+  if (!elf.stealthed && elf.cd.stealth <= 0 && ai.patrolWait <= 0) {
+    game.violinStealth()
+    return
+  }
+  if (elf.cd.eye <= 0 && now > 25 && !elf.stealthed && elf.cd.charge <= 2) {
+    game.violinEye()
+    return
+  }
+
+  let lastPos: THREE.Vector3 | null = null
+  let lastAt = -Infinity
+  for (const [, rec] of ai.seen) {
+    if (rec.at > lastAt && now - rec.at < 7) {
+      lastAt = rec.at
+      lastPos = rec.pos
+    }
+  }
+  if (lastPos && dist2d(lastPos, elf.pos) > 2) {
+    elf.wish.copy(game.navigate(elf, lastPos))
+    return
+  }
+  patrol(game, dt)
+}
+
+// 巡邏：偏向有較多哥布林的洞（與豎琴精靈相同）
+function patrol(game: Game, dt: number) {
+  const elf = game.elf
+  const ai = elf.ai
+  const now = game.elapsed
+  if (ai.patrolWait > 0) {
+    ai.patrolWait -= dt
+    elf.yaw += dt * 1.5
+    return
+  }
   if (!ai.dest) {
     const weights = game.world.caves.map((c) => {
       if (c.id === ai.patrolCave) return 0.05

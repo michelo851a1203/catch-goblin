@@ -51,6 +51,35 @@ function tone(freq: number, dur: number, type: OscillatorType = 'sine', vol = 0.
 }
 
 const harpScale = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.5]
+// 小提琴：小調音階（神秘感），鋸齒波 + 慢起音 + 顫音模擬弓弦
+const violinScale = [440, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99, 880]
+
+function bowed(freq: number, dur: number, vol = 0.12, when = 0) {
+  const c = ac()
+  const t = c.currentTime + when
+  const o = c.createOscillator()
+  const lfo = c.createOscillator()
+  const lfoGain = c.createGain()
+  const f = c.createBiquadFilter()
+  const g = c.createGain()
+  o.type = 'sawtooth'
+  o.frequency.setValueAtTime(freq, t)
+  lfo.frequency.value = 5.5
+  lfoGain.gain.value = freq * 0.008
+  lfo.connect(lfoGain).connect(o.frequency)
+  f.type = 'lowpass'
+  f.frequency.value = freq * 4
+  f.Q.value = 2
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(vol, t + Math.min(0.12, dur * 0.3))
+  g.gain.setValueAtTime(vol, t + dur * 0.7)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+  o.connect(f).connect(g).connect(master!)
+  o.start(t)
+  lfo.start(t)
+  o.stop(t + dur + 0.05)
+  lfo.stop(t + dur + 0.05)
+}
 
 export const sfx = {
   unlock() {
@@ -98,6 +127,46 @@ export const sfx = {
   },
   win() {
     ;[523, 659, 784, 1047].forEach((f, i) => tone(f, 0.5, 'triangle', 0.3, i * 0.15))
+  },
+  // 紫晶精靈
+  violinNote(i: number) {
+    const f = violinScale[i % violinScale.length]
+    bowed(f, 0.42, 0.1)
+  },
+  vanish() {
+    tone(1400, 0.6, 'sine', 0.12, 0, 300)
+    tone(700, 0.5, 'triangle', 0.08, 0.05, 180)
+  },
+  reveal(fear: boolean) {
+    tone(260, 0.35, 'triangle', 0.18, 0, 520)
+    if (fear) {
+      bowed(233, 0.6, 0.14)
+      bowed(247, 0.6, 0.12, 0.02)
+    }
+  },
+  eye() {
+    tone(660, 0.5, 'sine', 0.16, 0, 1320)
+    tone(990, 0.45, 'sine', 0.1, 0.08, 1980)
+  },
+  eyeWarn() {
+    tone(740, 0.14, 'square', 0.1)
+    tone(554, 0.2, 'square', 0.1, 0.16)
+  },
+  blink() {
+    tone(1800, 0.25, 'sine', 0.14, 0, 400)
+    tone(400, 0.3, 'triangle', 0.12, 0.12, 1600)
+  },
+  windup() {
+    bowed(196, 0.5, 0.12)
+    tone(300, 0.5, 'sine', 0.06, 0, 900)
+  },
+  charge() {
+    tone(500, 0.35, 'sawtooth', 0.1, 0, 1600)
+    tone(1200, 0.4, 'sine', 0.08, 0.05, 2400)
+  },
+  chargeHit() {
+    tone(160, 0.2, 'square', 0.25, 0, 70)
+    bowed(880, 0.3, 0.1, 0.03)
   },
   lose() {
     ;[392, 330, 262, 196].forEach((f, i) => tone(f, 0.5, 'triangle', 0.3, i * 0.18))
