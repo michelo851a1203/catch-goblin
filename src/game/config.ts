@@ -38,8 +38,8 @@ export const CONFIG = {
   violin: {
     // 隱身：拉琴 castTime 秒後隱身 duration 秒；手動取消或施放其他技能時，身邊的哥布林恐懼
     stealth: { castTime: 0.8, duration: 15, cooldown: 12, fearRadius: 8, fearTime: 3, fearSpeed: 0.42, revealRadius: 1.6 },
-    // 刺客之眼：開圖 duration 秒；期間再按一次瞬移到最近的哥布林身後（blinkRange＝全地圖，不限距離）
-    eye: { duration: 7, cooldown: 20, blinkRange: 240, behind: 1.25 },
+    // 刺客之眼：開圖 duration 秒（沒有瞬移就在時間到後進入冷卻）；期間再按一次瞬移到最近的哥布林身後（blinkRange＝全地圖）
+    eye: { duration: 20, cooldown: 20, blinkRange: 240, behind: 1.25 },
     // 衝鋒擊暈：前搖 windup 秒後以 speed 衝刺 distance 公尺，撞到的第一隻暈 stun 秒；結束後 recover 秒收招
     charge: { windup: 0.5, distance: 9, speed: 24, hitRadius: 0.5, stun: 1.5, cooldown: 7, recover: 0.4 },
   },

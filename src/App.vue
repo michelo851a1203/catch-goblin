@@ -9,6 +9,7 @@ import * as crazygames from './crazygames'
 import { MAX_PLAYERS } from './net/assign'
 import { t } from './i18n'
 import { music } from './game/music'
+import { icon } from './icons'
 
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
@@ -145,7 +146,7 @@ function leaveRoom() {
     <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" @leave="leaveLobby" />
     <RoomSheet v-if="sheet" :key="auto?.kind === 'join' ? auto.code : ''" :auto="auto" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />
   </template>
-  <div class="rotate">📱↻<span>{{ t('rotate') }}</span></div>
+  <div class="rotate"><img :src="icon('ui-rotate')" alt="" /><span>{{ t('rotate') }}</span></div>
 </template>
 
 <style scoped>
@@ -167,6 +168,10 @@ function leaveRoom() {
     color: #fff3d6;
     font-family: var(--font);
     font-size: 48px;
+  }
+  .rotate img {
+    width: 96px;
+    height: 96px;
   }
   .rotate span {
     font-size: 18px;

@@ -15,6 +15,8 @@ import {
 } from '../keybinds'
 import { sfx } from '../game/audio'
 import { t, type TKey } from '../i18n'
+import { icon } from '../icons'
+import IconText from './IconText.vue'
 
 const props = defineProps<{ modelValue: Keybinds }>()
 const emit = defineEmits<{ 'update:modelValue': [k: Keybinds]; close: [] }>()
@@ -109,13 +111,13 @@ onBeforeUnmount(() => {
   <div class="overlay" @click.self="emit('close')">
     <div class="panel" role="dialog" :aria-label="t('settings')">
       <header>
-        <h2>{{ t('kbTitle') }}</h2>
-        <button class="x" :aria-label="t('kbClose')" @click="emit('close')">✕</button>
+        <h2><IconText :text="t('kbTitle')" /></h2>
+        <button class="x" :aria-label="t('kbClose')" @click="emit('close')"><img class="xi" :src="icon('ui-close')" alt="" /></button>
       </header>
       <p class="tip">{{ t('kbTip') }}</p>
 
       <section v-for="g in groups" :key="g.group">
-        <h3>{{ t(g.title) }}</h3>
+        <h3><IconText :text="t(g.title)" /></h3>
         <div v-for="r in rows(g.group)" :key="r.action" class="row">
           <span class="name">{{ r.label }}</span>
           <button

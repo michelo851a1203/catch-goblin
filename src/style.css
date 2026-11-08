@@ -32,3 +32,10 @@ body,
 button {
   touch-action: manipulation;
 }
+
+/* 關閉鈕的圖示（取代 ✕） */
+img.xi {
+  width: 26px;
+  height: 26px;
+  display: block;
+}

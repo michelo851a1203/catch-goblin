@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { icon, splitIcon } from '../icons'
 
 let gradient: THREE.DataTexture | null = null
 
@@ -44,40 +45,65 @@ export function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, shadow = tr
 // shadow：不描邊，改用柔和陰影維持對比（用於玩家名牌）
 export function makeLabelTexture(text: string, opts: { bg?: string; fg?: string; font?: number; w?: number; h?: number; shadow?: boolean } = {}) {
   const { bg = 'rgba(0,0,0,0)', fg = '#fff', font = 64, w = 256, h = 128, shadow = false } = opts
+  // 開頭的 emoji 換成遊戲圖示（圖片非同步載入，載入後重畫）
+  const parts = splitIcon(text)
   const c = document.createElement('canvas')
   c.width = w
   c.height = h
   const g = c.getContext('2d')!
-  g.fillStyle = bg
-  if (bg !== 'rgba(0,0,0,0)') {
-    const r = 28
-    g.beginPath()
-    g.roundRect(6, 6, w - 12, h - 12, r)
-    g.fill()
-    g.lineWidth = 6
-    g.strokeStyle = 'rgba(255,255,255,0.9)'
-    g.stroke()
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  const draw = (img: HTMLImageElement | null) => {
+    g.clearRect(0, 0, w, h)
+    g.fillStyle = bg
+    if (bg !== 'rgba(0,0,0,0)') {
+      const r = 28
+      g.beginPath()
+      g.roundRect(6, 6, w - 12, h - 12, r)
+      g.fill()
+      g.lineWidth = 6
+      g.strokeStyle = 'rgba(255,255,255,0.9)'
+      g.stroke()
+    }
+    const label = parts.text
+    // 只有圖示：置中放大
+    const iconSize = label ? h * 0.66 : Math.min(w, h) * 0.92
+    const gap = label && parts.icon ? h * 0.08 : 0
+    g.font = `bold ${font}px "Noto Sans TC", system-ui, sans-serif`
+    const room = w - 24 - (parts.icon && label ? iconSize + gap : 0)
+    // 英文字串較長，超出寬度時縮小字級
+    const fit = label ? room / g.measureText(label).width : 1
+    if (fit < 1) g.font = `bold ${Math.floor(font * fit)}px "Noto Sans TC", system-ui, sans-serif`
+    const tw = label ? g.measureText(label).width : 0
+    const total = (parts.icon ? iconSize + gap : 0) + tw
+    let x = w / 2 - total / 2
+    if (parts.icon && img) g.drawImage(img, x, h / 2 - iconSize / 2 + 2, iconSize, iconSize)
+    if (parts.icon) x += iconSize + gap
+    if (label) {
+      g.textAlign = 'left'
+      g.textBaseline = 'middle'
+      if (shadow) {
+        g.shadowColor = 'rgba(0,0,0,0.9)'
+        g.shadowBlur = font * 0.25
+        g.shadowOffsetY = font * 0.05
+      } else {
+        g.lineWidth = 8
+        g.strokeStyle = 'rgba(0,0,0,0.55)'
+        g.strokeText(label, x, h / 2 + 4)
+      }
+      g.fillStyle = fg
+      g.fillText(label, x, h / 2 + 4)
+      g.shadowColor = 'transparent'
+    }
+    tex.needsUpdate = true
   }
-  g.font = `bold ${font}px "Noto Sans TC", system-ui, sans-serif`
-  // 英文字串較長，超出寬度時縮小字級
-  const fit = (w - 24) / g.measureText(text).width
-  if (fit < 1) g.font = `bold ${Math.floor(font * fit)}px "Noto Sans TC", system-ui, sans-serif`
-  g.textAlign = 'center'
-  g.textBaseline = 'middle'
-  if (shadow) {
-    g.shadowColor = 'rgba(0,0,0,0.9)'
-    g.shadowBlur = font * 0.25
-    g.shadowOffsetY = font * 0.05
-  } else {
-    g.lineWidth = 8
-    g.strokeStyle = 'rgba(0,0,0,0.55)'
-    g.strokeText(text, w / 2, h / 2 + 4)
+  draw(null)
+  if (parts.icon) {
+    const img = new Image()
+    img.onload = () => draw(img)
+    img.src = icon(parts.icon)
   }
-  g.fillStyle = fg
-  g.fillText(text, w / 2, h / 2 + 4)
-  const t = new THREE.CanvasTexture(c)
-  t.colorSpace = THREE.SRGBColorSpace
-  return t
+  return tex
 }
 
 export function makeSprite(text: string, scale: number, opts: Parameters<typeof makeLabelTexture>[1] = {}) {

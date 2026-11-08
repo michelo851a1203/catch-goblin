@@ -15,6 +15,7 @@ import { FxSystem } from './fx/Effects'
 import { CELL } from './fx/atlas'
 import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 import { t, type TKey } from '../i18n'
+import type { IconName } from '../icons'
 import * as crazygames from '../crazygames'
 import { lowPower, touchMode } from '../input/touch'
 import type { Pose } from './models'
@@ -64,6 +65,8 @@ interface Snapshot {
   g: number[][]
 }
 const PHASES: HudState['phase'][] = ['countdown', 'play', 'over']
+// 瀏覽器收得到的媒體鍵（系統層級的靜音 / 音量鍵由 macOS 直接處理，網頁攔不到）
+const MEDIA_KEYS = new Set(['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'AudioVolumeMute'])
 const CAST_POSES: Pose[] = ['normal', 'cast', 'attack']
 const r2 = (v: number) => Math.round(v * 100) / 100
 
@@ -71,7 +74,7 @@ export interface SkillView {
   key: string
   code: string
   name: string
-  icon: string
+  icon: IconName
   cd: number
   max: number
   active: boolean
@@ -394,6 +397,8 @@ export class Game {
     this.on(window, 'resize', () => this.resize())
     this.on(window, 'keydown', ((e: KeyboardEvent) => {
       if (e.code === 'Tab') e.preventDefault()
+      // 遊戲用到的按鍵不交給瀏覽器（避免觸發瀏覽器 / 系統的預設行為）；Cmd / Ctrl 組合鍵照常（重新整理、關分頁等）
+      if (!e.metaKey && !e.ctrlKey && (this.isGameKey(e.code) || MEDIA_KEYS.has(e.key))) e.preventDefault()
       if (e.repeat) return
       this.keys.add(e.code)
       this.onAction(e.code)
@@ -430,6 +435,13 @@ export class Game {
       this.camDist = THREE.MathUtils.clamp(this.camDist + e.deltaY * 0.005, 3.5, 14)
     }))
     this.on(document, 'pointerlockchange', () => (this.hud.pointerLocked = document.pointerLockElement === canvas))
+  }
+
+  // 移動鍵、目前角色的技能鍵、固定的備用鍵（數字 1～4）
+  private isGameKey(code: string) {
+    const b = this.binds
+    const keys = [...Object.values(b.move), ...Object.values(this.role === 'elf' ? b.elf : b.goblin)]
+    return keys.some((k) => sameKey(k, code)) || /^Digit[1-4]$/.test(code)
   }
 
   requestPointerLock() {
@@ -490,7 +502,8 @@ export class Game {
 
   // 本機玩家的技能：房主 / 單機直接執行，加入者送給房主判定
   private act(act: Act) {
-    const d = act === 'gaze' || act === 'charge' ? this.camForward() : null
+    // 凝視朝畫面正前方；衝鋒朝角色面向
+    const d = act === 'gaze' ? this.camForward() : act === 'charge' ? new THREE.Vector3(Math.sin(this.elf.yaw), 0, Math.cos(this.elf.yaw)) : null
     const dir: V2 | undefined = d ? [r2(d.x), r2(d.z)] : undefined
     if (this.authority) this.perform(this.me, act, dir)
     else this.net!.send({ t: 'act', a: act, d: dir }, true)
@@ -734,11 +747,11 @@ export class Game {
     return true
   }
 
-  // 衝鋒擊暈：0.5 秒前搖 → 朝 dir 衝刺中距離，撞到的第一隻哥布林暈 1.5 秒
+  // 衝鋒擊暈：0.5 秒前搖 → 朝 dir（角色面向）衝刺中距離，撞到的第一隻哥布林暈 1.5 秒
   violinCharge(dir: THREE.Vector3) {
     const elf = this.elf
     if (!this.elfCanAct() || elf.cd.charge > 0) return false
-    this.breakStealth()
+    // 隱身中前搖仍保持隱身，突刺發動時才現身（見 updateCharge）
     elf.yaw = Math.atan2(dir.x, dir.z)
     elf.charge = { phase: 'windup', t: 0, dir: dir.clone(), done: 0, hit: -1 }
     elf.vel.set(0, 0, 0)
@@ -755,9 +768,12 @@ export class Game {
     c.t += dt
     elf.yaw = Math.atan2(c.dir.x, c.dir.z)
     if (c.phase === 'windup') {
-      this.violinFx.windupTick(dt, elf.pos)
+      // 隱身中的前搖：哥布林看不到聚集的星塵
+      if (!this.elfHiddenFromViewer()) this.violinFx.windupTick(dt, elf.pos)
       elf.vel.set(0, 0, 0)
       if (c.t >= C.windup) {
+        // 突刺發動的同時解除隱身（嚇到身邊的哥布林）
+        if (this.authority) this.breakStealth()
         c.phase = 'dash'
         c.t = 0
         sfx.charge()
@@ -805,6 +821,11 @@ export class Game {
     elf.cd.charge = CONFIG.violin.charge.cooldown
     elf.corr++
     this.emit({ e: 'chargeEnd', p: [r2(elf.pos.x), r2(elf.pos.z)], g: hit })
+  }
+
+  // 隱身中的精靈對目前的觀看者（哥布林玩家、觀戰者）是否看不見
+  private elfHiddenFromViewer() {
+    return this.elf.stealthed && this.me !== 'elf'
   }
 
   // 刺客之眼：哥布林的穿牆輪廓（只有精靈玩家看得到）
@@ -1127,8 +1148,10 @@ export class Game {
           if (elf.isPlayer) elf.pos.set(ev.o[0], 0, ev.o[1])
         }
         elf.yaw = Math.atan2(dir.x, dir.z)
-        this.violinFx.windupStart(elf.pos)
-        sfx.windup()
+        if (!this.elfHiddenFromViewer()) {
+          this.violinFx.windupStart(elf.pos)
+          sfx.windup()
+        }
         return
       }
       case 'chargeEnd': {
@@ -1762,7 +1785,8 @@ export class Game {
       g.root.position.copy(g.pos)
       g.root.rotation.y = g.yaw
       const dElf = d2(g.pos, elf.pos)
-      const scared = g.terror > 0 || (g.isPlayer ? (g.zone >= 0 && g.zone === elf.zone) || dElf < 7 : g.ai.fear > 0 && dElf < 12)
+      // 操控的哥布林察覺精靈時會露出害怕的樣子；隱身中的精靈察覺不到（不能透過動作洩漏位置）
+      const scared = g.terror > 0 || (g.isPlayer ? !elf.stealthed && ((g.zone >= 0 && g.zone === elf.zone) || dElf < 7) : g.ai.fear > 0 && dElf < 12)
       g.model.animate(dt, g.moveAmt, g.pose, { scared, dash: g.dashT > 0 })
       if (g.flight) {
         // 麻袋飛向牢籠
@@ -1809,7 +1833,8 @@ export class Game {
       // 刺客之眼：操控這隻哥布林的玩家頭上跳警告
       g.fx.eyeWarn.visible = g.isPlayer && !g.captured && elf.eye > 0
       if (g.fx.eyeWarn.visible) g.fx.eyeWarn.position.y = 2.55 + Math.abs(Math.sin(this.elapsed * 4)) * 0.1
-      const radar = g.isPlayer && !g.captured && g.zone >= 0 && g.zone === elf.zone
+      // 哥布林雷達：隱身中的紫晶精靈偵測不到
+      const radar = g.isPlayer && !g.captured && !elf.stealthed && g.zone >= 0 && g.zone === elf.zone
       g.fx.radar.visible = radar
       g.fx.radar.position.y = 2.15 + Math.abs(Math.sin(this.elapsed * 5)) * 0.12
       g.fx.bar.group.visible = g.held && !!elf.packing
@@ -1817,7 +1842,7 @@ export class Game {
     }
 
     // 雷達提示音
-    const radarNow = !!this.playerGoblin && !this.playerGoblin.captured && this.playerGoblin.zone >= 0 && this.playerGoblin.zone === elf.zone
+    const radarNow = !!this.playerGoblin && !this.playerGoblin.captured && !elf.stealthed && this.playerGoblin.zone >= 0 && this.playerGoblin.zone === elf.zone
     if (radarNow && !this.radarWas) {
       sfx.alarm()
       this.toast(t('tRadar'), 'warn')
@@ -1990,10 +2015,10 @@ export class Game {
       const E = CONFIG.elf
       const b = this.binds.elf
       h.skills = [
-        { key: keyLabel(b.gaze), code: b.gaze, name: t('skillGaze'), icon: '💗', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
-        { key: keyLabel(b.music), code: b.music, name: elf.channel >= 0 ? t('skillMusicStop') : t('skillMusic'), icon: '🎵', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
-        { key: keyLabel(b.stun), code: b.stun, name: t('skillStun'), icon: '💫', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
-        { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: '🎒', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
+        { key: keyLabel(b.gaze), code: b.gaze, name: t('skillGaze'), icon: 'skill-gaze', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
+        { key: keyLabel(b.music), code: b.music, name: elf.channel >= 0 ? t('skillMusicStop') : t('skillMusic'), icon: 'skill-music', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
+        { key: keyLabel(b.stun), code: b.stun, name: t('skillStun'), icon: 'skill-stun', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
+        { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: 'skill-capture', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
       ]
       h.radar = false
       const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < E.capture.range)
@@ -2011,11 +2036,11 @@ export class Game {
       const G = CONFIG.goblin
       const b = this.binds.goblin
       h.skills = [
-        { key: keyLabel(b.dash), code: b.dash, name: t('skillDash'), icon: '💨', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
-        { key: keyLabel(b.interfere), code: b.interfere, name: t('skillInterfere'), icon: '🤜', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
-        { key: keyLabel(b.ult), code: b.ult, name: t('skillUlt'), icon: '💥', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
+        { key: keyLabel(b.dash), code: b.dash, name: t('skillDash'), icon: 'skill-dash', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
+        { key: keyLabel(b.interfere), code: b.interfere, name: t('skillInterfere'), icon: 'skill-interfere', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
+        { key: keyLabel(b.ult), code: b.ult, name: t('skillUlt'), icon: 'skill-ult', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
       ]
-      h.radar = !g.captured && g.zone >= 0 && g.zone === elf.zone
+      h.radar = !g.captured && !elf.stealthed && g.zone >= 0 && g.zone === elf.zone
       if (g.captured) h.hint = ''
       else if (g.held) h.hint = g.ultUsed ? t('hUltUsed') : touch ? t('hUltTouch') : t('hUlt', { key: keyLabel(b.ult) })
       else if (g.terror > 0) h.hint = t('hFeared')
@@ -2040,15 +2065,15 @@ export class Game {
     const free = elf.stagger <= 0 && !elf.packing && !elf.charge
     h.skills = [
       {
-        key: keyLabel(b.gaze), code: b.gaze, name: elf.stealthed ? t('skillUnstealth') : t('skillStealth'), icon: elf.stealthed ? '🌙' : '🎻',
+        key: keyLabel(b.gaze), code: b.gaze, name: elf.stealthed ? t('skillUnstealth') : t('skillStealth'), icon: elf.stealthed ? 'skill-reveal' : 'skill-stealth',
         cd: elf.cd.stealth, max: V.stealth.cooldown, active: elf.stealthed || elf.stealthCast >= 0, usable: elf.stealthed || (free && elf.stealthCast < 0),
       },
       {
-        key: keyLabel(b.music), code: b.music, name: elf.eye > 0 ? t('skillBlink') : t('skillEye'), icon: elf.eye > 0 ? '✨' : '👁️',
+        key: keyLabel(b.music), code: b.music, name: elf.eye > 0 ? t('skillBlink') : t('skillEye'), icon: elf.eye > 0 ? 'skill-blink' : 'skill-eye',
         cd: elf.cd.eye, max: V.eye.cooldown, active: elf.eye > 0, usable: free && elf.stealthCast < 0,
       },
-      { key: keyLabel(b.stun), code: b.stun, name: t('skillCharge'), icon: '⚡', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge, usable: free && elf.stealthCast < 0 },
-      { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: '🎒', cd: elf.cd.capture, max: CONFIG.elf.capture.cooldown, active: !!elf.packing, usable: (free || elf.charge?.phase === 'recover') && elf.stealthCast < 0 },
+      { key: keyLabel(b.stun), code: b.stun, name: t('skillCharge'), icon: 'skill-charge', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge, usable: free && elf.stealthCast < 0 },
+      { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: 'skill-capture', cd: elf.cd.capture, max: CONFIG.elf.capture.cooldown, active: !!elf.packing, usable: (free || elf.charge?.phase === 'recover') && elf.stealthCast < 0 },
     ]
     h.radar = false
     const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < CONFIG.elf.capture.range)

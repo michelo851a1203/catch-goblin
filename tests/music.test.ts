@@ -26,8 +26,14 @@ class FakeAudio {
     this.paused = true
     this.ended = true
   }
+  // 瀏覽器在暫停後觸發 pause 事件
+  listeners: Record<string, (() => void)[]> = {}
+  addEventListener(type: string, fn: () => void) {
+    ;(this.listeners[type] ??= []).push(fn)
+  }
   pause = vi.fn(() => {
     this.paused = true
+    for (const fn of this.listeners.pause ?? []) fn()
   })
   constructor(public src: string) {
     FakeAudio.all.push(this)
@@ -124,6 +130,25 @@ describe('背景音樂', () => {
     expect(elf.pause).not.toHaveBeenCalled()
     expect(elf.currentTime).toBe(30)
     expect(FakeAudio.all.some((a) => a.src.endsWith('menu.mp3'))).toBe(false)
+  })
+
+  it('被外部暫停（Mac 媒體鍵、耳機、控制中心）時自動接著播', async () => {
+    const music = await load()
+    music.play('goblin')
+    handlers.pointerdown()
+    vi.runAllTimers()
+    const el = track('goblin.mp3')
+    el.pause()
+    expect(el.paused).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(playing()).toEqual(['goblin.mp3'])
+  })
+
+  it('Media Session：媒體鍵的播放 / 暫停等動作都被接管成不做事', async () => {
+    const actions: string[] = []
+    vi.stubGlobal('navigator', { mediaSession: { setActionHandler: (a: string) => actions.push(a) } })
+    await load()
+    expect(actions).toEqual(expect.arrayContaining(['play', 'pause', 'stop', 'previoustrack', 'nexttrack']))
   })
 
   it('靜音（廣告 / 平台設定）時暫停，解除後從原位置繼續', async () => {

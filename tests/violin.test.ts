@@ -53,7 +53,7 @@ describe('紫晶精靈技能判定', () => {
     expect(CONFIG.elf.speed).toBeGreaterThan(CONFIG.goblin.speed)
     expect(V.charge.distance).toBeGreaterThan(CONFIG.elf.stun.range * 2)
     expect([V.stealth.duration, V.stealth.cooldown, V.stealth.fearTime]).toEqual([15, 12, 3])
-    expect([V.eye.duration, V.eye.cooldown]).toEqual([7, 20])
+    expect([V.eye.duration, V.eye.cooldown]).toEqual([20, 20])
     expect([V.charge.windup, V.charge.stun, V.charge.cooldown]).toEqual([0.5, 1.5, 7])
   })
 })

@@ -20,10 +20,10 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
   ai.wanderT -= dt
 
   const d = dist2d(g.pos, elf.pos)
-  const sameCave = g.zone >= 0 && g.zone === elf.zone // 被動：哥布林雷達（隱身也擋不住）
-  // 隱身的紫晶精靈：看不到，除非幾乎撞上
+  const sameCave = g.zone >= 0 && g.zone === elf.zone // 被動：哥布林雷達
+  // 隱身的紫晶精靈：看不到、雷達也偵測不到，除非幾乎撞上
   const sees = elf.stealthed
-    ? sameCave || d < CONFIG.violin.stealth.revealRadius
+    ? d < CONFIG.violin.stealth.revealRadius
     : sameCave || d < 6 || (d < 24 && game.world.lineOfSight(g.pos, elf.pos))
   if (sees) {
     ai.fear = 5

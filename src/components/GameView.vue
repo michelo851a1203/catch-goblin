@@ -10,6 +10,8 @@ import { touchMode } from '../input/touch'
 import { music } from '../game/music'
 import TouchControls from './TouchControls.vue'
 import FullscreenButton from './FullscreenButton.vue'
+import IconText from './IconText.vue'
+import { icon } from '../icons'
 
 const props = defineProps<{ role: Role; net?: NetLink; elfKind?: ElfKind }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
@@ -85,10 +87,10 @@ function toggleSpeed() {
       <div class="pill side">
         <span class="label">{{ role === 'elf' ? (hud.elfKind === 'violin' ? t('violinName') : t('elfName')) : t('goblinName') }}</span>
       </div>
-      <div class="pill timer" :class="{ urgent: hud.timeLeft < 60 }">⏳ {{ clock }}</div>
+      <div class="pill timer" :class="{ urgent: hud.timeLeft < 60 }"><img class="gi" :src="icon('ui-timer')" alt="" />{{ clock }}</div>
       <div class="pill side">
         <span class="goblins">
-          <i v-for="n in hud.total" :key="n" :class="{ gone: n > hud.free }">👺</i>
+          <img v-for="n in hud.total" :key="n" :src="icon(n > hud.free ? 'icon-goblin-caught' : 'icon-goblin')" :class="{ gone: n > hud.free }" alt="" />
         </span>
       </div>
     </div>
@@ -100,11 +102,11 @@ function toggleSpeed() {
 
     <div class="toasts">
       <TransitionGroup name="toast">
-        <div v-for="t in hud.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
+        <div v-for="t in hud.toasts" :key="t.id" class="toast" :class="t.kind"><IconText :text="t.text" /></div>
       </TransitionGroup>
     </div>
 
-    <div v-if="hud.radar" class="radar">{{ t('hudRadar') }}</div>
+    <div v-if="hud.radar" class="radar"><IconText :text="t('hudRadar')" /></div>
 
     <div v-if="hud.progress >= 0" class="progress">
       <span>{{ hud.progressLabel }}</span>
@@ -122,7 +124,7 @@ function toggleSpeed() {
         :class="{ active: s.active, cooling: s.cd > 0, off: !s.usable || s.used }"
         @pointerdown.prevent="press(s.code)"
       >
-        <span class="ico">{{ s.used ? '✖' : s.icon }}</span>
+        <img class="ico" :src="icon(s.used ? 'skill-ult-used' : s.icon)" alt="" />
         <span class="cd" v-if="s.cd > 0" :style="{ height: (s.cd / s.max) * 100 + '%' }"></span>
         <span class="num" v-if="s.cd > 0">{{ Math.ceil(s.cd) }}</span>
         <kbd>{{ s.key }}</kbd>
@@ -131,10 +133,10 @@ function toggleSpeed() {
     </div>
 
     <div v-if="hud.spectating" class="spectate">
-      {{ touchMode ? t('hudSpectatingTouch', { name: hud.spectating }) : t('hudSpectating', { name: hud.spectating }) }}
-      <button @click="nextSpectate">{{ t('hudNext') }}</button>
+      <IconText :text="touchMode ? t('hudSpectatingTouch', { name: hud.spectating }) : t('hudSpectating', { name: hud.spectating })" />
+      <button @click="nextSpectate"><IconText :text="t('hudNext')" /></button>
       <!-- 多人連線不能快轉 -->
-      <button v-if="!net" @click="toggleSpeed">{{ hud.speed === 1 ? t('hudFast') : t('hudNormal') }}</button>
+      <button v-if="!net" @click="toggleSpeed"><IconText :text="hud.speed === 1 ? t('hudFast') : t('hudNormal')" /></button>
     </div>
 
     <div v-if="!touchMode" class="help">{{ t('hudHelp', { keys: moveKeys }) }}</div>
@@ -223,13 +225,27 @@ function toggleSpeed() {
     transform: scale(1.06);
   }
 }
-.goblins i {
-  font-style: normal;
-  margin: 0 1px;
+.timer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-.goblins i.gone {
-  filter: grayscale(1) brightness(0.5);
-  opacity: 0.5;
+.timer .gi {
+  width: 28px;
+  height: 28px;
+}
+.goblins {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.goblins img {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+.goblins img.gone {
+  opacity: 0.55;
 }
 .minimap {
   position: absolute;
@@ -340,8 +356,10 @@ function toggleSpeed() {
   width: 72px;
   height: 72px;
   border-radius: 50%;
-  border: 2px solid #e6c878;
-  background: radial-gradient(circle at 50% 35%, #3a4a3a, #121a14);
+  /* 圖示本身含金框與深綠底 */
+  border: none;
+  padding: 0;
+  background: #121a14;
   color: #fff;
   cursor: pointer;
   overflow: hidden;
@@ -349,11 +367,15 @@ function toggleSpeed() {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 .skill .ico {
-  font-size: 28px;
-  position: relative;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   z-index: 1;
+  pointer-events: none;
 }
 .skill .cd {
+  z-index: 1;
   position: absolute;
   left: 0;
   right: 0;

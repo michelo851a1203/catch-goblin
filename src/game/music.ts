@@ -51,9 +51,16 @@ function channel(t: Track) {
     gain = null
     el.volume = 0
   }
-  ch = { el, gain, on: false, stopTimer: undefined }
-  channels.set(t, ch)
-  return ch
+  const c: Channel = { el, gain, on: false, stopTimer: undefined }
+  // 被外部暫停（Mac 的播放 / 暫停媒體鍵、耳機、控制中心）但遊戲仍要播放時，自動接著播
+  el.addEventListener('pause', () => {
+    if (!c.on || el.ended || !unlocked || muted || hidden) return
+    setTimeout(() => {
+      if (c.on && el.paused && !el.ended && !muted && !hidden) void el.play().catch(() => {})
+    }, 0)
+  })
+  channels.set(t, c)
+  return c
 }
 
 function ramp(ch: Channel, to: number, dur: number) {
@@ -116,7 +123,23 @@ function unlock() {
   apply()
 }
 
+// 背景音樂用 <audio> 播放，瀏覽器會把它登記成作業系統的「正在播放」媒體：Mac 鍵盤的播放 / 暫停 / 上一首 / 下一首媒體鍵、
+// AirPods、控制中心都能暫停它。接管 Media Session 並全部設成不做事，遊戲中的聲音就不會被這些按鍵關掉
+function claimMediaSession() {
+  const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined
+  if (!ms) return
+  const noop = () => {}
+  for (const action of ['play', 'pause', 'stop', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto'] as MediaSessionAction[]) {
+    try {
+      ms.setActionHandler(action, noop)
+    } catch {
+      /* 瀏覽器不支援這個動作 */
+    }
+  }
+}
+
 if (typeof document !== 'undefined') {
+  claimMediaSession()
   for (const type of ['pointerdown', 'pointerup', 'touchend', 'keydown', 'click'])
     document.addEventListener(type, unlock, { capture: true, passive: true })
   // 切到背景時停止播放（手機省電，也避免在其他分頁出聲）

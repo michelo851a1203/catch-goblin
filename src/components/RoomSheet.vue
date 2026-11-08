@@ -4,6 +4,7 @@ import { NAME_MAX, Room, cleanName, displayName, loadName, saveName, type RoomEr
 import { MAX_PLAYERS, type Pick } from '../net/assign'
 import { sfx } from '../game/audio'
 import { t, type TKey } from '../i18n'
+import { icon, type IconName } from '../icons'
 
 // 多人連線的 bottom sheet：建立 / 加入房間 → 輸入暱稱後才真正連線，以及房間大廳（房號、玩家、開始遊戲）
 // 選角改在選角畫面的卡片上進行；在房間內關閉 sheet 不會離開房間
@@ -45,7 +46,10 @@ watch(
 )
 
 const s = computed(() => props.room?.state)
-const ICON: Record<Pick, string> = { elf: '🧝‍♀️', goblin: '👺', random: '🎲' }
+// 大廳玩家列表的角色圖示（精靈依選擇的角色顯示豎琴 / 紫晶）
+function pickIcon(p: { pick: Pick; elf?: string }): IconName {
+  return p.pick === 'elf' ? (p.elf === 'violin' ? 'icon-elf-violin' : 'icon-elf-harp') : p.pick === 'goblin' ? 'icon-goblin' : 'icon-random'
+}
 
 // 先切到輸入暱稱的 sheet，按下確定才建立 / 加入房間
 function next(k: 'create' | 'join') {
@@ -152,8 +156,8 @@ function leave() {
     <Transition name="sheet" mode="out-in" @after-enter="nickEl?.focus()">
     <section class="sheet" :key="room ? 'lobby' : step" role="dialog" :aria-label="step === 'nick' && !room ? t('mpNickTitle') : t('mpTitle')">
       <div class="grip"></div>
-      <button v-if="!room && step === 'nick'" class="x" :aria-label="t('back')" :title="t('back')" @click="back">✕</button>
-      <button v-else class="x" :aria-label="room ? t('mpGoPick') : t('mpSolo')" :title="room ? t('mpGoPick') : t('mpSolo')" @click="close">✕</button>
+      <button v-if="!room && step === 'nick'" class="x" :aria-label="t('back')" :title="t('back')" @click="back"><img class="xi" :src="icon('ui-close')" alt="" /></button>
+      <button v-else class="x" :aria-label="room ? t('mpGoPick') : t('mpSolo')" :title="room ? t('mpGoPick') : t('mpSolo')" @click="close"><img class="xi" :src="icon('ui-close')" alt="" /></button>
 
       <!-- 建立 / 加入 -->
       <template v-if="!room && step === 'entry'">
@@ -206,7 +210,7 @@ function leave() {
         <h3>{{ t('mpPlayers', { n: s.players.length, max: MAX_PLAYERS }) }}</h3>
         <ul class="players">
           <li v-for="p in s.players" :key="p.id" :class="{ me: p.id === s.me }">
-            <span class="ico">{{ ICON[p.pick] }}</span>
+            <img class="ico" :src="icon(pickIcon(p))" alt="" />
             <span class="name">{{ displayName(p) }}<template v-if="p.id === s.me"> ({{ t('you') }})</template></span>
             <span v-if="p.n === 1" class="tag">{{ t('mpHost') }}</span>
           </li>
@@ -541,5 +545,14 @@ button:disabled {
   .players {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+.players .ico {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.x {
+  display: grid;
+  place-items: center;
 }
 </style>

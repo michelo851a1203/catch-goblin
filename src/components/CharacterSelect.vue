@@ -13,6 +13,8 @@ import { locale, setLocale, t } from '../i18n'
 import { touchMode } from '../input/touch'
 import { fullscreenSupported } from '../input/fullscreen'
 import FullscreenButton from './FullscreenButton.vue'
+import IconText from './IconText.vue'
+import { icon, type IconName } from '../icons'
 import { displayName, type Room } from '../net/room'
 import type { Pick } from '../net/assign'
 
@@ -50,7 +52,7 @@ interface Card {
   art: string
   tagline: string
   goal: string
-  skills: { icon: string; key: string; name: string; desc: string }[]
+  skills: { icon: IconName; key: string; name: string; desc: string }[]
 }
 const cards = computed<Card[]>(() => {
   const b = binds.value
@@ -64,10 +66,10 @@ const cards = computed<Card[]>(() => {
     tagline: t('elfTagline'),
     goal: t('elfGoal'),
     skills: [
-      { icon: '💗', key: keyLabel(b.elf.gaze), name: t('skillGaze'), desc: t('skillGazeDesc') },
-      { icon: '🎵', key: keyLabel(b.elf.music), name: t('skillMusic'), desc: t('skillMusicDesc') },
-      { icon: '💫', key: keyLabel(b.elf.stun), name: t('skillStun'), desc: t('skillStunDesc') },
-      { icon: '🎒', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+      { icon: 'skill-gaze', key: keyLabel(b.elf.gaze), name: t('skillGaze'), desc: t('skillGazeDesc') },
+      { icon: 'skill-music', key: keyLabel(b.elf.music), name: t('skillMusic'), desc: t('skillMusicDesc') },
+      { icon: 'skill-stun', key: keyLabel(b.elf.stun), name: t('skillStun'), desc: t('skillStunDesc') },
+      { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
     ],
   }
   if (elfMenu.value)
@@ -83,10 +85,10 @@ const cards = computed<Card[]>(() => {
         tagline: t('violinTagline'),
         goal: t('elfGoal'),
         skills: [
-          { icon: '🎻', key: keyLabel(b.elf.gaze), name: t('skillStealth'), desc: t('skillStealthDesc') },
-          { icon: '👁️', key: keyLabel(b.elf.music), name: t('skillEye'), desc: t('skillEyeDesc') },
-          { icon: '⚡', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc') },
-          { icon: '🎒', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+          { icon: 'skill-stealth', key: keyLabel(b.elf.gaze), name: t('skillStealth'), desc: t('skillStealthDesc') },
+          { icon: 'skill-eye', key: keyLabel(b.elf.music), name: t('skillEye'), desc: t('skillEyeDesc') },
+          { icon: 'skill-charge', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc') },
+          { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
         ],
       },
     ]
@@ -101,10 +103,10 @@ const cards = computed<Card[]>(() => {
       tagline: t('goblinTagline'),
       goal: t('goblinGoal'),
       skills: [
-        { icon: '💨', key: keyLabel(b.goblin.dash), name: t('skillDash'), desc: t('skillDashDesc') },
-        { icon: '🤜', key: keyLabel(b.goblin.interfere), name: t('skillInterfere'), desc: t('skillInterfereDesc') },
-        { icon: '💥', key: keyLabel(b.goblin.ult), name: t('skillUlt'), desc: t('skillUltDesc') },
-        { icon: '📡', key: t('passive'), name: t('skillRadar'), desc: t('skillRadarDesc') },
+        { icon: 'skill-dash', key: keyLabel(b.goblin.dash), name: t('skillDash'), desc: t('skillDashDesc') },
+        { icon: 'skill-interfere', key: keyLabel(b.goblin.interfere), name: t('skillInterfere'), desc: t('skillInterfereDesc') },
+        { icon: 'skill-ult', key: keyLabel(b.goblin.ult), name: t('skillUlt'), desc: t('skillUltDesc') },
+        { icon: 'skill-radar', key: t('passive'), name: t('skillRadar'), desc: t('skillRadarDesc') },
       ],
     },
   ]
@@ -115,8 +117,12 @@ const me = computed(() => lobby.value?.players.find((p) => p.id === lobby.value!
 const myPick = computed(() => me.value?.pick ?? null)
 const kindName = (k?: ElfKind) => (k === 'violin' ? t('violinName') : t('elfName'))
 const myPickLabel = computed(() => {
-  const label: Record<Pick, string> = { elf: `🧝‍♀️ ${kindName(me.value?.elf)}`, goblin: `👺 ${t('goblinName')}`, random: `🎲 ${t('mpPickRandom')}` }
+  const label: Record<Pick, string> = { elf: kindName(me.value?.elf), goblin: t('goblinName'), random: t('mpPickRandom') }
   return label[myPick.value ?? 'random']
+})
+const myPickIcon = computed<IconName>(() => {
+  const p = myPick.value ?? 'random'
+  return p === 'elf' ? (me.value?.elf === 'violin' ? 'icon-elf-violin' : 'icon-elf-harp') : p === 'goblin' ? 'icon-goblin' : 'icon-random'
 })
 function pickers(c: Card) {
   return lobby.value?.players.filter((p) => p.pick === c.role && (!c.kind || (p.elf ?? 'harp') === c.kind)) ?? []
@@ -185,10 +191,10 @@ function start(c: Card) {
     <FullscreenButton class="menu-fs" />
     <!-- 已在房間內：點房號打開大廳，✕ 離開房間回到單機 -->
     <div v-if="lobby" class="mp on">
-      <button class="mp-open" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpJoined', { code: lobby.code }) }}</button>
-      <button class="mp-x" :aria-label="t('mpLeave')" :title="t('mpLeave')" @click="(sfx.unlock(), sfx.flip(), emit('leave'))">✕</button>
+      <button class="mp-open" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))"><IconText :text="t('mpJoined', { code: lobby.code })" /></button>
+      <button class="mp-x" :aria-label="t('mpLeave')" :title="t('mpLeave')" @click="(sfx.unlock(), sfx.flip(), emit('leave'))"><img class="xi" :src="icon('ui-close')" alt="" /></button>
     </div>
-    <button v-else class="mp" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))">{{ t('mpOpen') }}</button>
+    <button v-else class="mp" @click="(sfx.unlock(), sfx.flip(), emit('multiplayer'))"><IconText :text="t('mpOpen')" /></button>
     <button v-if="!touchMode" class="gear" :aria-label="t('settings')" :title="t('settings')" @click="(sfx.unlock(), sfx.flip(), (showSettings = true))">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
@@ -254,10 +260,10 @@ function start(c: Card) {
             <div class="back-inner">
               <span class="sub">{{ c.sub }}</span>
               <h2>{{ c.name }}</h2>
-              <p class="goal">🎯 {{ c.goal }}</p>
+              <p class="goal"><img class="gi" :src="icon('ui-goal')" alt="" />{{ c.goal }}</p>
               <ul>
                 <li v-for="s in c.skills" :key="s.name">
-                  <span class="icon">{{ s.icon }}</span>
+                  <img class="icon" :src="icon(s.icon)" alt="" />
                   <div>
                     <b>{{ s.name }} <kbd v-if="!touchMode">{{ s.key }}</kbd></b>
                     <small>{{ s.desc }}</small>
@@ -283,7 +289,7 @@ function start(c: Card) {
     <button v-if="elfMenu && !chosen" class="ghost elf-back" @click="back">← {{ t('back') }}</button>
 
     <footer v-if="lobby" class="lobby-bar">
-      <span>{{ t('mpMyPick', { pick: myPickLabel }) }}</span>
+      <span class="my-pick"><img class="gi" :src="icon(myPickIcon)" alt="" />{{ t('mpMyPick', { pick: myPickLabel }) }}</span>
       <button v-if="myPick && myPick !== 'random'" class="ghost small" @click="pickRole('random')">{{ t('mpUnpick') }}</button>
       <button v-if="lobby.host" class="go small" :disabled="lobby.players.length < 2" :title="lobby.players.length < 2 ? t('mpNeedTwo') : ''" @click="startRoom">
         {{ t('mpStart') }}
@@ -762,8 +768,30 @@ li {
   background: rgba(255, 255, 255, 0.05);
 }
 .icon {
-  font-size: 22px;
-  line-height: 1;
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+.goal,
+.my-pick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.goal .gi,
+.my-pick .gi {
+  width: 22px;
+  height: 22px;
+}
+.mp-x {
+  display: flex;
+  align-items: center;
+}
+.xi {
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 li b {
   display: block;
