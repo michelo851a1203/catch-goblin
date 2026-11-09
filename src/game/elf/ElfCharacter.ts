@@ -6,6 +6,7 @@ import { ElfAnimState } from './ElfAnimState'
 import { disposeObject } from './dispose'
 import { HARP_RIG, type ElfRig } from './rigs'
 import { SPRINGS, SecondaryMotion } from './SecondaryMotion'
+import { applyCelShading } from './celShading'
 
 export type GltfLoad = (url: string) => Promise<Pick<GLTF, 'scene' | 'animations'>>
 
@@ -19,6 +20,8 @@ export interface ElfCharacterOptions {
   load?: GltfLoad
   lowEnd?: boolean
   autoLoad?: boolean
+  // 高解析貼圖載入器（預設 THREE.TextureLoader）；傳 null 停用
+  loadTexture?: ((url: string) => Promise<THREE.Texture>) | null
 }
 
 export type ElfStatus = 'loading' | 'ready' | 'fallback' | 'disposed'
@@ -42,6 +45,11 @@ function defaultLoad(url: string) {
   return createElfLoader().loadAsync(url)
 }
 
+function defaultLoadTexture(url: string) {
+  if (typeof document === 'undefined') return Promise.reject(new Error('no DOM'))
+  return new THREE.TextureLoader().loadAsync(url)
+}
+
 export function isLowEndDevice() {
   if (typeof navigator === 'undefined') return false
   const nav = navigator as Navigator & { deviceMemory?: number }
@@ -62,6 +70,7 @@ export class ElfCharacter implements CharacterModel {
   readonly springs = new SecondaryMotion()
   lodLevel = 0
   error: unknown = null
+  hiResLoaded = false
 
   private fallback: CharacterModel | null
   private model: THREE.Object3D | null = null
@@ -129,8 +138,15 @@ export class ElfCharacter implements CharacterModel {
       if (!m.isMesh) return
       m.castShadow = true
       m.receiveShadow = true
-      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) optimizeMaterial(mat as THREE.MeshStandardMaterial, rig.atlasMaterial)
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        optimizeMaterial(mat as THREE.MeshStandardMaterial, rig.atlasMaterial)
+        if (rig.cel && mat.name === rig.atlasMaterial && applyCelShading(mat as THREE.MeshStandardMaterial, rig.cel)) {
+          // cel shading 的暗面已經提亮，自發光只留一點點，避免整體泛白
+          ;(mat as THREE.MeshStandardMaterial).emissive.setHex(0x161412)
+        }
+      }
     })
+    if (rig.hiResMap && !this.lowEnd) void this.loadHiRes(scene, rig.hiResMap)
 
     // 動作
     this.mixer = new THREE.AnimationMixer(scene)
@@ -186,6 +202,48 @@ export class ElfCharacter implements CharacterModel {
     this.applyLod(this.lowEnd ? 1 : 0)
     this.status = 'ready'
     if (this.opacity < 1) this.applyOpacity()
+  }
+
+  // 高解析色彩貼圖：模型先以 GLB 內的 2048² 貼圖顯示，載入完成後替換（失敗就維持原貼圖）
+  private async loadHiRes(scene: THREE.Object3D, url: string) {
+    const loader = this.opts.loadTexture === undefined ? defaultLoadTexture : this.opts.loadTexture
+    if (!loader) return
+    let tex: THREE.Texture
+    try {
+      tex = await loader(url)
+    } catch (e) {
+      console.warn('[ElfCharacter] 高解析貼圖載入失敗，沿用 GLB 貼圖', e)
+      return
+    }
+    if (this.status === 'disposed' || this.model !== scene) {
+      tex.dispose()
+      return
+    }
+    const mats = new Set<THREE.MeshStandardMaterial>()
+    scene.traverse((o) => {
+      const m = o as THREE.Mesh
+      if (!m.isMesh) return
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) if (mat.name === this.rig.atlasMaterial) mats.add(mat as THREE.MeshStandardMaterial)
+    })
+    const old = [...mats][0]?.map
+    if (!old) {
+      tex.dispose()
+      return
+    }
+    // 沿用 GLB 貼圖的取樣設定（glTF 貼圖不翻轉 Y）
+    tex.flipY = old.flipY
+    tex.wrapS = old.wrapS
+    tex.wrapT = old.wrapT
+    tex.channel = old.channel
+    tex.colorSpace = THREE.SRGBColorSpace
+    tex.anisotropy = old.anisotropy
+    tex.needsUpdate = true
+    for (const mat of mats) {
+      if (mat.map === old) mat.map = tex
+      if (mat.emissiveMap === old) mat.emissiveMap = tex
+    }
+    old.dispose()
+    this.hiResLoaded = true
   }
 
   // 隱身：0 = 看不見（哥布林視角）、0~1 = 半透明（精靈玩家自己看）、1 = 正常
@@ -333,7 +391,7 @@ export function optimizeMaterial(mat: THREE.MeshStandardMaterial, atlas = 'M_Elf
   mat.userData.elfOptimized = true
   if (mat.map) {
     mat.map.colorSpace = THREE.SRGBColorSpace
-    mat.map.anisotropy = 4
+    mat.map.anisotropy = 8 // 拉近 / 斜看時臉與布料花紋保持清晰（超過硬體上限時 three 會自動夾住）
   }
   const name = mat.name
   if (mat.transparent || name === 'M_Sheer') {

@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { ElfCharacter, HARP_OFFSET } from '../game/elf/ElfCharacter'
+import { rigOf } from '../game/elf/rigs'
 import { ElfMagicFx } from '../game/elf/ElfMagicFx'
 import { FxSystem } from '../game/fx/Effects'
 import { createElf, type Pose } from '../game/models'
@@ -40,8 +41,12 @@ camera.position.set(0.6, 1.5, 3.6)
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.target.set(0, 1.0, 0)
 controls.enableDamping = true
+// 方便在主控台調整視角（例如拉近臉部）：__preview.controls.target.set(0, 1.47, 0)
+Object.assign(window, { __preview: { camera, controls } })
 
-const elf = new ElfCharacter()
+// ?kind=violin 預覽紫晶精靈
+const kind = new URLSearchParams(location.search).get('kind') === 'violin' ? 'violin' : 'harp'
+const elf = new ElfCharacter({ rig: rigOf(kind) })
 elf.setCamera(camera)
 scene.add(elf.root)
 const old = createElf()

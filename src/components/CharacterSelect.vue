@@ -637,8 +637,20 @@ h1::after {
   transform-style: preserve-3d;
   transition: transform 0.9s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
-.card-wrap:not(.chosen):not(.hidden) .card:hover {
-  transform: translateY(-10px) rotateX(4deg);
+/* 滑過卡片：以金色光暈強調，不位移 / 傾斜卡片——並排的兩張卡永遠等高對齊
+   （點下精靈卡後游標仍停在豎琴卡上、觸控裝置點擊後 :hover 會殘留，原本的上浮會讓兩張卡一高一低） */
+@media (hover: hover) and (pointer: fine) {
+  .card-wrap:not(.chosen):not(.hidden):not(.mine):not(.taken) .card:hover .face {
+    box-shadow:
+      0 20px 50px rgba(0, 0, 0, 0.55),
+      0 0 0 2px #e8c770,
+      0 0 0 6px rgba(30, 20, 8, 0.8),
+      0 0 0 7px #b8913c,
+      0 0 24px 6px rgba(255, 215, 120, 0.35);
+  }
+}
+.face {
+  transition: box-shadow 0.35s ease;
 }
 .card-wrap.chosen .card {
   transform: rotateY(180deg);

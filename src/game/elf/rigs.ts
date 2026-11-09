@@ -3,6 +3,7 @@ import type { ElfKind } from '../config'
 import { ELF_ASSETS, ELF_CLIPS, ELF_COLLIDERS, ELF_NODES, ELF_SPRING_CHAINS } from './assets'
 import { HARP_ANIM, type AnimSpec } from './ElfAnimState'
 import type { ColliderDef } from './SecondaryMotion'
+import type { CelParams } from './celShading'
 
 const base = (import.meta.env?.BASE_URL ?? '/').replace(/\/?$/, '/')
 
@@ -21,6 +22,10 @@ export interface ElfRig {
   stripTracks: RegExp
   // 單張貼圖集材質（臉 / 頭髮 / 布料同一張），以貼圖做微弱自發光維持插畫感
   atlasMaterial: string
+  // 貼圖集材質改用 cel shading（直射光分兩階、臉部以 _facemask 柔化陰影，見 celShading.ts）
+  cel?: Partial<CelParams>
+  // 非低階裝置在模型載入後另外載入的高解析色彩貼圖（替換貼圖集材質的 map），放大看時保有細節
+  hiResMap?: string
 }
 
 export const HARP_RIG: ElfRig = {
@@ -41,6 +46,8 @@ export const HARP_RIG: ElfRig = {
 // 道具骨每個動作各自打了關鍵影格（拉琴時琴弓跟著運弓），所以不能移除 prop_ 軌道
 export const VIOLINIST_ASSETS = {
   character: `${base}models/violinist/violinist.glb`,
+  // build_violinist.py 由 Meshy 原始 4096² 貼圖另存
+  colorHiRes: `${base}models/violinist/violet_color_4k.webp`,
 } as const
 
 export const VIOLINIST_CLIPS = [
@@ -82,6 +89,8 @@ export const VIOLINIST_RIG: ElfRig = {
   colliders: [],
   stripTracks: /^$/,
   atlasMaterial: 'M_Violet',
+  cel: {},
+  hiResMap: VIOLINIST_ASSETS.colorHiRes,
 }
 
 export function rigOf(kind: ElfKind): ElfRig {

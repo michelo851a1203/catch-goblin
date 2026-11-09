@@ -21,7 +21,7 @@ Catch Goblin — 紫晶精靈（小提琴刺客）：Meshy.ai Mixamo 綁骨模�
      道具骨每格依手的位置重新擺放（拉琴時琴弓永遠通過琴橋附近的接觸點）
   5. LOD1 減面、貼圖縮小為 WebP、匯出 GLB（EXT_meshopt_compression）
 """
-import bpy, bmesh, math, os
+import bpy, bmesh, math, os, shutil, subprocess
 import numpy as np
 from mathutils import Vector, Quaternion, Matrix
 
@@ -37,7 +37,21 @@ OUT_BLEND = os.path.join(REPO, 'tools', 'blender', 'out')
 PREVIEW_DIR = os.environ.get('VIOLINIST_PREVIEW_DIR', os.path.join(OUT_BLEND, 'violinist_preview'))
 
 TEX_SIZE = 2048
+# 桌機放大看時使用的原尺寸色彩貼圖（另存成獨立 WebP，遊戲在非低階裝置上延遲載入替換）
+HIRES_SIZE = 4096
+HIRES_QUALITY = 90
 LOD1_RATIO = 0.3
+# Meshy 匯出為三角形湯（每個三角形各自擁有頂點）：焊接完全重疊的頂點
+WELD_DIST = 1e-5
+# 頭部（含臉、耳朵）細分一層：Meshy 的頭只有約 3300 面，下巴 / 臉頰 / 鼻樑的輪廓有稜角
+HEAD_SUBDIV_WEIGHT = 0.3  # Head 骨權重超過此值的面才細分
+HEAD_SUBDIV_SHARP = math.cos(math.radians(50))  # 兩端法線夾角超過 50° 的邊不彎曲
+SMOOTH_ANGLE = 60  # 超過此角度的邊保留硬邊（盔甲稜角、飾品）
+# 臉部法線：往頭部橢球的法線混合，讓 cel shading 的明暗交界在臉上是乾淨的大塊形狀
+FACE_CENTER = Vector((0.0, -0.035, 1.465))
+FACE_RADII = Vector((0.09, 0.13, 0.12))
+FACE_BLEND = 0.85
+FACE_EXTENT = (0.082, 0.1)  # 遮罩橢圓（x 半寬、z 半高），中心同 FACE_CENTER
 VIOLIN_LEN = 0.48  # 角色手臂偏短（動漫比例），琴身略小於真實的 0.59 m
 VIOLIN_TRIS = 9000
 VIOLIN_GRIP = 0.70  # 左手握在琴頸：由琴尾往上 70% 處
@@ -111,6 +125,169 @@ def load_char():
     for a in (walk, run):
         a.use_fake_user = True
     return rig, me
+
+
+def weld_and_smooth(me):
+    """Meshy 的網格是三角形湯：6 萬頂點幾乎全是重複點、每個三角形互不相連。
+    不焊接的話法線是一面一面的（臉像多面體）、描邊會從三角形的縫隙漏出來，LOD1 減面也會破碎。
+    焊接後清掉匯入的自訂法線，依角度重建平滑法線"""
+    n0 = len(me.data.vertices)
+    bm = bmesh.new()
+    bm.from_mesh(me.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=WELD_DIST)
+    # 頭部細分：只選 Head 權重高的面，新頂點的權重 / UV 由 bmesh 內插
+    dl = bm.verts.layers.deform.active
+    hg = me.vertex_groups['Head'].index
+    head = {v for v in bm.verts if v[dl].get(hg, 0.0) > HEAD_SUBDIV_WEIGHT}
+    edges = list({e for f in bm.faces if all(v in head for v in f.verts) for e in f.edges})
+    nf = len(bm.faces)
+    bm.normal_update()
+    # subdivide_edges 之後所有 BMVert 物件都會重建，原始頂點改以座標辨識（原始頂點不會移動）
+    key = lambda co: (round(co.x, 6), round(co.y, 6), round(co.z, 6))
+    nrm = {key(v.co): v.normal.copy() for v in head}
+    # 平面細分（bmesh 的 smooth 參數沿頂點法線推點，在這份網格的非流形處會把面推穿、臉上破洞），
+    # 新的邊中點再自行以兩端法線的三次 Hermite 曲線放到曲面上（PN-triangle 的作法）
+    orig = {key(v.co) for v in bm.verts}
+    bmesh.ops.subdivide_edges(bm, edges=edges, cuts=1, use_grid_fill=True)
+    moved = 0
+    for v in [v for v in bm.verts if key(v.co) not in orig]:
+        ends = [u for u in (e.other_vert(v) for e in v.link_edges) if key(u.co) in nrm]
+        pair = next(((a, b) for i, a in enumerate(ends) for b in ends[i + 1:] if ((a.co + b.co) / 2 - v.co).length < 1e-6), None)
+        if not pair:
+            continue
+        a, b = pair
+        na, nb = nrm[key(a.co)], nrm[key(b.co)]
+        if na.dot(nb) < HEAD_SUBDIV_SHARP:
+            continue  # 硬邊（耳尖、飾品稜角）維持直線
+        d = b.co - a.co
+        ta, tb = d - na * na.dot(d), d - nb * nb.dot(d)
+        off = (ta - tb) / 8
+        lim = d.length * 0.2
+        if off.length > lim:
+            off *= lim / off.length
+        v.co += off
+        moved += 1
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+    print(f'[violinist] head subdivide {nf} -> {len(bm.faces)} faces, curved {moved} midpoints')
+    bm.to_mesh(me.data)
+    bm.free()
+    bpy.ops.object.select_all(action='DESELECT')
+    me.select_set(True)
+    bpy.context.view_layer.objects.active = me
+    if me.data.has_custom_normals:
+        bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    bpy.ops.object.shade_smooth_by_angle(angle=math.radians(SMOOTH_ANGLE))
+    print(f'[violinist] weld {n0} -> {len(me.data.vertices)} verts')
+
+
+def remove_inner_face_layer(me):
+    """Meshy 的臉是雙層殼：外層皮膚後方 4–7 mm 還有一層朝內的面。內層永遠被外層蓋住看不到，
+    但描邊（OutlineEffect 沿法線外擴的背面殼）會從髮際線的縫隙透出來，在額頭上留下咖啡色碎片。
+    刪除臉部範圍內「朝後、且正前方 12 mm 內有朝前的外層皮膚」的面"""
+    from mathutils.bvhtree import BVHTree
+    bm = bmesh.new()
+    bm.from_mesh(me.data)
+    bm.normal_update()
+    dl = bm.verts.layers.deform.active
+    hg = me.vertex_groups['Head'].index
+    tree = BVHTree.FromBMesh(bm)
+    c0, (ex, ez) = FACE_CENTER, FACE_EXTENT
+    kill = []
+    for f in bm.faces:
+        if f.normal.y < 0.2 or any(v[dl].get(hg, 0.0) <= 0.5 for v in f.verts):
+            continue
+        c = f.calc_center_median()
+        if c.y > c0.y - 0.015 or ((c.x - c0.x) / ex) ** 2 + ((c.z - c0.z) / ez) ** 2 > 1.21:
+            continue
+        loc, n, _, _ = tree.ray_cast(c + Vector((0, -1e-4, 0)), Vector((0, -1, 0)), 0.012)
+        if loc is not None and n.y < 0:
+            kill.append(f)
+    bmesh.ops.delete(bm, geom=kill, context='FACES')
+    bm.to_mesh(me.data)
+    bm.free()
+    print(f'[violinist] removed {len(kill)} hidden inner face-layer faces')
+
+
+def smoothstep_np(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def face_normals(me):
+    """臉部遮罩 + 橢球法線（動漫角色常用的臉部法線處理）：
+    臉上原始法線跟著五官起伏，cel shading 的明暗交界會變成鼻翼 / 眼窩旁破碎的色塊；
+    改用頭部橢球的法線後，臉上只剩隨光源方向移動的乾淨大塊陰影。
+    遮罩同時存成頂點屬性 _FACEMASK，遊戲的 shader 以此柔化臉上的陰影、略過自身陰影貼圖"""
+    m = me.data
+    n = len(m.vertices)
+    co = np.empty(n * 3)
+    m.vertices.foreach_get('co', co)
+    co = co.reshape(-1, 3)
+    hg = me.vertex_groups['Head'].index
+    hw = np.zeros(n)
+    for v in m.vertices:
+        for g in v.groups:
+            if g.group == hg:
+                hw[v.index] = g.weight
+    # 取每個頂點的平均 UV 對色彩貼圖取樣：膚色頂點（頭髮 / 瀏海是紫色，不屬於臉）
+    img = next(nd.image for nd in m.materials[0].node_tree.nodes if nd.type == 'TEX_IMAGE' and nd.image and 'metallic' not in nd.image.name and 'rough' not in nd.image.name)
+    W, H = img.size
+    px = np.empty(W * H * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(H, W, 4)
+    uv = np.zeros((n, 2))
+    cnt = np.zeros(n)
+    luv = np.empty(len(m.loops) * 2)
+    m.uv_layers.active.data.foreach_get('uv', luv)
+    lv = np.empty(len(m.loops), dtype=np.int64)
+    m.loops.foreach_get('vertex_index', lv)
+    np.add.at(uv, lv, luv.reshape(-1, 2))
+    np.add.at(cnt, lv, 1)
+    uv /= np.maximum(cnt, 1)[:, None]
+    c = px[np.clip((uv[:, 1] * H).astype(int), 0, H - 1), np.clip((uv[:, 0] * W).astype(int), 0, W - 1), :3]
+    skin = (c[:, 0] > c[:, 1]) & (c[:, 1] > c[:, 2] - 0.02) & (c[:, 0] - c[:, 2] > 0.05) & (c[:, 0] > 0.5)
+    ctr = np.array(FACE_CENTER)
+    # 臉部範圍：頭骨權重、正面、臉部橢圓內；眼睛 / 嘴巴（非膚色）以「貼在膚色表面上」納入
+    u = np.sqrt(((co[:, 0] - ctr[0]) / FACE_EXTENT[0]) ** 2 + ((co[:, 2] - ctr[2]) / FACE_EXTENT[1]) ** 2)
+    region = (hw > 0.5) & (u < 1.05) & (co[:, 1] < ctr[1] - 0.015)
+    from mathutils.kdtree import KDTree
+    sk = np.nonzero(region & skin)[0]
+    kd = KDTree(len(sk))
+    for i in sk:
+        kd.insert(Vector(co[i]), int(i))
+    kd.balance()
+    on_face = np.zeros(n, dtype=bool)
+    for i in np.nonzero(region)[0]:
+        _, _, d = kd.find(Vector(co[i]))
+        on_face[i] = d is not None and d < 0.004
+    w = on_face * (1 - smoothstep_np(0.75, 1.05, u)) * smoothstep_np(ctr[1] - 0.015, ctr[1] - 0.06, co[:, 1])
+    # 在網格上平滑幾次，去掉零星的斑點、讓邊緣漸變
+    ev = np.empty(len(m.edges) * 2, dtype=np.int64)
+    m.edges.foreach_get('vertices', ev)
+    ev = ev.reshape(-1, 2)
+    for _ in range(2):
+        acc = w.copy()
+        deg = np.ones(n)
+        np.add.at(acc, ev[:, 0], w[ev[:, 1]])
+        np.add.at(acc, ev[:, 1], w[ev[:, 0]])
+        np.add.at(deg, ev[:, 0], 1)
+        np.add.at(deg, ev[:, 1], 1)
+        w = np.where(region, acc / deg, 0.0)
+    w = np.clip(w * 1.3, 0, 1)
+    attr = m.attributes.get('_FACEMASK') or m.attributes.new('_FACEMASK', 'FLOAT', 'POINT')
+    attr.data.foreach_set('value', w.astype(np.float32))
+    # 每個角的法線：在原始（依角度平滑）法線與橢球法線間依遮罩混合
+    cn = np.empty(len(m.loops) * 3)
+    m.corner_normals.foreach_get('vector', cn)
+    cn = cn.reshape(-1, 3)
+    r2 = np.array(FACE_RADII) ** 2
+    el = (co - ctr) / r2
+    el /= np.linalg.norm(el, axis=1, keepdims=True)
+    k = (w * FACE_BLEND)[lv][:, None]
+    out = cn * (1 - k) + el[lv] * k
+    out /= np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-8)
+    m.normals_split_custom_set([tuple(v) for v in out])
+    print(f'[violinist] face mask {int((w > 0.5).sum())} verts (>0.5), {int((w > 0).sum())} verts (>0)')
 
 
 def foot_verts(me):
@@ -500,6 +677,13 @@ def build_actions(rig, me, fidx):
                 P[n].keyframe_insert('rotation_quaternion', frame=f)
             for n in ('Hips', 'prop_violin', 'prop_bow'):
                 P[n].keyframe_insert('location', frame=f)
+        if loop:
+            # 循環動作：加上 Cycles 修飾器，Blender 會以循環方式計算自動切線，
+            # 循環接縫處的速度連續（否則首尾切線被夾成水平，每圈都會頓一下）
+            for fc in channel_fcurves(act):
+                if not any(md.type == 'CYCLES' for md in fc.modifiers):
+                    fc.modifiers.new('CYCLES')
+                fc.update()
         return act
 
     # ── 站姿：手臂從 T-pose 放下 ──
@@ -633,15 +817,15 @@ def build_actions(rig, me, fidx):
             arm(P, S, SH[S] + Vector((s * 0.18, -0.12, -0.2)), (s * 0.5, 0.5, -0.2), wrist=(s * 0.4, -0.3, -1))
         hang(P)
 
-    make('Idle', 60, idle, 5)
+    make('Idle', 60, idle, 3)
     make('Play', 48, play, 2)
     make('Cast', 16, cast, 2, loop=False)
     make('ChargeWindup', 12, windup, 2, loop=False, ground=False)
     make('ChargeDash', 12, dash, 1, ground=False)
     make('ChargeRecover', 12, recover, 2, loop=False, ground=False)
     make('Capture', 16, capture, 2, ground=False)
-    make('Victory', 48, victory, 4)
-    make('Stunned', 30, stunned, 3)
+    make('Victory', 48, victory, 2)
+    make('Stunned', 30, stunned, 2)
     rig.animation_data.action = bpy.data.actions['Idle']
     reset_pose()
 
@@ -655,9 +839,33 @@ def prep_material(ob):
             img = n.image
             is_mr = 'metallic' in img.name or 'rough' in img.name
             img.name = 'violet_orm' if is_mr else 'violet_color'
+            if not is_mr:
+                save_hires(img)
             target = TEX_SIZE // 2 if is_mr else TEX_SIZE
             if img.size[0] > target:
                 img.scale(target, target)
+
+
+def save_hires(img):
+    """原尺寸色彩貼圖另存 WebP（public/models/violinist/violet_color_4k.webp），桌機放大時看得到細節"""
+    cwebp = shutil.which('cwebp')
+    if not cwebp:
+        print('[violinist] 找不到 cwebp，略過 4K 貼圖')
+        return
+    os.makedirs(OUT_GLB, exist_ok=True)
+    tmp = os.path.join(OUT_BLEND, 'violet_color_hires.png')
+    os.makedirs(OUT_BLEND, exist_ok=True)
+    hi = img.copy()
+    if hi.size[0] > HIRES_SIZE:
+        hi.scale(HIRES_SIZE, HIRES_SIZE)
+    hi.filepath_raw = tmp
+    hi.file_format = 'PNG'
+    hi.save()
+    bpy.data.images.remove(hi)
+    out = os.path.join(OUT_GLB, 'violet_color_4k.webp')
+    subprocess.run([cwebp, '-quiet', '-q', str(HIRES_QUALITY), '-m', '6', '-sharp_yuv', tmp, '-o', out], check=True)
+    os.remove(tmp)
+    print('[violinist] hires', out, os.path.getsize(out) // 1024, 'KB')
 
 
 def make_lod1(lod0, rig):
@@ -700,6 +908,7 @@ def export(rig, objs):
         export_apply=False, export_yup=True, export_texcoords=True, export_normals=True,
         export_image_format='WEBP', export_image_quality=88, export_def_bones=False, export_force_sampling=True,
         export_optimize_animation_size=True, export_meshopt_compression_enable=True,
+        export_attributes=True,  # _FACEMASK（臉部遮罩，遊戲 shader 使用）
     )
     print('[violinist] exported', path, os.path.getsize(path) // 1024, 'KB')
 
@@ -734,8 +943,12 @@ def preview(rig):
 def main(do_export=True):
     reset()
     rig, me = load_char()
+    weld_and_smooth(me)
     fidx = foot_verts(me)
     ground(rig, me, fidx)
+    remove_inner_face_layer(me)  # FACE_CENTER 是接地後的座標
+    fidx = foot_verts(me)  # 刪面會一併移除孤立頂點，頂點索引改變
+    face_normals(me)
     walk_ref = measure_gait(rig, 'Walk', 24)
     run_ref = measure_gait(rig, 'Run', 15)
     add_prop_bones(rig)
