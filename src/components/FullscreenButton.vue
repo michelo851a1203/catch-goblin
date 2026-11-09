@@ -8,6 +8,7 @@ import { t } from '../i18n'
   <button
     v-if="touchMode && fullscreenSupported"
     class="fs"
+    data-fs-toggle
     :aria-label="isFullscreen ? t('fullscreenExit') : t('fullscreenEnter')"
     :title="isFullscreen ? t('fullscreenExit') : t('fullscreenEnter')"
     @click="toggleFullscreen"

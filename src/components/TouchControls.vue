@@ -79,7 +79,8 @@ function up(e: PointerEvent) {
 </script>
 
 <template>
-  <div class="touch-layer" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up">
+  <!-- touchstart / touchmove 取消預設行為：拖曳轉視角、雙指縮放時不讓瀏覽器當成頁面手勢（捲動、縮放、離開全螢幕） -->
+  <div class="touch-layer" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up" @touchstart.prevent @touchmove.prevent>
     <div v-if="stick.id >= 0" class="stick" :style="{ left: stick.ox + 'px', top: stick.oy + 'px' }">
       <div class="knob" :style="{ transform: `translate(${stick.kx}px, ${stick.ky}px)` }"></div>
     </div>

@@ -185,7 +185,7 @@ function start(c: Card) {
 </script>
 
 <template>
-  <div class="select" :class="{ entered, picked: chosen }">
+  <div class="select" :class="{ entered, picked: chosen, 'elf-menu': elfMenu }">
     <div class="glow"></div>
     <button class="lang" :class="{ solo: touchMode, 'with-fs': touchMode && fullscreenSupported }" @click="toggleLocale">{{ t('langSwitch') }}</button>
     <FullscreenButton class="menu-fs" />
@@ -296,7 +296,7 @@ function start(c: Card) {
       </button>
       <span v-else class="wait">{{ t('mpWaiting') }}</span>
     </footer>
-    <footer v-else>
+    <footer v-else class="stats">
       <span>{{ t('elfWins', { n: stats.elfWins }) }}</span>
       <span>・</span>
       <span>{{ t('goblinWins', { n: stats.goblinWins }) }}</span>
@@ -509,6 +509,9 @@ h1::after {
 .card-wrap {
   position: relative;
   width: clamp(240px, 26vw, 340px);
+  /* 平板橫向（iPad mini 等）網址列展開時可見高度不足，卡片也依高度縮小，翻牌放大後才不會超出畫面 */
+  /* 大螢幕（iPad 13 吋、桌機）卡片放大到 400px，技能說明不必捲動 */
+  width: min(clamp(240px, 26vw, 400px), 44dvh);
   aspect-ratio: 0.66;
   transition:
     transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -770,6 +773,20 @@ ul {
   gap: 8px;
   text-align: left;
   flex: 1;
+  /* 卡片背面高度固定：技能說明放不下時（iPad mini、窄卡片、英文）只有技能清單捲動，
+     開始按鈕永遠固定在卡片底部看得到、點得到 */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: none;
+}
+ul::-webkit-scrollbar {
+  display: none;
+}
+.back-inner > :not(ul) {
+  flex: none;
 }
 li {
   display: flex;
@@ -865,6 +882,20 @@ button:disabled {
   font-size: 13px;
   padding: 5px 16px;
 }
+/* 翻牌後放大的卡片會蓋到副標與戰績：翻牌時淡出；兩張精靈卡畫面也收起戰績，矮視窗才不會被擠出畫面 */
+.picked .lead,
+.select.picked footer,
+.select.elf-menu footer.stats {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease 0s;
+}
+/* 手機不顯示戰績，把高度留給卡片與按鈕（桌機、平板才顯示） */
+@media (max-height: 500px), (max-width: 640px) {
+  footer.stats {
+    display: none;
+  }
+}
 .lobby-bar {
   align-items: center;
   gap: 12px;
@@ -917,6 +948,52 @@ footer {
     width: min(44vw, 45dvh);
   }
 }
+/* 中等高度（筆電瀏覽器、iPad mini 橫向）：卡片受高度限制變窄，翻牌後收起標題、卡片放大置中，背面文字稍微緊湊，
+   才不會只看得到一個技能 */
+@media (min-height: 501px) and (max-height: 760px) {
+  .card-wrap.chosen {
+    transform: translateX(var(--dx)) translateY(-4dvh) scale(1.22);
+  }
+  .picked header {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease 0s;
+  }
+  .back-inner {
+    padding: 12px 12px 10px;
+  }
+  .back h2 {
+    font-size: 22px;
+    letter-spacing: 0.08em;
+    margin: 0 0 2px;
+  }
+  .goal {
+    font-size: 12px;
+    margin: 2px 0 8px;
+  }
+  ul {
+    gap: 5px;
+  }
+  li {
+    padding: 5px 6px;
+    gap: 8px;
+  }
+  .icon {
+    width: 28px;
+    height: 28px;
+  }
+  li b {
+    font-size: 13px;
+  }
+  li small {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .controls {
+    font-size: 10px;
+    margin: 6px 0;
+  }
+}
 /* iOS Safari 的 vh 以工具列收起時的高度計算，網址列 / 分頁列展開時卡片會超出畫面、點不到開始按鈕，
    所以卡片尺寸改用 dvh（實際可見高度） */
 /* 矮螢幕（手機橫向）：卡片依高度縮小，翻牌後放大並隱藏標題，背面內容可捲動 */
@@ -967,14 +1044,24 @@ footer {
     inset: 6px;
     padding: 8px 8px 6px;
   }
-  /* 只有技能清單捲動，開始按鈕固定在卡片底部 */
-  ul {
-    min-height: 0;
-    overflow-y: auto;
-    scrollbar-width: none;
-  }
   .sub {
     font-size: 8px;
+  }
+  /* 卡片背面的英文副標只是裝飾，手機上把高度讓給技能清單 */
+  .back .sub {
+    display: none;
+  }
+  .back h2 {
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  .back .icon {
+    width: 22px;
+    height: 22px;
+  }
+  .goal .gi {
+    width: 16px;
+    height: 16px;
   }
   .goal {
     font-size: 9px;

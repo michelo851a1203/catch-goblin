@@ -558,6 +558,19 @@ function toggleSpeed() {
   bottom: calc(18px + env(safe-area-inset-bottom));
 }
 
+/* ── 窄螢幕（小手機橫向）：哥布林圖示縮小，上方列才不會壓到右上角小地圖 ── */
+@media (max-width: 600px) {
+  .top {
+    gap: 4px;
+  }
+  .goblins img {
+    width: 17px;
+    height: 17px;
+  }
+  .pill.side {
+    padding: 3px 8px;
+  }
+}
 /* ── 矮螢幕（手機橫向）── */
 @media (max-height: 500px) {
   .top {
