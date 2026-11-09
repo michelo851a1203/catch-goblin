@@ -38,7 +38,7 @@ describe('crazygames', () => {
     const { onCrazyGames } = await load()
     for (const h of ['elf-and-goblins.game-files.crazygames.com', 'www.crazygames.com', 'crazygames.fr', 'www.crazygames.co.id', 'localhost', '127.0.0.1'])
       expect(onCrazyGames(h), h).toBe(true)
-    for (const h of ['crazy-game.elf-and-goblins.pages.dev', 'michelo851a1203.github.io', 'notcrazygames.com', ''])
+    for (const h of ['elf-and-goblins.pages.dev', 'michelo851a1203.github.io', 'notcrazygames.com', ''])
       expect(onCrazyGames(h), h).toBe(false)
   })
 
@@ -46,7 +46,7 @@ describe('crazygames', () => {
     const sdk = fakeSdk()
     sdk.init.mockImplementation(() => new Promise<void>(() => {})) // 實測：其他網域的 init() 永遠不會回應
     const t0 = Date.now()
-    const cg = await load(sdk, 'crazy-game.elf-and-goblins.pages.dev')
+    const cg = await load(sdk, 'elf-and-goblins.pages.dev')
     expect(Date.now() - t0).toBeLessThan(1000)
     expect(sdk.init).not.toHaveBeenCalled()
     cg.gameplayStart()

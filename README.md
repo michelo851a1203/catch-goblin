@@ -243,7 +243,7 @@ Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wra
 
 1. 部署 TURN Worker
 2. 跑測試、建置，並把 `dist` 上傳為 `crazygames-build` artifact（重新壓成 zip 即可上傳到 CrazyGames）
-3. 部署測試站到 Cloudflare Pages：`https://crazy-game.elf-and-goblins.pages.dev`
+3. 部署測試站到 Cloudflare Pages：`https://elf-and-goblins.pages.dev`
 
 ### 🌐 部署到 GitHub Pages
 

@@ -66,7 +66,7 @@ jobs:
           path: dist
           retention-days: 30
 
-      # 測試站：https://crazy-game.elf-and-goblins.pages.dev（在 CrazyGames 以外的網域，SDK 會自動停用）
+      # 測試站：https://elf-and-goblins.pages.dev（正式分支為 crazy-game；在 CrazyGames 以外的網域，SDK 會自動停用）
       - name: Deploy preview to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
