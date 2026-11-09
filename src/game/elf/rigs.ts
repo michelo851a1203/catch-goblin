@@ -24,8 +24,9 @@ export interface ElfRig {
   atlasMaterial: string
   // 貼圖集材質改用 cel shading（直射光分兩階、臉部以 _facemask 柔化陰影，見 celShading.ts）
   cel?: Partial<CelParams>
-  // 非低階裝置在模型載入後另外載入的高解析色彩貼圖（替換貼圖集材質的 map），放大看時保有細節
+  // 非低階裝置在模型載入後另外載入的高解析貼圖（替換貼圖集材質的 map / normalMap），放大看時保有細節
   hiResMap?: string
+  hiResNormal?: string
 }
 
 export const HARP_RIG: ElfRig = {
@@ -48,6 +49,8 @@ export const VIOLINIST_ASSETS = {
   character: `${base}models/violinist/violinist.glb`,
   // build_violinist.py 由 Meshy 原始 4096² 貼圖另存
   colorHiRes: `${base}models/violinist/violet_color_4k.webp`,
+  // 由 384 萬面高模烘焙的切線空間法線貼圖
+  normalHiRes: `${base}models/violinist/violet_normal_4k.webp`,
 } as const
 
 export const VIOLINIST_CLIPS = [
@@ -73,7 +76,7 @@ export const VIOLINIST_ANIM: AnimSpec = {
     windup: 'ChargeWindup', dash: 'ChargeDash', recover: 'ChargeRecover',
   },
   // build_violinist.py 量測的 Mixamo Walking / Running 腳底速度
-  gaitRef: { Walk: 1.57, Run: 5.57 },
+  gaitRef: { Walk: 1.58, Run: 5.65 },
   gaitRange: { Walk: [0.5, 2.0], Run: [0.6, 1.5] },
   // 前搖動作 0.5 s（12 格 @24fps）；突刺循環加快；收招配合 0.4 s
   timeScale: { Cast: 1.4, ChargeDash: 1.6, ChargeRecover: 1.25 },
@@ -91,6 +94,7 @@ export const VIOLINIST_RIG: ElfRig = {
   atlasMaterial: 'M_Violet',
   cel: {},
   hiResMap: VIOLINIST_ASSETS.colorHiRes,
+  hiResNormal: VIOLINIST_ASSETS.normalHiRes,
 }
 
 export function rigOf(kind: ElfKind): ElfRig {

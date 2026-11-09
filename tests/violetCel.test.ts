@@ -23,6 +23,9 @@ describe('紫晶精靈模型（build_violinist.py 輸出）', () => {
     // 三角形湯：頂點數 ≈ 三角形數 × 2；焊接後只在 UV 接縫分裂
     expect(geo.attributes.position.count / tris).toBeLessThan(1.6)
     expect(tris).toBeGreaterThan(38000)
+    // 高模烘焙的法線貼圖 + MikkTSpace 切線（沒有切線時 three 改用螢幕空間導數，與烘焙不一致）
+    expect((lod0.material as THREE.MeshStandardMaterial).normalMap).toBeTruthy()
+    expect(geo.getAttribute('tangent')).toBeTruthy()
   })
 
   it('LOD0 / LOD1 都帶有臉部遮罩 _facemask，且臉上有完整遮罩的頂點', async () => {
@@ -54,26 +57,28 @@ describe('cel shading', () => {
     } as unknown as THREE.WebGLProgramParametersWithUniforms
     mat.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
     expect(shader.vertexShader).toContain('vFaceMask = _facemask;')
+    expect(shader.vertexShader).toContain('mvPosition.xyz * 0.9960')
     expect(shader.fragmentShader).toContain('celBand')
     expect(shader.fragmentShader).toContain('celShadowK = mix(')
+    expect(shader.fragmentShader).toContain('nonPerturbedNormal, vFaceMask')
     expect(shader.fragmentShader).not.toContain('#include <lights_physical_pars_fragment>')
     expect(mat.customProgramCacheKey()).toContain('cel:')
   })
 
   it('紫晶精靈載入後貼圖集材質套用 cel shading，並換上高解析貼圖', async () => {
     const hi = new THREE.Texture()
-    hi.name = 'hires'
+    const hiN = new THREE.Texture()
     const urls: string[] = []
     const elf = new ElfCharacter({
       rig: VIOLINIST_RIG,
       load: fileLoad,
       lowEnd: false,
-      loadTexture: (url) => (urls.push(url), Promise.resolve(hi)),
+      loadTexture: (url) => (urls.push(url), Promise.resolve(url === VIOLINIST_RIG.hiResNormal ? hiN : hi)),
     })
     await elf.ready
     await new Promise((r) => setTimeout(r, 0))
-    expect(urls).toEqual([VIOLINIST_RIG.hiResMap])
-    expect(elf.hiResLoaded).toBe(true)
+    expect(urls.sort()).toEqual([VIOLINIST_RIG.hiResMap, VIOLINIST_RIG.hiResNormal].sort())
+    expect([...elf.hiResLoaded].sort()).toEqual(['map', 'normalMap'])
     const mats = violetMaterials(elf.root)
     expect(mats.length).toBeGreaterThan(0)
     // 取樣設定沿用 GLB 貼圖（瀏覽器中 glTF 貼圖 flipY = false；測試替身貼圖是 three 的預設值）
@@ -82,6 +87,8 @@ describe('cel shading', () => {
       expect(m.userData.cel).toBeTruthy()
       expect(m.map).toBe(hi)
       expect(m.emissiveMap).toBe(hi)
+      expect(m.normalMap).toBe(hiN)
+      expect(hiN.colorSpace).toBe(THREE.NoColorSpace)
       expect(hi.colorSpace).toBe(THREE.SRGBColorSpace)
     }
     elf.dispose()
@@ -98,7 +105,7 @@ describe('cel shading', () => {
     await fail.ready
     const before = violetMaterials(fail.root)[0].map
     await new Promise((r) => setTimeout(r, 0))
-    expect(fail.hiResLoaded).toBe(false)
+    expect(fail.hiResLoaded.size).toBe(0)
     expect(violetMaterials(fail.root)[0].map).toBe(before)
     fail.dispose()
   })

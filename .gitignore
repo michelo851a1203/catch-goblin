@@ -37,6 +37,8 @@ elf-preview.html
 
 # 紫晶精靈 Blender 原始檔（可由 tools/blender/build_violinist.py 重新產生）
 tools/blender/out/violinist.blend
+# 高模法線貼圖的烘焙快取（VIOLINIST_REBAKE=1 或來源更新時重新烘焙）
+tools/blender/out/violet_normal_bake.png
 
 # Cloudflare Worker 本機變數（可能含金鑰）
 .dev.vars

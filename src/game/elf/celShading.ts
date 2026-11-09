@@ -15,6 +15,11 @@ export interface CelParams {
   faceShade: number
   faceSoft: number
   faceShadow: number
+  // 臉上法線貼圖的抑制比例（高模烘焙的五官起伏會讓 cel shading 在臉上碎成色塊）
+  faceFlatten: number
+  // 深度偏移（相對距離）：整個角色在深度上往鏡頭拉近這個比例，螢幕位置不變、角色自身的前後關係不變。
+  // 描邊殼（OutlineEffect 沿法線外擴、外擴量與距離成正比）從皮膚下的髮片 / 內層穿出的碎片因此被皮膚擋住
+  depthBias: number
 }
 
 export const CEL_DEFAULTS: CelParams = {
@@ -25,6 +30,8 @@ export const CEL_DEFAULTS: CelParams = {
   faceShade: 0.8,
   faceSoft: 0.22,
   faceShadow: 0.15,
+  faceFlatten: 0.85,
+  depthBias: 0.004,
 }
 
 // 以正規表示式比對（容許空白差異：three 的發佈版本會壓縮 shader chunk 中的空行）
@@ -53,6 +60,10 @@ export function applyCelShading(mat: THREE.MeshStandardMaterial, params: Partial
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float _facemask;\nvarying float vFaceMask;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFaceMask = _facemask;')
+      .replace(
+        '#include <project_vertex>',
+        `#include <project_vertex>\ngl_Position = projectionMatrix * vec4( mvPosition.xyz * ${fnum(1 - p.depthBias)}, mvPosition.w );`,
+      )
     const pars = THREE.ShaderChunk.lights_physical_pars_fragment.replace(
       DIFFUSE_SRC,
       // 亮面 = lit、暗面 = lit × shade；陰影貼圖（celShadowK）併入同一個明暗階，影子裡 = 暗面，不會疊加變得更黑
@@ -77,6 +88,10 @@ export function applyCelShading(mat: THREE.MeshStandardMaterial, params: Partial
       .replace('#include <common>', '#include <common>\nvarying float vFaceMask;\nfloat celShadowK = 1.0;')
       .replace('#include <lights_physical_pars_fragment>', pars)
       .replace('#include <lights_fragment_begin>', begin)
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>\nnormal = normalize( mix( normal, nonPerturbedNormal, vFaceMask * ${fnum(p.faceFlatten)} ) );`,
+      )
   }
   const prevKey = mat.customProgramCacheKey.bind(mat)
   mat.customProgramCacheKey = () => `${prevKey()}|cel:${Object.values(p).join(',')}`

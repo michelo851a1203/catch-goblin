@@ -2,12 +2,14 @@
 Catch Goblin — 紫晶精靈（小提琴刺客）：Meshy.ai Mixamo 綁骨模型 → 正規化 / 程序化動作 / 道具 / LOD / 匯出
 
 來源（Meshy.ai 產出，放在 repo 外層的 assets/assets_紫髮法師/）：
-    Meshy_AI_Elven_Maiden_Rigged_*_animated_mixamo_All_animation.glb   角色（Mixamo 骨架 + 權重 + Walking / Running）
-    Elven_Violin.glb                                                   小提琴（64 萬頂點，減面後使用）
+    紫晶精靈_ultra2K/Meshy_AI_Elven_Maiden_Ultra_Rigged_*_animated_mixamo_All_animation.glb   角色（Mixamo 骨架 + 權重 + Walking / Running，約 3 萬面）
+    紫晶精靈_ultra2K/Meshy_AI_Elven_Maiden_Ultra_*_image-to-3d-texture.blend                 高模（384 萬面 + 4K 法線貼圖），烘焙法線貼圖用
+    Elven_Violin.glb                                                                          小提琴（64 萬頂點，減面後使用）
 
 用法：
     blender -b -P tools/blender/build_violinist.py
-    （可用環境變數 VIOLINIST_ASSET_DIR 指定素材資料夾；VIOLINIST_PREVIEW=1 時另外輸出各動作的預覽圖）
+    （可用環境變數 VIOLINIST_ASSET_DIR 指定素材資料夾；VIOLINIST_PREVIEW=1 時另外輸出各動作的預覽圖；
+      高模法線貼圖的烘焙結果快取在 tools/blender/out/violet_normal_bake.png，VIOLINIST_REBAKE=1 強制重新烘焙）
 
 輸出：
     public/models/violinist/violinist.glb   LOD0 + LOD1 共用骨架、小提琴與琴弓（掛在 prop_violin / prop_bow 骨）、12 個動作
@@ -19,7 +21,8 @@ Catch Goblin — 紫晶精靈（小提琴刺客）：Meshy.ai Mixamo 綁骨模�
   3. 新增道具骨 prop_violin（左手）/ prop_bow（右手），小提琴減面後與程序化琴弓以骨頭父子關係掛上
   4. 以「世界軸 + 相對 rest」與兩骨 IK 產生其餘動作：拉琴、刺客之眼、衝鋒前搖 / 突刺 / 收招、捕獲、勝利、暈眩
      道具骨每格依手的位置重新擺放（拉琴時琴弓永遠通過琴橋附近的接觸點）
-  5. LOD1 減面、貼圖縮小為 WebP、匯出 GLB（EXT_meshopt_compression）
+  5. 由高模烘焙切線空間法線貼圖到低模（布料皺褶、飾品、五官細節，不增加面數）
+  6. LOD1 減面、貼圖縮小為 WebP、匯出 GLB（EXT_meshopt_compression，含 MikkTSpace 切線）
 """
 import bpy, bmesh, math, os, shutil, subprocess
 import numpy as np
@@ -30,13 +33,20 @@ try:
 except NameError:
     REPO = '/Users/michaelho/main/project/2026-10-20-side-hustle/goblin-game'
 ASSET_DIR = os.environ.get('VIOLINIST_ASSET_DIR', os.path.join(os.path.dirname(REPO), 'assets', 'assets_紫髮法師'))
-SRC_CHAR = 'Meshy_AI_Elven_Maiden_Rigged_20261107_animated_mixamo_All_animation.glb'
+ULTRA_DIR = os.path.join(ASSET_DIR, '紫晶精靈_ultra2K')
+SRC_CHAR = os.path.join(ULTRA_DIR, 'Meshy_AI_Elven_Maiden_Ultra_Rigged_20261109_animated_mixamo_All_animation.glb')
+SRC_HIGH = os.path.join(ULTRA_DIR, 'Meshy_AI_Elven_Maiden_Ultra_20261109_image-to-3d-texture.blend')
 SRC_VIOLIN = 'Elven_Violin.glb'
 OUT_GLB = os.path.join(REPO, 'public', 'models', 'violinist')
 OUT_BLEND = os.path.join(REPO, 'tools', 'blender', 'out')
 PREVIEW_DIR = os.environ.get('VIOLINIST_PREVIEW_DIR', os.path.join(OUT_BLEND, 'violinist_preview'))
 
 TEX_SIZE = 2048
+BAKE_SIZE = 4096
+# 高模與低模表面最大誤差約 0.9 mm：光線由低模往外 3 mm 起射、最遠 6 mm，避免打到相鄰的布料層
+BAKE_CAGE = 0.003
+BAKE_RAY = 0.006
+BAKE_CACHE = 'violet_normal_bake.png'
 # 桌機放大看時使用的原尺寸色彩貼圖（另存成獨立 WebP，遊戲在非低階裝置上延遲載入替換）
 HIRES_SIZE = 4096
 HIRES_QUALITY = 90
@@ -91,7 +101,7 @@ def channel_fcurves(act):
 
 
 def load_char():
-    bpy.ops.import_scene.gltf(filepath=os.path.join(ASSET_DIR, SRC_CHAR))
+    bpy.ops.import_scene.gltf(filepath=SRC_CHAR)
     for o in list(bpy.data.objects):
         if o.type == 'MESH' and o.parent is None:
             bpy.data.objects.remove(o, do_unlink=True)  # Meshy 附帶的 Icosphere
@@ -127,7 +137,7 @@ def load_char():
     return rig, me
 
 
-def weld_and_smooth(me):
+def weld_and_smooth(me, ref=None):
     """Meshy 的網格是三角形湯：6 萬頂點幾乎全是重複點、每個三角形互不相連。
     不焊接的話法線是一面一面的（臉像多面體）、描邊會從三角形的縫隙漏出來，LOD1 減面也會破碎。
     焊接後清掉匯入的自訂法線，依角度重建平滑法線"""
@@ -135,6 +145,9 @@ def weld_and_smooth(me):
     bm = bmesh.new()
     bm.from_mesh(me.data)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=WELD_DIST)
+    if ref:
+        bm.faces.index_update()
+        orient_to_high(bm, ref)
     # 頭部細分：只選 Head 權重高的面，新頂點的權重 / UV 由 bmesh 內插
     dl = bm.verts.layers.deform.active
     hg = me.vertex_groups['Head'].index
@@ -180,27 +193,54 @@ def weld_and_smooth(me):
     print(f'[violinist] weld {n0} -> {len(me.data.vertices)} verts')
 
 
+def skin_vertices(me):
+    """取每個頂點的平均 UV 對色彩貼圖取樣：膚色頂點（頭髮 / 瀏海是紫色，不屬於臉）"""
+    m = me.data
+    n = len(m.vertices)
+    img = next(nd.image for nd in m.materials[0].node_tree.nodes if nd.type == 'TEX_IMAGE' and nd.image and 'metallic' not in nd.image.name and 'rough' not in nd.image.name)
+    W, H = img.size
+    px = np.empty(W * H * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(H, W, 4)
+    uv = np.zeros((n, 2))
+    cnt = np.zeros(n)
+    luv = np.empty(len(m.loops) * 2)
+    m.uv_layers.active.data.foreach_get('uv', luv)
+    lv = np.empty(len(m.loops), dtype=np.int64)
+    m.loops.foreach_get('vertex_index', lv)
+    np.add.at(uv, lv, luv.reshape(-1, 2))
+    np.add.at(cnt, lv, 1)
+    uv /= np.maximum(cnt, 1)[:, None]
+    c = px[np.clip((uv[:, 1] * H).astype(int), 0, H - 1), np.clip((uv[:, 0] * W).astype(int), 0, W - 1), :3]
+    return (c[:, 0] > c[:, 1]) & (c[:, 1] > c[:, 2] - 0.02) & (c[:, 0] - c[:, 2] > 0.05) & (c[:, 0] > 0.5)
+
+
 def remove_inner_face_layer(me):
     """Meshy 的臉是雙層殼：外層皮膚後方 4–7 mm 還有一層朝內的面。內層永遠被外層蓋住看不到，
     但描邊（OutlineEffect 沿法線外擴的背面殼）會從髮際線的縫隙透出來，在額頭上留下咖啡色碎片。
-    刪除臉部範圍內「朝後、且正前方 12 mm 內有朝前的外層皮膚」的面"""
+    描邊殼是沿各面自己的法線外擴，所以判斷條件就是「沿自己的法線往外 10 mm 內，碰到一片幾乎平行的膚色面」：
+      - 碰到的是膚色：瀏海下的額頭皮膚（前面是紫色頭髮）不會被誤刪
+      - 碰到的面要與自己平行（法線夾角 < 60°）：鼻翼側面朝向臉頰，不會被當成內層刪掉
+      - 不限範圍、不論面方向：orient_to_high 翻面後內層也可能朝外，臉頰側面也有內層"""
     from mathutils.bvhtree import BVHTree
     bm = bmesh.new()
     bm.from_mesh(me.data)
     bm.normal_update()
     dl = bm.verts.layers.deform.active
     hg = me.vertex_groups['Head'].index
+    skin = skin_vertices(me)
+    bm.faces.ensure_lookup_table()
     tree = BVHTree.FromBMesh(bm)
-    c0, (ex, ez) = FACE_CENTER, FACE_EXTENT
     kill = []
     for f in bm.faces:
-        if f.normal.y < 0.2 or any(v[dl].get(hg, 0.0) <= 0.5 for v in f.verts):
+        if any(v[dl].get(hg, 0.0) <= 0.5 for v in f.verts):
             continue
-        c = f.calc_center_median()
-        if c.y > c0.y - 0.015 or ((c.x - c0.x) / ex) ** 2 + ((c.z - c0.z) / ez) ** 2 > 1.21:
+        c, n = f.calc_center_median(), f.normal
+        loc, _, hit, _ = tree.ray_cast(c + n * 1e-4, n, 0.010)
+        if loc is None:
             continue
-        loc, n, _, _ = tree.ray_cast(c + Vector((0, -1e-4, 0)), Vector((0, -1, 0)), 0.012)
-        if loc is not None and n.y < 0:
+        g = bm.faces[hit]
+        if abs(g.normal.dot(n)) > 0.5 and sum(skin[v.index] for v in g.verts) >= 2:
             kill.append(f)
     bmesh.ops.delete(bm, geom=kill, context='FACES')
     bm.to_mesh(me.data)
@@ -229,23 +269,9 @@ def face_normals(me):
         for g in v.groups:
             if g.group == hg:
                 hw[v.index] = g.weight
-    # 取每個頂點的平均 UV 對色彩貼圖取樣：膚色頂點（頭髮 / 瀏海是紫色，不屬於臉）
-    img = next(nd.image for nd in m.materials[0].node_tree.nodes if nd.type == 'TEX_IMAGE' and nd.image and 'metallic' not in nd.image.name and 'rough' not in nd.image.name)
-    W, H = img.size
-    px = np.empty(W * H * 4, dtype=np.float32)
-    img.pixels.foreach_get(px)
-    px = px.reshape(H, W, 4)
-    uv = np.zeros((n, 2))
-    cnt = np.zeros(n)
-    luv = np.empty(len(m.loops) * 2)
-    m.uv_layers.active.data.foreach_get('uv', luv)
+    skin = skin_vertices(me)
     lv = np.empty(len(m.loops), dtype=np.int64)
     m.loops.foreach_get('vertex_index', lv)
-    np.add.at(uv, lv, luv.reshape(-1, 2))
-    np.add.at(cnt, lv, 1)
-    uv /= np.maximum(cnt, 1)[:, None]
-    c = px[np.clip((uv[:, 1] * H).astype(int), 0, H - 1), np.clip((uv[:, 0] * W).astype(int), 0, W - 1), :3]
-    skin = (c[:, 0] > c[:, 1]) & (c[:, 1] > c[:, 2] - 0.02) & (c[:, 0] - c[:, 2] > 0.05) & (c[:, 0] > 0.5)
     ctr = np.array(FACE_CENTER)
     # 臉部範圍：頭骨權重、正面、臉部橢圓內；眼睛 / 嘴巴（非膚色）以「貼在膚色表面上」納入
     u = np.sqrt(((co[:, 0] - ctr[0]) / FACE_EXTENT[0]) ** 2 + ((co[:, 2] - ctr[2]) / FACE_EXTENT[1]) ** 2)
@@ -329,6 +355,7 @@ def ground(rig, me, fidx):
     bpy.context.view_layer.objects.active = rig
     bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
     print(f'[violinist] ground shift {dz:.3f} m')
+    return dz
 
 
 def measure_gait(rig, act_name, frames):
@@ -846,14 +873,14 @@ def prep_material(ob):
                 img.scale(target, target)
 
 
-def save_hires(img):
-    """原尺寸色彩貼圖另存 WebP（public/models/violinist/violet_color_4k.webp），桌機放大時看得到細節"""
+def save_hires(img, name='violet_color_4k.webp'):
+    """原尺寸貼圖另存 WebP（public/models/violinist/），桌機放大時看得到細節"""
     cwebp = shutil.which('cwebp')
     if not cwebp:
         print('[violinist] 找不到 cwebp，略過 4K 貼圖')
         return
     os.makedirs(OUT_GLB, exist_ok=True)
-    tmp = os.path.join(OUT_BLEND, 'violet_color_hires.png')
+    tmp = os.path.join(OUT_BLEND, 'hires_tmp.png')
     os.makedirs(OUT_BLEND, exist_ok=True)
     hi = img.copy()
     if hi.size[0] > HIRES_SIZE:
@@ -862,10 +889,194 @@ def save_hires(img):
     hi.file_format = 'PNG'
     hi.save()
     bpy.data.images.remove(hi)
-    out = os.path.join(OUT_GLB, 'violet_color_4k.webp')
+    out = os.path.join(OUT_GLB, name)
     subprocess.run([cwebp, '-quiet', '-q', str(HIRES_QUALITY), '-m', '6', '-sharp_yuv', tmp, '-o', out], check=True)
     os.remove(tmp)
     print('[violinist] hires', out, os.path.getsize(out) // 1024, 'KB')
+
+
+def mesh_bbox(ob):
+    co = np.empty(len(ob.data.vertices) * 3)
+    ob.data.vertices.foreach_get('co', co)
+    co = co.reshape(-1, 3) @ np.array(ob.matrix_world)[:3, :3].T + np.array(ob.matrix_world)[:3, 3]
+    return co.min(0), co.max(0)
+
+
+def load_high(me):
+    """匯入 384 萬面的高模，對齊到低模（Meshy 的綁骨模型是同一個高模原地減面而來，只差一個等比縮放：
+    正規化成 1.7 m 高、腳底在 z=0）。以兩者外框對齊後表面誤差平均 0.15 mm、最大 0.9 mm"""
+    if not os.path.exists(SRC_HIGH):
+        print('[violinist] 找不到高模，略過面方向校正與法線貼圖烘焙', SRC_HIGH)
+        return None
+    with bpy.data.libraries.load(SRC_HIGH) as (src, dst):
+        dst.objects = [n for n in src.objects]
+    high = next(o for o in dst.objects if o and o.type == 'MESH')
+    for o in dst.objects:
+        if o and o is not high:
+            bpy.data.objects.remove(o, do_unlink=True)
+    bpy.context.scene.collection.objects.link(high)
+    llo, lhi = mesh_bbox(me)
+    hlo, hhi = mesh_bbox(high)
+    k = float((lhi[2] - llo[2]) / (hhi[2] - hlo[2]))
+    high.matrix_world = Matrix.Translation(Vector((llo + lhi) / 2)) @ Matrix.Scale(k, 4) @ Matrix.Translation(Vector(-(hlo + hhi) / 2))
+    high.hide_render = True
+    print(f'[violinist] high poly {len(high.data.polygons)} faces, scale {k:.4f}')
+    return high
+
+
+def high_reference(high):
+    """高模的 BVH 與面法線（世界座標），用來校正低模的面方向"""
+    from mathutils.bvhtree import BVHTree
+    bm = bmesh.new()
+    bm.from_mesh(high.data)
+    bm.transform(high.matrix_world)
+    bm.normal_update()
+    bm.faces.ensure_lookup_table()
+    normals = [f.normal.copy() for f in bm.faces]
+    tree = BVHTree.FromBMesh(bm)
+    bm.free()
+    return tree, normals
+
+
+def orient_to_high(bm, ref):
+    """Meshy 減面後約 6% 的三角形方向是反的（法線朝內）。反向的面與相鄰的面共用頂點，平滑法線互相抵銷，
+    整塊布料 / 頭髮的光影都會錯，烘焙法線貼圖時也會整個 UV 島變黑。
+    （焊接後）先以拓撲讓每個相連區塊內的方向一致，再以面積加權投票（比對最近的高模表面）決定整塊的朝向。
+    不逐面比對高模：臉等處高模很薄，最近點可能落在另一側，逐面翻會在臉上翻出破洞"""
+    tree, normals = ref
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.normal_update()
+    seen = set()
+    flipped = 0
+    for f0 in bm.faces:
+        if f0.index in seen:
+            continue
+        comp, stack = [], [f0]
+        seen.add(f0.index)
+        while stack:
+            f = stack.pop()
+            comp.append(f)
+            for e in f.edges:
+                if len(e.link_faces) != 2:
+                    continue  # 非流形邊不跨越：與 recalc_face_normals 的區塊劃分一致
+                for g in e.link_faces:
+                    if g.index not in seen:
+                        seen.add(g.index)
+                        stack.append(g)
+        vote = 0.0
+        for f in comp:
+            _, _, i, d = tree.find_nearest(f.calc_center_median())
+            if i is not None and d < 0.003:
+                vote += f.calc_area() * (1 if f.normal.dot(normals[i]) > 0 else -1)
+        if vote < 0:
+            for f in comp:
+                f.normal_flip()
+            flipped += len(comp)
+    print(f'[violinist] orient: flipped {flipped} faces')
+
+
+def bake_normals(rig, me, high):
+    """由高模烘焙切線空間法線貼圖到低模 LOD0（rest pose）。結果快取成 PNG，
+    來源比快取新或 VIOLINIST_REBAKE=1 時才重烘"""
+    cache = os.path.join(OUT_BLEND, BAKE_CACHE)
+    fresh = os.path.exists(cache) and os.path.getmtime(cache) > max(os.path.getmtime(SRC_HIGH), os.path.getmtime(SRC_CHAR), os.path.getmtime(__file__))
+    if fresh and os.environ.get('VIOLINIST_REBAKE') != '1':
+        img = bpy.data.images.load(cache)
+        img.colorspace_settings.name = 'Non-Color'
+        print('[violinist] normal bake (cached)', cache)
+        return img
+    if high is None:
+        return None
+    import time
+    t0 = time.time()
+    high.hide_render = False
+    sc = bpy.context.scene
+    sc.render.engine = 'CYCLES'
+    try:
+        prefs = bpy.context.preferences.addons['cycles'].preferences
+        for dev_type in ('METAL', 'OPTIX', 'CUDA', 'HIP', 'ONEAPI'):
+            try:
+                prefs.compute_device_type = dev_type
+                prefs.get_devices()
+                if any(d.type == dev_type for d in prefs.devices):
+                    for d in prefs.devices:
+                        d.use = d.type == dev_type
+                    sc.cycles.device = 'GPU'
+                    print('[violinist] bake device', dev_type)
+                    break
+            except TypeError:
+                continue
+    except Exception as e:  # 沒有 GPU 就用 CPU
+        print('[violinist] bake on CPU', e)
+    sc.cycles.samples = 1
+    rig.data.pose_position = 'REST'
+
+    img = bpy.data.images.new('violet_normal_bake', BAKE_SIZE, BAKE_SIZE, alpha=False, float_buffer=True)
+    img.colorspace_settings.name = 'Non-Color'
+    mat = me.data.materials[0]
+    node = mat.node_tree.nodes.new('ShaderNodeTexImage')
+    node.image = img
+    mat.node_tree.nodes.active = node
+
+    bpy.ops.object.select_all(action='DESELECT')
+    high.select_set(True)
+    me.select_set(True)
+    bpy.context.view_layer.objects.active = me
+    bake = sc.render.bake
+    bake.use_selected_to_active = True
+    bake.cage_extrusion = BAKE_CAGE
+    bake.max_ray_distance = BAKE_RAY
+    bake.margin = 16
+    bake.normal_space = 'TANGENT'
+    bpy.ops.object.bake(type='NORMAL')
+    rig.data.pose_position = 'POSE'
+    mat.node_tree.nodes.remove(node)
+
+    high.hide_render = True
+    clean_normal_bake(img)
+    os.makedirs(OUT_BLEND, exist_ok=True)
+    img.filepath_raw = cache
+    img.file_format = 'PNG'
+    sc.render.image_settings.color_depth = '16'
+    img.save()
+    out = bpy.data.images.load(cache)
+    out.colorspace_settings.name = 'Non-Color'
+    bpy.data.images.remove(img)
+    print(f'[violinist] normal bake {time.time() - t0:.0f}s -> {cache}')
+    return out
+
+
+def clean_normal_bake(img):
+    """切線空間法線不可能朝向表面後方（z < 0）：那是光線打到薄布料 / 髮片另一側的失敗樣本。
+    z 低於門檻的像素淡回平面法線 (0, 0, 1)，避免身上出現黑斑"""
+    px = np.empty(img.size[0] * img.size[1] * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(-1, 4)
+    n = px[:, :3] * 2 - 1
+    k = smoothstep_np(0.05, 0.35, n[:, 2])[:, None]
+    n = n * k + np.array((0, 0, 1), dtype=np.float32) * (1 - k)
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-6)
+    print(f'[violinist] normal bake cleaned {(k[:, 0] < 0.99).mean() * 100:.1f}% px')
+    px[:, :3] = n * 0.5 + 0.5
+    img.pixels.foreach_set(px.ravel())
+    img.update()
+
+
+def use_normal_map(me, nimg):
+    """法線貼圖接上 M_Violet：4K 另存 WebP（桌機延遲載入），GLB 內縮成 2048"""
+    save_hires(nimg, 'violet_normal_4k.webp')
+    img = nimg.copy()
+    img.name = 'violet_normal'
+    if img.size[0] > TEX_SIZE:
+        img.scale(TEX_SIZE, TEX_SIZE)
+    mat = me.data.materials[0]
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
+    tex = nt.nodes.new('ShaderNodeTexImage')
+    tex.image = img
+    nm = nt.nodes.new('ShaderNodeNormalMap')
+    nt.links.new(tex.outputs['Color'], nm.inputs['Color'])
+    nt.links.new(nm.outputs['Normal'], bsdf.inputs['Normal'])
 
 
 def make_lod1(lod0, rig):
@@ -909,6 +1120,7 @@ def export(rig, objs):
         export_image_format='WEBP', export_image_quality=88, export_def_bones=False, export_force_sampling=True,
         export_optimize_animation_size=True, export_meshopt_compression_enable=True,
         export_attributes=True,  # _FACEMASK（臉部遮罩，遊戲 shader 使用）
+        export_tangents=True,  # 法線貼圖的切線空間與 Blender 烘焙一致（MikkTSpace）；沒有切線時 three 會改用螢幕空間導數
     )
     print('[violinist] exported', path, os.path.getsize(path) // 1024, 'KB')
 
@@ -943,12 +1155,22 @@ def preview(rig):
 def main(do_export=True):
     reset()
     rig, me = load_char()
-    weld_and_smooth(me)
+    high = load_high(me)  # 在焊接 / 細分改變外框之前對齊
+    weld_and_smooth(me, high_reference(high) if high else None)
     fidx = foot_verts(me)
+    z0 = me.data.vertices[0].co.z
     ground(rig, me, fidx)
+    if high:
+        # 網格是骨架的子物件，ground() 會讓網格資料實際位移 2×dz：以實測位移對齊高模
+        high.matrix_world = Matrix.Translation((0, 0, me.data.vertices[0].co.z - z0)) @ high.matrix_world
     remove_inner_face_layer(me)  # FACE_CENTER 是接地後的座標
     fidx = foot_verts(me)  # 刪面會一併移除孤立頂點，頂點索引改變
     face_normals(me)
+    nimg = bake_normals(rig, me, high)  # 在最終拓撲 / 法線上烘焙（切線空間要與匯出的一致）
+    if high:
+        hm = high.data
+        bpy.data.objects.remove(high, do_unlink=True)
+        bpy.data.meshes.remove(hm)
     walk_ref = measure_gait(rig, 'Walk', 24)
     run_ref = measure_gait(rig, 'Run', 15)
     add_prop_bones(rig)
@@ -957,6 +1179,8 @@ def main(do_export=True):
     bow = build_bow()
     attach(bow, rig, 'prop_bow')
     prep_material(me)
+    if nimg:
+        use_normal_map(me, nimg)
     build_actions(rig, me, fidx)
     lod1 = make_lod1(me, rig)
     os.makedirs(OUT_BLEND, exist_ok=True)

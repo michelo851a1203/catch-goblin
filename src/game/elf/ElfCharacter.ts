@@ -70,7 +70,7 @@ export class ElfCharacter implements CharacterModel {
   readonly springs = new SecondaryMotion()
   lodLevel = 0
   error: unknown = null
-  hiResLoaded = false
+  readonly hiResLoaded = new Set<'map' | 'normalMap'>()
 
   private fallback: CharacterModel | null
   private model: THREE.Object3D | null = null
@@ -146,7 +146,7 @@ export class ElfCharacter implements CharacterModel {
         }
       }
     })
-    if (rig.hiResMap && !this.lowEnd) void this.loadHiRes(scene, rig.hiResMap)
+    if ((rig.hiResMap || rig.hiResNormal) && !this.lowEnd) void this.loadHiRes(scene)
 
     // 動作
     this.mixer = new THREE.AnimationMixer(scene)
@@ -204,46 +204,51 @@ export class ElfCharacter implements CharacterModel {
     if (this.opacity < 1) this.applyOpacity()
   }
 
-  // 高解析色彩貼圖：模型先以 GLB 內的 2048² 貼圖顯示，載入完成後替換（失敗就維持原貼圖）
-  private async loadHiRes(scene: THREE.Object3D, url: string) {
+  // 高解析貼圖：模型先以 GLB 內的 2048² 貼圖顯示，載入完成後替換（各張獨立，失敗就維持原貼圖）
+  private async loadHiRes(scene: THREE.Object3D) {
     const loader = this.opts.loadTexture === undefined ? defaultLoadTexture : this.opts.loadTexture
     if (!loader) return
-    let tex: THREE.Texture
-    try {
-      tex = await loader(url)
-    } catch (e) {
-      console.warn('[ElfCharacter] 高解析貼圖載入失敗，沿用 GLB 貼圖', e)
-      return
-    }
-    if (this.status === 'disposed' || this.model !== scene) {
-      tex.dispose()
-      return
-    }
     const mats = new Set<THREE.MeshStandardMaterial>()
     scene.traverse((o) => {
       const m = o as THREE.Mesh
       if (!m.isMesh) return
       for (const mat of Array.isArray(m.material) ? m.material : [m.material]) if (mat.name === this.rig.atlasMaterial) mats.add(mat as THREE.MeshStandardMaterial)
     })
-    const old = [...mats][0]?.map
-    if (!old) {
-      tex.dispose()
-      return
-    }
-    // 沿用 GLB 貼圖的取樣設定（glTF 貼圖不翻轉 Y）
-    tex.flipY = old.flipY
-    tex.wrapS = old.wrapS
-    tex.wrapT = old.wrapT
-    tex.channel = old.channel
-    tex.colorSpace = THREE.SRGBColorSpace
-    tex.anisotropy = old.anisotropy
-    tex.needsUpdate = true
-    for (const mat of mats) {
-      if (mat.map === old) mat.map = tex
-      if (mat.emissiveMap === old) mat.emissiveMap = tex
-    }
-    old.dispose()
-    this.hiResLoaded = true
+    const slots: ['map' | 'normalMap', string | undefined, THREE.ColorSpace][] = [
+      ['map', this.rig.hiResMap, THREE.SRGBColorSpace],
+      ['normalMap', this.rig.hiResNormal, THREE.NoColorSpace],
+    ]
+    await Promise.all(
+      slots.map(async ([slot, url, colorSpace]) => {
+        const old = [...mats][0]?.[slot]
+        if (!url || !old) return
+        let tex: THREE.Texture
+        try {
+          tex = await loader(url)
+        } catch (e) {
+          console.warn('[ElfCharacter] 高解析貼圖載入失敗，沿用 GLB 貼圖', url, e)
+          return
+        }
+        if (this.status === 'disposed' || this.model !== scene) {
+          tex.dispose()
+          return
+        }
+        // 沿用 GLB 貼圖的取樣設定（glTF 貼圖不翻轉 Y）
+        tex.flipY = old.flipY
+        tex.wrapS = old.wrapS
+        tex.wrapT = old.wrapT
+        tex.channel = old.channel
+        tex.colorSpace = colorSpace
+        tex.anisotropy = slot === 'map' ? old.anisotropy : 4
+        tex.needsUpdate = true
+        for (const mat of mats) {
+          if (mat[slot] === old) mat[slot] = tex
+          if (slot === 'map' && mat.emissiveMap === old) mat.emissiveMap = tex
+        }
+        old.dispose()
+        this.hiResLoaded.add(slot)
+      }),
+    )
   }
 
   // 隱身：0 = 看不見（哥布林視角）、0~1 = 半透明（精靈玩家自己看）、1 = 正常
