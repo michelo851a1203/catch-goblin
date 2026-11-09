@@ -30,6 +30,18 @@ const TIMEOUT = 15000
 // ICE 斷線後等待恢復的時間，超過就視為對方離線
 const ICE_GRACE = 8000
 const RECONNECT_DELAY = 3000
+// ───── 房主端的防濫用限制 ─────
+// 連上後這段時間內沒有被接受為玩家（沒送 hello、或 hello 不合格）就斷開，避免陌生連線一直掛著偷看廣播
+const HELLO_TIMEOUT = TIMEOUT
+// 送出 reject 後等一下再斷線，讓對方收得到原因
+const REJECT_LINGER = 1000
+// 同時保留的連線上限：玩家 + 幾條正在握手的連線；超過的新連線直接回絕
+const MAX_CONNS = MAX_PLAYERS + 3
+// 房主收到的單一訊息大小上限（加入者只會送操作、暱稱這類小訊息）
+const MAX_MSG_BYTES = 4096
+// 每條連線的訊息速率（token bucket）：加入者正常約 20 則/秒（位置）+ 零星技能，超過的訊息直接丟掉
+const MSG_RATE = 40
+const MSG_BURST = 80
 // CrazyGames 使用者名稱最長 20 字元
 export const NAME_MAX = 20
 const NAME_KEY = 'goblin-game.nickname'
@@ -114,6 +126,20 @@ type LobbyMsg =
   | { t: 'reject'; why: RoomError }
   | { t: 'start'; slots: [string, Slot][]; kind?: ElfKind }
 
+interface Conn {
+  reliable?: DataConnection
+  unreliable?: DataConnection
+  connected: boolean
+  iceTimer: number
+  // 房主：等待 hello 的計時器
+  helloTimer: number
+  // 房主：已送出 reject，等待斷線中（不再處理對方的訊息）
+  rejected: boolean
+  // 房主：訊息速率限制
+  tokens: number
+  lastRefill: number
+}
+
 class RoomFail extends Error {
   why: RoomError
   idTaken = false // 房號已被使用（建立房間時換一個重試）
@@ -138,7 +164,7 @@ export class Room {
 
   private peer: Peer
   // 每位對方兩條資料通道：reliable 與 unreliable（不保證順序，對應遊戲狀態廣播）
-  private conns = new Map<string, { reliable?: DataConnection; unreliable?: DataConnection; connected: boolean; iceTimer: number }>()
+  private conns = new Map<string, Conn>()
   // 連線階段的 PeerJS 錯誤交給正在等待的 Promise
   private pendingFail: ((why: RoomFail) => void) | null = null
   private unload = () => this.peer.destroy()
@@ -295,15 +321,23 @@ export class Room {
   // 兩條資料通道都打開才算連上；任一條關閉就算離線
   private attachConn(c: DataConnection) {
     const id = c.peer
+    if (c.label !== 'reliable' && c.label !== 'unreliable') return c.close()
     let entry = this.conns.get(id)
     if (!entry) {
-      entry = { connected: false, iceTimer: 0 }
+      // 房主：連線數已達上限，告知「人數已滿」後斷開，不佔用名額
+      if (this.state.host && this.conns.size >= MAX_CONNS) return this.refuse(c)
+      entry = { connected: false, iceTimer: 0, helloTimer: 0, rejected: false, tokens: MSG_BURST, lastRefill: performance.now() }
       this.conns.set(id, entry)
+      if (this.state.host) {
+        const e = entry
+        e.helloTimer = window.setTimeout(() => {
+          if (!this.isPlayer(id)) this.dropConn(id, e)
+        }, HELLO_TIMEOUT)
+      }
     }
     const e = entry
     if (c.label === 'reliable') e.reliable = c
-    else if (c.label === 'unreliable') e.unreliable = c
-    else return c.close()
+    else e.unreliable = c
     c.on('open', () => {
       if (e.connected || !e.reliable?.open || !e.unreliable?.open) return
       e.connected = true
@@ -312,6 +346,7 @@ export class Room {
     })
     c.on('data', (data) => {
       if (typeof data !== 'string') return
+      if (this.state.host && (e.rejected || data.length > MAX_MSG_BYTES || !this.takeToken(e))) return
       try {
         this.onMessage(id, JSON.parse(data))
       } catch {
@@ -327,9 +362,10 @@ export class Room {
     })
   }
 
-  private dropConn(id: string, e: { reliable?: DataConnection; unreliable?: DataConnection; iceTimer: number }) {
+  private dropConn(id: string, e: Conn) {
     if (this.conns.get(id) !== e) return
     clearTimeout(e.iceTimer)
+    clearTimeout(e.helloTimer)
     this.conns.delete(id)
     e.reliable?.close()
     e.unreliable?.close()
@@ -362,8 +398,53 @@ export class Room {
     }
   }
 
+  // 房主：只廣播給已被接受的玩家；還在握手、或被拒絕的連線收不到大廳與遊戲狀態
   private broadcast(msg: LobbyMsg | object, reliable = true) {
-    for (const id of this.conns.keys()) this.sendTo(id, msg, reliable)
+    for (const p of this.state.players) if (p.id !== this.state.me) this.sendTo(p.id, msg, reliable)
+  }
+
+  private isPlayer(id: string) {
+    return this.state.players.some((p) => p.id === id)
+  }
+
+  // 房主：回絕並在對方收到原因後斷線
+  private reject(id: string, why: RoomError) {
+    const e = this.conns.get(id)
+    if (!e || e.rejected) return
+    this.sendTo(id, { t: 'reject', why })
+    e.rejected = true
+    setTimeout(() => this.dropConn(id, e), REJECT_LINGER)
+  }
+
+  // 房主：超過連線上限的新連線，不記錄在 conns，打開後送出 reject 就關閉
+  private refuse(c: DataConnection) {
+    c.on('error', () => {})
+    // unreliable 通道晚一點關，避免對方先偵測到斷線、看不到「人數已滿」
+    if (c.label !== 'reliable') {
+      c.on('open', () => setTimeout(() => c.close(), REJECT_LINGER * 2))
+      setTimeout(() => c.open || c.close(), HELLO_TIMEOUT)
+      return
+    }
+    c.on('open', () => {
+      try {
+        void c.send(JSON.stringify({ t: 'reject', why: 'full' }))
+      } catch {
+        /* 對方剛斷線 */
+      }
+      setTimeout(() => c.close(), REJECT_LINGER)
+    })
+    // 對方一直沒打開通道也不要掛著
+    setTimeout(() => c.open || c.close(), HELLO_TIMEOUT)
+  }
+
+  // 房主：每條連線的訊息速率限制
+  private takeToken(e: Conn) {
+    const now = performance.now()
+    e.tokens = Math.min(MSG_BURST, e.tokens + ((now - e.lastRefill) / 1000) * MSG_RATE)
+    e.lastRefill = now
+    if (e.tokens < 1) return false
+    e.tokens--
+    return true
   }
 
   private onMessage(from: string, m: LobbyMsg | { t: string }) {
@@ -371,13 +452,14 @@ export class Room {
     if (s.host) {
       if (m.t === 'hello') {
         const v = (m as { v: number }).v
-        if (v !== PROTO) return this.sendTo(from, { t: 'reject', why: 'version' })
+        if (v !== PROTO) return this.reject(from, 'version')
         const token = String((m as { token?: unknown }).token ?? '').slice(0, 20)
         if (s.phase === 'playing') return this.rejoin(from, token, cleanName((m as { name?: unknown }).name))
+        const known = this.isPlayer(from)
+        if (!known && s.players.length >= MAX_PLAYERS) return this.reject(from, 'full')
         // 同一個識別碼已經在房間內（例如同一個瀏覽器開兩個分頁）時不記錄，避免互相頂替
         if (token && ![...this.tokens.values()].includes(token)) this.tokens.set(from, token)
-        if (s.players.length >= MAX_PLAYERS) return this.sendTo(from, { t: 'reject', why: 'full' })
-        if (!s.players.some((p) => p.id === from)) {
+        if (!known) {
           let n = 1
           while (s.players.some((p) => p.n === n)) n++
           s.players.push({ id: from, n, pick: 'random', name: cleanName((m as { name?: unknown }).name) })
@@ -385,6 +467,8 @@ export class Room {
         this.broadcast({ t: 'lobby', players: s.players })
         return
       }
+      // 還沒被接受為玩家的連線只能送 hello
+      if (!this.isPlayer(from)) return
       if (m.t === 'pick') return this.applyPick(from, (m as { pick: Pick }).pick, (m as { elf?: unknown }).elf)
       if (m.t === 'name') return this.applyName(from, cleanName((m as { name?: unknown }).name))
     } else if (from === this.hostId) {
@@ -404,7 +488,7 @@ export class Room {
       }
     }
     // 其餘是遊戲中的訊息；只接受房主 ⇄ 玩家之間的通訊
-    if (s.phase === 'playing' && (s.host || from === this.hostId)) for (const fn of this.gameListeners) fn(from, m)
+    if (s.phase === 'playing' && (s.host ? this.isPlayer(from) : from === this.hostId)) for (const fn of this.gameListeners) fn(from, m)
   }
 
   private applyPick(id: string, pick: Pick, elf?: unknown) {
@@ -427,10 +511,10 @@ export class Room {
     if (stale) this.onDisconnected(stale)
     const d = token ? this.dropped.get(token) : undefined
     const link = this.link
-    if (!d || !link || s.players.some((p) => p.id === from)) return this.sendTo(from, { t: 'reject', why: 'started' })
+    if (!d || !link || this.isPlayer(from)) return this.reject(from, 'started')
     const player = { id: from, n: d.n, pick: d.pick, name: name || d.name }
     const slot = this.rejoinHandler?.(from, d.slot, player.name, player.n) ?? null
-    if (slot === null) return this.sendTo(from, { t: 'reject', why: 'started' })
+    if (slot === null) return this.reject(from, 'started')
     this.dropped.delete(token)
     this.tokens.set(from, token)
     s.players.push(player)
@@ -505,7 +589,10 @@ export class Room {
 
   private dispose() {
     this.closed = true
-    for (const e of this.conns.values()) clearTimeout(e.iceTimer)
+    for (const e of this.conns.values()) {
+      clearTimeout(e.iceTimer)
+      clearTimeout(e.helloTimer)
+    }
     window.removeEventListener('pagehide', this.unload)
     this.peer.destroy()
   }

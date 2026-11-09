@@ -138,6 +138,15 @@ export function createHudState(role: Role, elfKind: ElfKind = 'harp'): HudState 
 const v1 = new THREE.Vector3()
 const v2 = new THREE.Vector3()
 
+// 網路傳來的方向 [x, z]：只接受有限數值。`Number(x) || 0` 擋不住 1e400 → Infinity，正規化後會變成 NaN 污染位置與快照
+function finite(v: unknown) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+function vec2(d: unknown) {
+  return Array.isArray(d) ? new THREE.Vector3(finite(d[0]), 0, finite(d[1])) : new THREE.Vector3()
+}
+
 function d2(a: THREE.Vector3, b: THREE.Vector3) {
   return Math.hypot(a.x - b.x, a.z - b.z)
 }
@@ -515,7 +524,7 @@ export class Game {
       const elf = this.elf
       if (!(elf.kind === 'violin' ? VIOLIN_ACTS : HARP_ACTS).includes(act)) return
       const dirOf = () => {
-        const dir = Array.isArray(d) ? new THREE.Vector3(Number(d[0]) || 0, 0, Number(d[1]) || 0) : new THREE.Vector3()
+        const dir = vec2(d)
         if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
         return dir.normalize()
       }
@@ -523,7 +532,7 @@ export class Game {
       else if (act === 'eye') this.violinEye()
       else if (act === 'charge') this.violinCharge(dirOf())
       else if (act === 'gaze') {
-        const dir = Array.isArray(d) ? new THREE.Vector3(Number(d[0]) || 0, 0, Number(d[1]) || 0) : new THREE.Vector3()
+        const dir = vec2(d)
         if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
         this.elfGaze(dir.normalize())
       } else if (act === 'music') elf.channel >= 0 ? this.elfStopMusic() : this.elfStartMusic()
