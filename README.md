@@ -235,7 +235,7 @@ TURN（讓嚴格 NAT 的玩家也連得上）使用 **Cloudflare TURN**：[`work
 | `VITE_PEER_ICE_SERVERS` | 沒有 TURN Worker 時的 STUN / TURN 設定，`RTCIceServer[]` 的 JSON |
 | `VITE_PEER_HOST` / `VITE_PEER_PORT` / `VITE_PEER_PATH` / `VITE_PEER_KEY` | 改用自架的 PeerServer |
 
-Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wrangler.toml) 的 `ALLOWED_ORIGINS`（預設：`*.crazygames.com`、Cloudflare Pages 測試站、localhost）。
+Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wrangler.toml) 的 `ALLOWED_ORIGINS`（預設：`*.crazygames.com`、Cloudflare Pages 測試站；正式環境不含 localhost，本機測 Worker 請用 `worker/turn/.dev.vars` 覆寫）。Worker 另有每個 IP 每分鐘 30 次的限流，憑證有效 2 小時；建議在 Cloudflare Dashboard 的 Billing / Notifications 設定 TURN 用量警示。
 
 ### ☁️ crazy-game 分支的自動部署
 

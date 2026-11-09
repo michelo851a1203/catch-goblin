@@ -8,6 +8,20 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
 [vars]
-# CrazyGames 的遊戲檔案放在 <slug>.game-files.crazygames.com；pages.dev 是 GitHub Actions 部署的測試站；localhost 給本機 dev / preview
-ALLOWED_ORIGINS = "https://*.crazygames.com,https://elf-and-goblins.pages.dev,https://crazy-game.elf-and-goblins.pages.dev,http://localhost:5173,http://localhost:4173"
-TURN_TTL = "86400"
+# CrazyGames 的遊戲檔案放在 <slug>.game-files.crazygames.com；pages.dev 是 GitHub Actions 部署的測試站
+# 拿到 CrazyGames 的 slug 後，建議把 https://*.crazygames.com 改成 https://<slug>.game-files.crazygames.com
+# 正式環境不允許 localhost。本機用 `wrangler dev` 測 Worker 時，在 worker/turn/.dev.vars 覆寫：
+#   ALLOWED_ORIGINS="http://localhost:5173,http://localhost:4173"
+# （本機 `bun run dev` 連不到正式 Worker 時會自動退回 STUN，同一台電腦 / 同網段的多人連線不受影響）
+ALLOWED_ORIGINS = "https://*.crazygames.com,https://elf-and-goblins.pages.dev,https://crazy-game.elf-and-goblins.pages.dev"
+# 憑證有效 2 小時（遊戲端到期前 1 小時換新，所以必須大於 3600）
+TURN_TTL = "7200"
+
+# 限流：同一個 IP 每 60 秒最多 30 次（學校 / 網咖可能很多玩家共用一個 IP，不要設太低）。
+# 遊戲端會快取憑證約 1 小時，正常玩家一次遊玩只會呼叫 1 次左右
+# 用 unsafe.bindings 寫法，wrangler 3 / 4 都支援
+[[unsafe.bindings]]
+name = "ICE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }

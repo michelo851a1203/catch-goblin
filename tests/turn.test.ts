@@ -44,10 +44,40 @@ describe('TURN worker', () => {
     const res = await worker.fetch(new Request('https://w.dev/ice', { headers: { Origin: origin } }), env)
     expect(res.status).toBe(200)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin)
-    expect(await res.json()).toEqual({ iceServers: [{ urls: ['turns:turn.cloudflare.com:443?transport=tcp'], username: 'u', credential: 'c' }], ttl: 86400 })
+    expect(await res.json()).toEqual({ iceServers: [{ urls: ['turns:turn.cloudflare.com:443?transport=tcp'], username: 'u', credential: 'c' }], ttl: 7200 })
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('https://rtc.live.cloudflare.com/v1/turn/keys/kid/credentials/generate-ice-servers')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer secret')
+  })
+})
+
+describe('TURN worker 限流', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const origin = 'https://a.game-files.crazygames.com'
+  const req = (ip = '1.2.3.4') => new Request('https://w.dev/ice', { headers: { Origin: origin, 'CF-Connecting-IP': ip } })
+
+  it('超過限流回 429（帶 CORS），且不會呼叫 Cloudflare', async () => {
+    const f = vi.fn()
+    vi.stubGlobal('fetch', f)
+    const limit = vi.fn(async () => ({ success: false }))
+    const res = await worker.fetch(req(), { ...env, ICE_LIMITER: { limit } })
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin)
+    expect(limit).toHaveBeenCalledWith({ key: '1.2.3.4' })
+    expect(f).not.toHaveBeenCalled()
+  })
+
+  it('OPTIONS 預檢與白名單外的來源不計入限流', async () => {
+    const limit = vi.fn(async () => ({ success: true }))
+    await worker.fetch(new Request('https://w.dev/ice', { method: 'OPTIONS', headers: { Origin: origin } }), { ...env, ICE_LIMITER: { limit } })
+    await worker.fetch(new Request('https://w.dev/ice', { headers: { Origin: 'https://evil.io' } }), { ...env, ICE_LIMITER: { limit } })
+    expect(limit).not.toHaveBeenCalled()
+  })
+
+  it('Cloudflare 回傳格式錯誤時回 502，不會讓 Worker 拋錯', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not json', { status: 201 })))
+    const res = await worker.fetch(req(), env)
+    expect(res.status).toBe(502)
   })
 })
 

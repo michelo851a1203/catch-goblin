@@ -7,11 +7,13 @@ export interface Env {
   TURN_KEY_API_TOKEN: string
   // 允許呼叫的網頁來源，逗號分隔；支援 https://*.crazygames.com 這種子網域萬用字元
   ALLOWED_ORIGINS: string
-  // 憑證有效秒數（預設 24 小時）
+  // 憑證有效秒數（預設 2 小時）。遊戲端（src/net/ice.ts）在到期前 1 小時換新，所以要大於 3600 才會快取
   TURN_TTL?: string
+  // Workers Rate Limiting binding（wrangler.toml 的 unsafe.bindings）。沒有綁定時（本機測試）不限流
+  ICE_LIMITER?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
 }
 
-const DEFAULT_TTL = 86400
+const DEFAULT_TTL = 7200
 
 // 來源比對：scheme 與 port 要相同；*.example.com 只比對子網域（不含 example.com 本身）
 export function originAllowed(origin: string | null, patterns: string): boolean {
@@ -62,6 +64,14 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers })
     if (req.method !== 'GET' || new URL(req.url).pathname !== '/ice') return new Response('Not found', { status: 404, headers })
 
+    // Origin 可以被偽造，真正擋濫用的是限流：同一個 IP 短時間內要太多次憑證就拒絕。
+    // 遊戲端拿到非 2xx 會退回只用 STUN，不會卡住
+    if (env.ICE_LIMITER) {
+      const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown'
+      const { success } = await env.ICE_LIMITER.limit({ key: ip })
+      if (!success) return new Response('Too many requests', { status: 429, headers: { ...headers, 'Retry-After': '60' } })
+    }
+
     const ttl = Number(env.TURN_TTL) || DEFAULT_TTL
     const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
       method: 'POST',
@@ -69,7 +79,13 @@ export default {
       body: JSON.stringify({ ttl }),
     })
     if (!res.ok) return new Response('TURN unavailable', { status: 502, headers })
-    const { iceServers } = (await res.json()) as { iceServers: RTCIceServer[] }
+    let iceServers: RTCIceServer[]
+    try {
+      ;({ iceServers } = (await res.json()) as { iceServers: RTCIceServer[] })
+      if (!Array.isArray(iceServers)) throw new Error('bad response')
+    } catch {
+      return new Response('TURN unavailable', { status: 502, headers })
+    }
     return Response.json({ iceServers: dropPort53(iceServers), ttl }, { headers: { ...headers, 'Cache-Control': 'no-store' } })
   },
 }
