@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Deploy TURN worker
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -61,7 +61,7 @@ jobs:
           VITE_TURN_URL: ${{ vars.VITE_TURN_URL }}
 
       # 下載後解壓得到的就是遊戲檔案，重新壓成 zip（index.html 在最上層）即可上傳到 CrazyGames Developer Portal
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: crazygames-build
           path: dist
@@ -77,7 +77,7 @@ jobs:
 
       # 網站：https://elf-and-goblins.pages.dev（正式分支為 crazy-game）
       - name: Deploy website to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
