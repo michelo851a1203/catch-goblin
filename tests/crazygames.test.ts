@@ -132,4 +132,15 @@ describe('crazygames', () => {
     expect(touch2.isTouchDevice()).toBe(false)
     expect(touch2.touchMode.value).toBe(false)
   })
+
+  it('Cloudflare Pages 等其他網域：不讀 SDK 裝置類型，維持原本的 media query 判斷', async () => {
+    const sdk = fakeSdk()
+    Object.assign(sdk.user, { systemInfo: { device: { type: 'mobile' } } })
+    await load(sdk, 'elf-and-goblins.pages.dev')
+    expect(sdk.init).not.toHaveBeenCalled()
+    const touch = await import('../src/input/touch')
+    // 測試環境沒有 matchMedia → coarse() 為 false；SDK 回報的 mobile 不會被套用
+    expect(touch.isTouchDevice()).toBe(false)
+    expect(touch.touchMode.value).toBe(false)
+  })
 })
