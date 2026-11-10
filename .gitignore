@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *-build.zip
+# 上傳 CrazyGames 用的解壓版 build（Developer Portal 不收 zip）
+crazygames-build/
 *.local
 
 # Editor directories and files
