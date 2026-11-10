@@ -243,7 +243,23 @@ Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wra
 
 1. 部署 TURN Worker
 2. 跑測試、建置，並把 `dist` 上傳為 `crazygames-build` artifact（重新壓成 zip 即可上傳到 CrazyGames）
-3. 部署測試站到 Cloudflare Pages：`https://elf-and-goblins.pages.dev`
+3. 設定 `SITE_URL` 再建置一次網站版，部署到 Cloudflare Pages：`https://elf-and-goblins.pages.dev`
+
+#### 🔎 網站版的 SEO 與社群卡片
+
+網站版（Cloudflare Pages）和 CrazyGames 版用同一份程式碼，差別只在建置時有沒有設定 `SITE_URL`。設定時 [`site/plugin.ts`](site/plugin.ts) 會：
+
+- 在 `index.html` 注入 `description`、`canonical`、Open Graph、X（`summary_large_image`）與 `VideoGame` JSON-LD，貼到 X / Bluesky / Threads / Facebook / LINE / Discord 都會顯示卡片
+- 在 `#app` 放入 [`site/content.html`](site/content.html)（遊戲介紹、玩法、FAQ），兼作載入畫面；不跑 JS 的爬蟲與 AI 也讀得到，Vue 掛載後會被取代
+- 拿掉 CrazyGames SDK，並輸出 `robots.txt`、`sitemap.xml`、`llms.txt` 與卡片圖 [`site/public/og-image.jpg`](site/public/og-image.jpg)（1200×630）
+
+`bun run package`（CrazyGames zip）不設定 `SITE_URL`，輸出完全不變。本機預覽網站版：
+
+```bash
+SITE_URL=https://elf-and-goblins.pages.dev bun run build && bun run preview
+```
+
+> 修改遊戲規則或技能時，記得同步 `site/content.html` 與 `site/llms.txt`。綁自訂網域後，到 GitHub 的 Actions Variables 設定 `SITE_URL`，並把網域加進 TURN Worker 的 `ALLOWED_ORIGINS`。部署後可用 [opengraph.xyz](https://www.opengraph.xyz/) 或各平台的卡片預覽工具檢查。
 
 ### 🌐 部署到 GitHub Pages
 
@@ -288,6 +304,7 @@ goblin-game/
 │   │       ├── Effects.ts         # 技能特效、環境特效
 │   │       └── atlas.ts           # 粒子貼圖集
 │   └── assets/art/                # 選角卡片立繪
+├── site/                          # 網站版（SITE_URL）專用：SEO 外掛、介紹文字、社群卡片圖
 └── docs/screenshots/              # README 截圖
 ```
 

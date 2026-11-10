@@ -1,0 +1,10 @@
+# Elf & Goblins
+
+> Elf & Goblins is a free 3D asymmetric hide-and-seek browser game (1 elf vs 8 goblins). Play as the elf and capture every goblin within 10 minutes, or as a goblin and survive with your crew. Solo vs AI or online multiplayer for up to 9 players with a 4-digit room code. No download or sign-up; works on desktop and mobile browsers with WebGL 2.
+
+- Play: {{SITE_URL}}
+- Sides: Harp Elf (Gaze, Harp, Stun, Capture), Amethyst Violinist elf (Invisibility, Assassin's Eye, Charge, Capture), Cave Goblin (Dash, Interfere, Break Free, Goblin Radar)
+- Map: a grassland with five goblin caves (two entrances each) and a cage at the center
+- Match length: up to 10 minutes
+- Languages: English, Traditional Chinese
+- Price: free

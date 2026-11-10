@@ -8,6 +8,7 @@ name: CrazyGames build & Cloudflare deploy
 #     CLOUDFLARE_ACCOUNT_ID：Cloudflare 帳號 ID
 #   Variables
 #     VITE_TURN_URL：TURN Worker 的網址，例如 https://elf-and-goblins-turn.<子網域>.workers.dev/ice
+#     SITE_URL（選填）：網站版的正式網址，預設 https://elf-and-goblins.pages.dev/；綁自訂網域後改這裡
 # TURN 金鑰（TURN_KEY_ID / TURN_KEY_API_TOKEN）只設定在 Worker 上，不放在 GitHub
 on:
   push:
@@ -66,8 +67,16 @@ jobs:
           path: dist
           retention-days: 30
 
-      # 測試站：https://elf-and-goblins.pages.dev（正式分支為 crazy-game；在 CrazyGames 以外的網域，SDK 會自動停用）
-      - name: Deploy preview to Cloudflare Pages
+      # 網站版：同一份程式碼再建置一次，設定 SITE_URL 注入 SEO / 社群卡片 / robots / sitemap，並拿掉 CrazyGames SDK（見 site/plugin.ts）。
+      # 上面上傳的 crazygames-build artifact 已經建置完成，不受影響
+      - name: Build website (SEO + social cards)
+        run: bun run build
+        env:
+          VITE_TURN_URL: ${{ vars.VITE_TURN_URL }}
+          SITE_URL: ${{ vars.SITE_URL || 'https://elf-and-goblins.pages.dev/' }}
+
+      # 網站：https://elf-and-goblins.pages.dev（正式分支為 crazy-game）
+      - name: Deploy website to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

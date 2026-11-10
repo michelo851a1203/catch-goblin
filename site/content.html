@@ -1,0 +1,70 @@
+      <!-- 網站版（SITE_URL）建置時由 site/plugin.ts 插入 #app：遊戲載入前當作載入畫面，Vue 掛載後被取代。
+           不跑 JS 的爬蟲（社群卡片、AI 爬蟲）靠這段文字認識遊戲；修改遊戲規則時記得同步這裡 -->
+      <style>
+        #seo{position:fixed;inset:0;overflow:auto;background:radial-gradient(ellipse at 50% 0%,#1b4a33 0%,#0b1411 60%);color:#f1e6c8;font:17px/1.6 Georgia,'Times New Roman',serif;-webkit-user-select:text;user-select:text}
+        #seo .wrap{max-width:760px;margin:0 auto;padding:48px 20px 64px}
+        #seo header{text-align:center;padding:4vh 0 28px}
+        #seo .eyebrow{letter-spacing:.3em;text-transform:uppercase;font-size:13px;color:#cdb67a}
+        #seo h1{font-size:clamp(40px,8vw,68px);line-height:1.05;margin:10px 0 12px;color:#f2cf74;letter-spacing:.06em;text-shadow:0 3px 0 #3a2508,0 8px 24px rgba(0,0,0,.6)}
+        #seo .lead{font-size:20px;font-style:italic;margin:0 auto;max-width:600px}
+        #seo .loading{display:inline-flex;align-items:center;gap:10px;margin-top:22px;padding:10px 22px;border-radius:999px;border:1px solid rgba(242,207,116,.45);color:#f2cf74}
+        #seo .loading i{width:14px;height:14px;border-radius:50%;border:2px solid #f2cf74;border-right-color:transparent;animation:seo-spin .9s linear infinite}
+        @keyframes seo-spin{to{transform:rotate(360deg)}}
+        #seo h2{color:#f2cf74;font-size:24px;margin:36px 0 8px;border-bottom:1px solid rgba(242,207,116,.25);padding-bottom:6px}
+        #seo h3{font-size:18px;margin:18px 0 4px;color:#fff3d6}
+        #seo ul,#seo ol{padding-left:22px;margin:6px 0}
+        #seo dt{font-weight:bold;color:#fff3d6;margin-top:14px}
+        #seo dd{margin:2px 0 0}
+        #seo kbd{font:13px ui-monospace,monospace;padding:1px 6px;border:1px solid rgba(242,207,116,.5);border-radius:4px}
+        #seo footer{margin-top:40px;font-size:14px;opacity:.7;text-align:center}
+      </style>
+      <div id="seo">
+        <div class="wrap">
+          <header>
+            <div class="eyebrow">Hide &amp; Seek on the Grassland</div>
+            <h1>Elf &amp; Goblins</h1>
+            <p class="lead">A free 3D asymmetric hide-and-seek game you play right in your browser. One elf hunts. Eight goblins run.</p>
+            <div class="loading" role="status"><i aria-hidden="true"></i>Loading the grassland…</div>
+            <noscript><p>Elf &amp; Goblins needs JavaScript and a WebGL 2 browser (Chrome, Edge, Firefox or Safari) to play.</p></noscript>
+          </header>
+
+          <main>
+            <h2>About the game</h2>
+            <p>Across a wide, cel-shaded grassland lie five goblin caves. One day an elf with a harp arrives and the hunt begins. Elf &amp; Goblins is a 1 vs 8 game of tag: play as the elf and capture every goblin within 10 minutes, or play as a goblin and help at least one of your crew survive until time runs out. Play solo against smart AI, or create a room and invite friends to play online — up to 9 players, no account and no download.</p>
+
+            <h2>How to play</h2>
+            <ol>
+              <li><strong>Choose a side</strong> — the Elf or the Goblins. Elf players can pick the Harp Elf or the Amethyst Violinist.</li>
+              <li><strong>Elf wins</strong> by putting every goblin in the cage at the center of the map before 10 minutes are up.</li>
+              <li><strong>Goblins win</strong> if any goblin is still free when the timer ends.</li>
+              <li>Move with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, drag the mouse to look, scroll to zoom. On phones and tablets, use the on-screen stick in landscape.</li>
+            </ol>
+
+            <h2>Characters and skills</h2>
+            <h3>Harp Elf — Sylvari Huntress</h3>
+            <p>Faster than any goblin. <em>Gaze</em> fires a heart-eyed beam that roots goblins in place, <em>Harp</em> lures nearby goblins toward her and makes them quicker to capture, <em>Stun</em> knocks a goblin out at close range, and <em>Capture</em> bags a stunned goblin and sends it to the cage.</p>
+            <h3>Amethyst Violinist</h3>
+            <p>An assassin elf. Her violin turns her invisible for 15 seconds and frightens goblins when she reappears, <em>Assassin's Eye</em> reveals every goblin through walls and can teleport her behind the nearest one, and a 9-meter <em>Charge</em> stuns the first goblin in her path.</p>
+            <h3>Cave Goblin</h3>
+            <p>Small, clever and never alone. Goblins can <em>Dash</em>, <em>Interfere</em> to break a teammate out of the elf's sack, use a once-per-match <em>Break Free</em> when captured, and their <em>Goblin Radar</em> warns them when the elf walks into their cave.</p>
+
+            <h2>FAQ</h2>
+            <dl>
+              <dt>Is Elf &amp; Goblins free?</dt>
+              <dd>Yes. It is free to play in any modern web browser with no download or sign-up.</dd>
+              <dt>Can I play with friends online?</dt>
+              <dd>Yes. Open Multiplayer, create a room and share the 4-digit code. Up to 9 players can join (1 elf and 8 goblins); empty goblin slots are filled by AI.</dd>
+              <dt>Can I play alone?</dt>
+              <dd>Yes. Close the multiplayer panel to play solo against AI goblins or an AI elf.</dd>
+              <dt>Does it work on mobile?</dt>
+              <dd>Yes. It runs on phones and tablets with touch controls; turn your device to landscape.</dd>
+              <dt>How long is a match?</dt>
+              <dd>Up to 10 minutes. The elf wins early if every goblin is captured.</dd>
+              <dt>What languages are supported?</dt>
+              <dd>English and Traditional Chinese.</dd>
+            </dl>
+          </main>
+
+          <footer>Elf &amp; Goblins · Free 3D browser game · Built with Three.js</footer>
+        </div>
+      </div>
