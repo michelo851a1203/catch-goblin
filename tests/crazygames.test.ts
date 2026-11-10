@@ -115,4 +115,21 @@ describe('crazygames', () => {
     })
     expect(cg.store.getItem('k')).toBe('local')
   })
+
+  it('裝置類型以 SDK 的 systemInfo.device.type 為準，不依賴觸控偵測', async () => {
+    const sdk = fakeSdk()
+    Object.assign(sdk.user, { systemInfo: { locale: 'en-US', device: { type: 'mobile' } } })
+    await load(sdk)
+    const touch = await import('../src/input/touch')
+    expect(touch.isTouchDevice()).toBe(true)
+    expect(touch.touchMode.value).toBe(true)
+    expect(touch.lowPower).toBe(true)
+
+    const desk = fakeSdk()
+    Object.assign(desk.user, { systemInfo: { device: { type: 'desktop' } } })
+    await load(desk)
+    const touch2 = await import('../src/input/touch')
+    expect(touch2.isTouchDevice()).toBe(false)
+    expect(touch2.touchMode.value).toBe(false)
+  })
 })
