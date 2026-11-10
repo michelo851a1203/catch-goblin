@@ -7,6 +7,7 @@ import { disposeObject } from './dispose'
 import { HARP_RIG, type ElfRig } from './rigs'
 import { SPRINGS, SecondaryMotion } from './SecondaryMotion'
 import { applyCelShading } from './celShading'
+import { isTouchDevice } from '../../input/touch'
 
 export type GltfLoad = (url: string) => Promise<Pick<GLTF, 'scene' | 'animations'>>
 
@@ -53,8 +54,7 @@ function defaultLoadTexture(url: string) {
 export function isLowEndDevice() {
   if (typeof navigator === 'undefined') return false
   const nav = navigator as Navigator & { deviceMemory?: number }
-  const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
-  return coarse || (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
+  return isTouchDevice() || (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
 }
 
 // 精靈角色：載入綁骨 GLB，以 AnimationMixer 播放骨架動畫，疊加頭髮 / 裙擺 / 袖子的彈簧次級動畫，

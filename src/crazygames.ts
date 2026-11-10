@@ -1,4 +1,5 @@
 import { setMuted } from './game/audio'
+import { setPlatformDevice } from './input/touch'
 
 // CrazyGames SDK v3 包裝：SDK 由 index.html 載入。被廣告阻擋器擋掉，或在 CrazyGames 以外的網域（environment 為 disabled）時，全部改成 no-op
 interface AdError {
@@ -39,7 +40,7 @@ interface CrazyGamesSDK {
   }
   user: {
     isUserAccountAvailable: boolean
-    systemInfo?: { locale?: string }
+    systemInfo?: { locale?: string; device?: { type?: string } }
     getUser(): Promise<{ username: string } | null>
   }
   data: { getItem(key: string): string | null; setItem(key: string, value: string): void }
@@ -86,6 +87,12 @@ async function doInit() {
     if (!ok || s.environment === 'disabled') return
     sdk = s
     s.game.loadingStart()
+    // 裝置判斷以平台回報為準（CrazyGames 規定不可依賴觸控偵測）
+    try {
+      setPlatformDevice(s.user.systemInfo?.device?.type)
+    } catch {
+      /* 退回 media query */
+    }
     // 平台的靜音設定優先於遊戲內的音效
     settingsMuted = !!s.game.settings?.muteAudio
     syncMute()

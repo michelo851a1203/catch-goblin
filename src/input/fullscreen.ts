@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { touchMode } from './touch'
+import { onCrazyGames } from '../crazygames'
 
 // 全螢幕：手機上瀏覽器的網址列 / 導覽列會擋住畫面，提供按鈕讓玩家切換。
 // iPhone Safari 不支援元素全螢幕（iPad 可以，舊版需 webkit 前綴），不支援時不顯示按鈕
@@ -12,7 +13,10 @@ type El = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }
 
 const doc = (typeof document !== 'undefined' ? document : undefined) as Doc | undefined
 
-export const fullscreenSupported = !!doc && !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled)
+// CrazyGames 規定全螢幕由平台提供、遊戲內不可自己做：在 CrazyGames 上整個功能關閉（不顯示按鈕、不自動重新進入全螢幕）。
+// Cloudflare Pages 等其他網域照舊提供
+const onPlatformFullscreen = typeof location !== 'undefined' && onCrazyGames(location.hostname)
+export const fullscreenSupported = !!doc && !onPlatformFullscreen && !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled)
 
 function current() {
   return !!doc && !!(doc.fullscreenElement || doc.webkitFullscreenElement)
@@ -39,7 +43,7 @@ function reenter(e: Event) {
   })
 }
 function arm() {
-  if (armed || !doc) return
+  if (armed || !doc || !fullscreenSupported) return
   armed = true
   for (const type of REENTER_EVENTS) doc.addEventListener(type, reenter, { capture: true, passive: true })
 }
@@ -61,7 +65,7 @@ if (doc) {
 }
 
 async function enter() {
-  if (!doc) return false
+  if (!doc || !fullscreenSupported) return false
   try {
     const el = doc.documentElement as El
     await (el.requestFullscreen ? el.requestFullscreen({ navigationUI: 'hide' }) : el.webkitRequestFullscreen?.())
