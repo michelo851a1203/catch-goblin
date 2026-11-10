@@ -7,6 +7,7 @@ const KEY = 'goblin-game:locale'
 
 const zh = {
   title: '快逃啊，哥布林！女精靈來山洞了',
+  logoAlt: '快逃啊，哥布林！女精靈來山洞了',
   eyebrow: '— 草原上的捉迷藏 —',
   chooseSide: '選擇你的陣營',
   settings: '按鍵設定',
@@ -230,6 +231,7 @@ type Dict = Record<keyof typeof zh, string>
 
 const en: Dict = {
   title: 'Elf & Goblins',
+  logoAlt: 'Run, Goblins! The Elf Maiden Has Entered the Cave',
   eyebrow: '— Hide and Seek on the Grassland —',
   chooseSide: 'Choose your side',
   settings: 'Controls',

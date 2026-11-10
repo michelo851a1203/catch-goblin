@@ -4,6 +4,8 @@ import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
 import goblinArt from '../assets/art/goblin-card.webp'
 import violinArt from '../assets/art/violin-card.webp'
+import logoZh from '../assets/brand/logo-zh.webp'
+import logoEn from '../assets/brand/logo-en.webp'
 import type { ElfKind, Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
@@ -41,6 +43,10 @@ const moveKeys = computed(() => {
 // 進場動畫：掛載後下一幀才加上 class，讓 CSS transition 生效
 const entered = ref(false)
 onMounted(() => requestAnimationFrame(() => (entered.value = true)))
+
+// 標題 logo 依語系切換；另一語系的 logo 先預載，切換語言時不會閃一下空白
+const logo = computed(() => (locale.value === 'zh' ? logoZh : logoEn))
+onMounted(() => (new Image().src = locale.value === 'zh' ? logoEn : logoZh))
 
 // 依目前語系與鍵位重新產生卡片內容
 interface Card {
@@ -207,7 +213,8 @@ function start(c: Card) {
     <KeybindSettings v-if="showSettings" v-model="binds" @close="showSettings = false" />
     <header>
       <p class="eyebrow">{{ t('eyebrow') }}</p>
-      <h1 :data-text="t('title')">{{ t('title') }}</h1>
+      <!-- 標題以 logo 呈現；h1 保留、alt 為 logo 上的完整文字，螢幕閱讀器與 SEO 仍讀得到標題 -->
+      <h1 class="logo" :style="{ '--logo': `url(${logo})` }"><img :src="logo" :alt="t('logoAlt')" width="1120" height="560" decoding="async" fetchpriority="high" draggable="false" /></h1>
       <p class="lead">{{ elfMenu ? t('chooseElf') : t('chooseSide') }}</p>
     </header>
 
@@ -439,24 +446,41 @@ header {
   font-size: 14px;
   margin: 0;
 }
-h1 {
-  font-size: clamp(22px, 4.6vw, 54px);
-  margin: 4px 0;
-  color: #fff3d6;
-  letter-spacing: 0.15em;
-  text-shadow: 0 0 24px rgba(255, 215, 120, 0.45), 0 3px 0 #3b2a12;
+/* 標題 logo：高度跟著可見高度（dvh）縮放，卡片才放得下；寬度另外以 vw 封頂，窄螢幕不會撐破版面。
+   兩種語系的 logo 都裁成同樣的 2:1 畫布，切換語言時版面不會跳動 */
+h1.logo {
+  --logo-h: clamp(64px, 17vh, 190px);
+  margin: 2px 0 0;
+  line-height: 0;
   position: relative;
+  width: min(calc(var(--logo-h) * 2), 92vw);
+  aspect-ratio: 2 / 1;
+  margin-inline: auto;
 }
-/* 淡雅的金色流光：底字維持原色，只在上層掃過一道柔光 */
-h1::after {
-  content: attr(data-text);
+/* 自訂屬性不會因為瀏覽器不認得 dvh 而退回上一行，所以 dvh 版本要包在 @supports 裡 */
+@supports (height: 1dvh) {
+  h1.logo {
+    --logo-h: clamp(64px, 17dvh, 190px);
+  }
+}
+h1.logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  user-select: none;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.45));
+}
+/* 淡雅的金色流光：以 logo 本身的透明度當遮罩，只在圖案上掃過一道柔光 */
+h1.logo::after {
+  content: '';
   position: absolute;
   inset: 0;
-  color: transparent;
-  text-shadow: none;
-  background: linear-gradient(105deg, transparent 42%, rgba(255, 246, 214, 0.75) 50%, transparent 58%) 0 0 / 300% 100% no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 246, 214, 0.55) 50%, transparent 58%) 0 0 / 300% 100% no-repeat;
+  -webkit-mask: var(--logo) center / contain no-repeat;
+  mask: var(--logo) center / contain no-repeat;
+  mix-blend-mode: soft-light;
   pointer-events: none;
   animation: title-shine 7s ease-in-out 1.5s infinite;
 }
@@ -911,9 +935,6 @@ footer {
   gap: 8px;
 }
 @media (max-width: 640px) {
-  h1 {
-    letter-spacing: 0.06em;
-  }
   .fairy-dust {
   position: absolute;
   left: 50%;
@@ -1002,12 +1023,20 @@ footer {
     gap: 1vh;
     gap: 1dvh;
   }
-  .eyebrow,
+  /* 手機橫向高度很少：副標題收起，空間留給 logo，logo 才看得清楚 */
+  .eyebrow {
+    display: none;
+  }
   .lead {
     font-size: 11px;
   }
-  h1 {
-    font-size: 20px;
+  h1.logo {
+    --logo-h: 24vh;
+  }
+  @supports (height: 1dvh) {
+    h1.logo {
+      --logo-h: 24dvh;
+    }
   }
   .card-wrap {
     width: 42vh;
