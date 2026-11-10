@@ -13,7 +13,7 @@
 ![Vite](https://img.shields.io/badge/Vite-8-646cff?logo=vite&logoColor=white)
 ![No Backend](https://img.shields.io/badge/後端-不需要-brightgreen)
 
-### [🎮 線上試玩 → michelo851a1203.github.io/catch-goblin](https://michelo851a1203.github.io/catch-goblin/)
+### [🎮 線上試玩 → elf-and-goblins.pages.dev](https://elf-and-goblins.pages.dev/)
 
 <img src="docs/screenshots/select.jpg" alt="選角畫面" width="820" />
 
@@ -261,12 +261,9 @@ SITE_URL=https://elf-and-goblins.pages.dev bun run build && bun run preview
 
 > 修改遊戲規則或技能時，記得同步 `site/content.html` 與 `site/llms.txt`。綁自訂網域後，到 GitHub 的 Actions Variables 設定 `SITE_URL`，並把網域加進 TURN Worker 的 `ALLOWED_ORIGINS`。部署後可用 [opengraph.xyz](https://www.opengraph.xyz/) 或各平台的卡片預覽工具檢查。
 
-### 🌐 部署到 GitHub Pages
+### 🌐 GitHub Pages（轉址）
 
-推送到 `main` 分支後，[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) 會自動打包並部署。
-第一次使用前，請到 repo 的 **Settings → Pages → Build and deployment → Source** 選擇 **GitHub Actions**。
-
-> 部署時會用 `BASE_PATH=/<repo 名稱>/` 打包，讓資源路徑對應 GitHub Pages 的子路徑；本機開發不受影響。
+`main` 分支的 [`.github/workflows/deploy.yml`](https://github.com/michelo851a1203/catch-goblin/blob/main/.github/workflows/deploy.yml) 只會部署轉址頁：舊網址 `michelo851a1203.github.io/catch-goblin/` 的任何路徑都會轉址到正式網站 [elf-and-goblins.pages.dev](https://elf-and-goblins.pages.dev/)（保留網址參數），避免兩個網站內容重複、搶搜尋排名。
 
 ### 🧪 測試用網址參數
 
