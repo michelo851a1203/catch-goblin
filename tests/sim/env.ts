@@ -1,6 +1,11 @@
 // 無頭模擬用的瀏覽器替身：Game 需要 DOM / canvas / window，但測試只關心遊戲邏輯。
 // 必須在 import 任何 src 模組之前載入（ESM 依 import 順序執行）。
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { installDetMath } from './detMath'
+
+// 內建的三角 / 指數函式在不同 CPU 架構上會差最後一個位元：換成結果固定的版本，golden 才不會跟著平台變
+installDetMath()
+
 const noop = () => {}
 
 // 任何方法呼叫都回傳另一個萬用替身（漸層、ImageData 等）

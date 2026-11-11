@@ -1,6 +1,7 @@
 // 對局行為的 golden master：以固定亂數種子跑完整場（單機 AI 對 AI、玩家隨機操作、多人連線），
 // 逐步記錄所有遊戲狀態、事件、音效與網路訊息的雜湊。重構時這些雜湊必須完全不變。
 // 有意調整遊戲行為（平衡、AI）後，以 UPDATE_GOLDEN=1 bun run test 重新產生；DUMP_SIM=<dir> 會輸出逐步紀錄方便比對。
+// 數學函式換成跨平台結果一致的版本（tests/sim/detMath），本機（arm64）產生的 golden 在 CI（x64）上才會相同。
 import './sim/env'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
