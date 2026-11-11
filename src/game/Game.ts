@@ -5,7 +5,7 @@ import { ElfMagicFx } from './elf/ElfMagicFx'
 import { ViolinFx } from './elf/ViolinFx'
 import { GHOST_OPACITY } from './elf/rigs'
 import { CONFIG, type ElfKind, type Role } from './config'
-import { Actor, Elf, Goblin, type ChargePhase, type ElfAction } from './entities'
+import { Actor, Elf, Goblin, setBarProgress, type ChargePhase, type ElfAction } from './entities'
 import { behindSpot, fearTargets, nearestTarget, sweepHit } from './violin'
 import { GAP_HALF, World } from './world'
 import { makeSprite, noOutline } from './toon'
@@ -72,6 +72,8 @@ const CAST_POSES: Pose[] = ['normal', 'cast', 'attack']
 const ELF_ACTION_POSE: Record<ElfAction, Pose | null> = {
   windup: 'windup', dash: 'dash', recover: 'recover', channel: 'play', stealthCast: 'play', packing: 'pack', idle: null,
 }
+// 精靈模型載入的等待上限（毫秒）：超過就先用替身開局，模型載入後再換上
+const LOAD_TIMEOUT = 20000
 // 加入者：房主已經結束衝鋒、本機卻還停在突刺 / 收招超過這個秒數時（漏掉事件），以快照為準清掉
 const STALE_CHARGE = 0.6
 const r2 = (v: number) => Math.round(v * 100) / 100
@@ -187,7 +189,11 @@ export class Game {
   fx: FxSystem
   elfFx: ElfMagicFx
   violinFx: ViolinFx
-  private envMap: THREE.Texture
+  // 環境光反射貼圖（PMREM 的 render target）：WebGL context 遺失後內容會清空，恢復時要重新產生
+  private envTarget: THREE.WebGLRenderTarget | null = null
+  // 可以開始倒數了：精靈模型載入完成（或逾時改用替身）；多人加入者另外等到房主的第一個快照
+  readonly ready: Promise<void>
+  private gotSnapshot: () => void = () => {}
   private staff: ReturnType<FxSystem['createStaff']>
   private shake = 0
   private keys = new Set<string>()
@@ -278,10 +284,7 @@ export class Game {
     this.elfFx = new ElfMagicFx(this.scene, this.fx)
     this.violinFx = new ViolinFx(this.scene, this.fx, this.elfFx)
     // 環境光反射只影響 PBR 材質（GLB 精靈），場景其他卡通材質不受影響
-    const pmrem = new THREE.PMREMGenerator(this.renderer)
-    this.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-    pmrem.dispose()
-    this.scene.environment = this.envMap
+    this.buildEnv()
     this.scene.environmentIntensity = 0.55
 
     // 精靈：在草原中央、牢籠旁
@@ -330,18 +333,41 @@ export class Game {
     this.marker.position.y = 0.06
     this.scene.add(this.marker)
 
-    const p = this.focusActor()
-    this.camYaw = p === this.elf ? Math.PI : p.yaw + Math.PI
+    // 鏡頭從角色背後開始（精靈面向牢籠；鏡頭若在精靈正面會卡進牢籠裡，畫面被屋頂擋住）
     this.elf.yaw = Math.PI
+    const p = this.focusActor()
+    this.camYaw = p.yaw + Math.PI
     this.camDist = role === 'elf' ? 7.5 : 6
 
     this.bindInput()
     this.resize()
     ;(window as unknown as { __game: Game }).__game = this
     this.syncHud()
+
+    const loaded = Promise.race([this.elf.character.ready, new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT))])
+    const synced = net && !net.host ? new Promise<void>((r) => (this.gotSnapshot = r)) : null
+    this.ready = Promise.all([loaded, synced]).then(() => {})
   }
 
+  // 產生環境光反射貼圖（建立時、以及 WebGL context 恢復後）
+  private buildEnv() {
+    const pmrem = new THREE.PMREMGenerator(this.renderer)
+    const room = new RoomEnvironment()
+    this.envTarget?.dispose()
+    this.envTarget = pmrem.fromScene(room, 0.04)
+    room.dispose()
+    pmrem.dispose()
+    this.scene.environment = this.envTarget.texture
+  }
+
+  // 等角色載入完成才開始倒數與繪製（載入期間由 GameView 顯示載入畫面）
   start() {
+    void this.ready.then(() => {
+      if (!this.disposed) this.run()
+    })
+  }
+
+  private run() {
     this.clock.start()
     // 多人連線時不能因為暫停（分頁隱藏、直拿手機）而停止模擬，否則房主會卡住整個房間；只停止本機輸入
     const loop = () => {
@@ -371,7 +397,7 @@ export class Game {
     this.violinFx.dispose()
     this.xrayMat?.dispose()
     this.elf.character.dispose()
-    this.envMap.dispose()
+    this.envTarget?.dispose()
     this.staff.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
@@ -456,6 +482,8 @@ export class Game {
     this.on(canvas, 'wheel', ((e: WheelEvent) => {
       this.camDist = THREE.MathUtils.clamp(this.camDist + e.deltaY * 0.005, 3.5, 14)
     }))
+    // 手機切到背景（尤其 iOS）時 WebGL context 可能被系統回收：three 會自動重建資源，但 render target 的內容不會回來
+    this.on(canvas, 'webglcontextrestored', () => this.buildEnv())
     this.on(document, 'pointerlockchange', () => (this.hud.pointerLocked = document.pointerLockElement === canvas))
   }
 
@@ -1339,6 +1367,7 @@ export class Game {
 
   // 加入者：套用房主快照（無序通道，舊的直接丟棄）
   private applySnapshot(m: Snapshot) {
+    this.gotSnapshot()
     if (m.q <= this.lastSeq) return
     this.lastSeq = m.q
     if (PHASES[m.ph] === 'play' && this.hud.phase === 'countdown') this.present({ e: 'go' })
@@ -1769,8 +1798,8 @@ export class Game {
     elf.fx.stunned.visible = elf.stagger > 0
     const eb = elf.fx.bar
     eb.group.visible = !!elf.packing || elf.channel >= 0
-    if (elf.packing) eb.fg.scale.x = 1.16 * (elf.packing.t / elf.packing.total)
-    else if (elf.channel >= 0) eb.fg.scale.x = 1.16 * (1 - elf.channel / CONFIG.elf.music.maxChannel)
+    if (elf.packing) setBarProgress(eb, elf.packing.t / elf.packing.total)
+    else if (elf.channel >= 0) setBarProgress(eb, 1 - elf.channel / CONFIG.elf.music.maxChannel)
 
     for (const g of this.goblins) {
       g.pose = g.captured || g.held ? 'held' : g.stun > 0 ? 'stunned' : g.rooted > 0 ? 'rooted' : 'normal'
@@ -1830,7 +1859,7 @@ export class Game {
       g.fx.radar.visible = radar
       g.fx.radar.position.y = 2.15 + Math.abs(Math.sin(this.elapsed * 5)) * 0.12
       g.fx.bar.group.visible = g.held && !!elf.packing
-      if (elf.packing && elf.packing.g === g) g.fx.bar.fg.scale.x = 1.16 * (elf.packing.t / elf.packing.total)
+      if (elf.packing && elf.packing.g === g) setBarProgress(g.fx.bar, elf.packing.t / elf.packing.total)
     }
 
     // 雷達提示音

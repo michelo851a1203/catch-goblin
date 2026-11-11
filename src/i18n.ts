@@ -20,6 +20,7 @@ const zh = {
   passive: '被動',
   controlsTouch: '左側搖桿移動・右側拖曳轉視角・雙指縮放',
   rotate: '請將裝置轉為橫向遊玩',
+  loading: '載入中',
   fullscreenEnter: '全螢幕',
   fullscreenExit: '離開全螢幕',
 
@@ -244,6 +245,7 @@ const en: Dict = {
   passive: 'Passive',
   controlsTouch: 'Left stick to move · Drag right side to look · Pinch to zoom',
   rotate: 'Rotate your device to landscape',
+  loading: 'Loading',
   fullscreenEnter: 'Fullscreen',
   fullscreenExit: 'Exit fullscreen',
 

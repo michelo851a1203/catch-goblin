@@ -21,7 +21,7 @@ vi.mock('three', async (importOriginal) => {
   }
   class FakePMREM {
     fromScene() {
-      return { texture: new THREE.Texture() }
+      return { texture: new THREE.Texture(), dispose() {} }
     }
     dispose() {}
   }
@@ -257,5 +257,61 @@ describe('紫晶精靈隱身的狀態轉移', () => {
     expect(game.elf.cd.stealth).toBe(12)
     expect(g.terror).toBe(3)
     game.dispose()
+  })
+})
+
+describe('開局前的載入', () => {
+  const settled = async (p: Promise<unknown>) => {
+    let done = false
+    void p.then(() => (done = true))
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    return done
+  }
+  const link = (host: boolean) => {
+    const fns = new Set<(from: string, m: { t: string }) => void>()
+    return {
+      fns,
+      link: {
+        host, me: (host ? 'elf' : 0) as 'elf' | 0, elfKind: 'harp' as const, peers: new Map(), numbers: new Map(), names: new Map(),
+        send() {}, listen: (fn: (from: string, m: { t: string }) => void) => (fns.add(fn), () => fns.delete(fn)), onLeave: () => () => {}, onRejoin: () => () => {},
+      },
+    }
+  }
+
+  it('角色模型就緒後才能開始（單機、房主）', async () => {
+    const solo = makeGame('elf', 'harp')
+    expect(await settled(solo.ready)).toBe(true)
+    const host = makeGame('elf', 'harp', link(true).link)
+    expect(await settled(host.ready)).toBe(true)
+    solo.dispose()
+    host.dispose()
+  })
+
+  it('多人加入者：收到房主的第一個快照（房主已開始）才開始', async () => {
+    const { link: l, fns } = link(false)
+    const client = makeGame('goblin', 'harp', l)
+    expect(await settled(client.ready)).toBe(false)
+    const host = makeGame('elf', 'harp', link(true).link)
+    const snap = (host as unknown as { snapshot(): object }).snapshot()
+    for (const fn of fns) fn('host', JSON.parse(JSON.stringify(snap)))
+    expect(await settled(client.ready)).toBe(true)
+    client.dispose()
+    host.dispose()
+  })
+})
+
+describe('頭上的進度條', async () => {
+  const { setBarProgress, Goblin } = await import('../src/game/entities')
+  it('前景條的左端固定（以螢幕空間的錨點對齊，不受角色轉向影響）', () => {
+    const bar = new Goblin(0, 'g', 0).fx.bar
+    for (const k of [1, 0.75, 0.5, 0.1]) {
+      setBarProgress(bar, k)
+      expect(bar.fg.visible).toBe(true)
+      expect(bar.fg.scale.x).toBeCloseTo(1.16 * k)
+      expect(-bar.fg.center.x * bar.fg.scale.x).toBeCloseTo(-0.58)
+      expect(bar.fg.position.x).toBe(0)
+    }
+    setBarProgress(bar, 0)
+    expect(bar.fg.visible).toBe(false)
   })
 })

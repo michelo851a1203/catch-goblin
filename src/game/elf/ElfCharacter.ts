@@ -8,6 +8,7 @@ import { HARP_RIG, type ElfRig } from './rigs'
 import { SPRINGS, SecondaryMotion } from './SecondaryMotion'
 import { applyCelShading } from './celShading'
 import { isTouchDevice } from '../../input/touch'
+import { fetchModel } from './preload'
 
 export type GltfLoad = (url: string) => Promise<Pick<GLTF, 'scene' | 'animations'>>
 
@@ -42,8 +43,25 @@ export function createElfLoader() {
   return new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
 }
 
-function defaultLoad(url: string) {
-  return createElfLoader().loadAsync(url)
+// 預設載入：沿用選角畫面預先下載的位元組（見 preload.ts），再解析成這一局專用的場景
+async function defaultLoad(url: string) {
+  const data = await fetchModel(url)
+  return createElfLoader().parseAsync(data, url.slice(0, url.lastIndexOf('/') + 1))
+}
+
+// 下載失敗時的重試次數與間隔（毫秒）：手機切到背景時下載會被中斷，回到前景再試
+const RETRY_DELAYS = [1000, 3000]
+
+function whenVisible() {
+  if (typeof document === 'undefined' || !document.hidden) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const on = () => {
+      if (document.hidden) return
+      document.removeEventListener('visibilitychange', on)
+      resolve()
+    }
+    document.addEventListener('visibilitychange', on)
+  })
 }
 
 function defaultLoadTexture(url: string) {
@@ -109,22 +127,35 @@ export class ElfCharacter implements CharacterModel {
 
   async load() {
     const load = this.opts.load ?? defaultLoad
-    try {
-      const propUrl = this.opts.harpUrl ?? this.rig.propUrl
-      const [gltf, harp] = await Promise.all([
-        load(this.opts.url ?? this.rig.url),
-        propUrl ? load(propUrl).catch(() => null) : Promise.resolve(null),
-      ])
-      if (this.status === 'disposed') {
-        disposeObject(gltf.scene)
-        if (harp) disposeObject(harp.scene)
+    // 自訂的載入器（測試）只試一次；預設的網路下載失敗時重試
+    const retries = this.opts.load ? [] : RETRY_DELAYS
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const propUrl = this.opts.harpUrl ?? this.rig.propUrl
+        const [gltf, harp] = await Promise.all([
+          load(this.opts.url ?? this.rig.url),
+          propUrl ? load(propUrl).catch(() => null) : Promise.resolve(null),
+        ])
+        if (this.status === 'disposed') {
+          disposeObject(gltf.scene)
+          if (harp) disposeObject(harp.scene)
+          return
+        }
+        this.install(gltf, harp)
+        return
+      } catch (e) {
+        this.error = e
+        if (this.status === 'disposed') return
+        if (attempt < retries.length) {
+          await new Promise((r) => setTimeout(r, retries[attempt]))
+          await whenVisible()
+          if ((this.status as ElfStatus) === 'disposed') return
+          continue
+        }
+        this.status = 'fallback'
+        console.warn('[ElfCharacter] GLB 載入失敗，改用程序化模型', e)
         return
       }
-      this.install(gltf, harp)
-    } catch (e) {
-      this.error = e
-      if (this.status !== 'disposed') this.status = 'fallback'
-      console.warn('[ElfCharacter] GLB 載入失敗，改用程序化模型', e)
     }
   }
 

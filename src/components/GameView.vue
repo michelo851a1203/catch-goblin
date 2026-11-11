@@ -12,6 +12,9 @@ import TouchControls from './TouchControls.vue'
 import FullscreenButton from './FullscreenButton.vue'
 import IconText from './IconText.vue'
 import { icon } from '../icons'
+import { locale } from '../i18n'
+import logoZh from '../assets/brand/logo-zh.webp'
+import logoEn from '../assets/brand/logo-en.webp'
 
 const props = defineProps<{ role: Role; net?: NetLink; elfKind?: ElfKind }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
@@ -21,12 +24,19 @@ const minimap = ref<HTMLCanvasElement | null>(null)
 const kind: ElfKind = props.net?.elfKind ?? props.elfKind ?? 'harp'
 const hud = reactive(createHudState(props.role, kind))
 let game: Game | null = null
+// 載入畫面：角色模型就緒（多人加入者另外等到房主開始）才進入倒數，避免先看到替身模型再換成正確的角色
+const loading = ref(true)
+const logo = computed(() => (locale.value === 'zh' ? logoZh : logoEn))
 
 onMounted(() => {
-  game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null, kind)
+  const g = (game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null, kind))
   game.start()
-  // 當哥布林時告訴玩家這一局的精靈是哪一位
-  if (props.role === 'goblin') game.toast(t('tOpponent', { name: kind === 'violin' ? t('violinName') : t('elfName') }), 'info')
+  void game.ready.then(() => {
+    if (game !== g) return
+    loading.value = false
+    // 當哥布林時告訴玩家這一局的精靈是哪一位
+    if (props.role === 'goblin') g.toast(t('tOpponent', { name: kind === 'violin' ? t('violinName') : t('elfName') }), 'info')
+  })
   // 遊戲中播自己陣營的音樂；再玩一局時 GameView 重新掛載，從結算的勝利音樂換回來
   music.play(props.role)
 })
@@ -143,6 +153,13 @@ function toggleSpeed() {
 
     <div v-if="hud.phase === 'countdown'" class="countdown" :key="hud.countdown">{{ hud.countdown }}</div>
 
+    <Transition name="loading">
+      <div v-if="loading" class="loading" role="status">
+        <img :src="logo" alt="" />
+        <p>{{ t('loading') }}<span class="dots"><i>.</i><i>.</i><i>.</i></span></p>
+      </div>
+    </Transition>
+
     <div v-if="hud.result" class="result">
       <div class="panel" :class="{ win: won }">
         <p class="eyebrow">{{ won ? 'VICTORY' : 'DEFEAT' }}</p>
@@ -158,6 +175,56 @@ function toggleSpeed() {
 </template>
 
 <style scoped>
+.loading {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: #000;
+  color: #f3dfb0;
+  font-family: var(--font);
+}
+.loading img {
+  width: min(360px, 62vw);
+  max-height: 46vh;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 24px rgba(0, 0, 0, 0.6));
+}
+.loading p {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.18em;
+}
+.loading .dots i {
+  font-style: normal;
+  animation: dot 1.2s infinite;
+}
+.loading .dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.loading .dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+.loading-leave-active {
+  transition: opacity 0.35s ease;
+}
+.loading-leave-to {
+  opacity: 0;
+}
 .game {
   position: fixed;
   inset: 0;

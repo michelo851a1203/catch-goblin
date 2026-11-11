@@ -10,6 +10,7 @@ import { MAX_PLAYERS } from './net/assign'
 import { t } from './i18n'
 import { music } from './game/music'
 import { icon } from './icons'
+import { preloadElves } from './game/elf/preload'
 
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
@@ -50,6 +51,8 @@ else if (crazygames.isInstantMultiplayer()) {
 onMounted(() => {
   crazygames.loadingFinished()
   crazygames.onInvite(joinInvite)
+  // 在選角畫面時就於背景下載精靈模型（預設的豎琴精靈先），開局時不必等下載
+  void preloadElves(elfKind.value === 'violin' ? ['violin', 'harp'] : ['harp', 'violin'])
 })
 
 // 回報房間狀態給 CrazyGames，好友才能加入：只有大廳還有空位時可加入

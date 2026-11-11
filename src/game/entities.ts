@@ -35,21 +35,31 @@ export class Actor {
   }
 }
 
+// 頭上的進度條。兩張 sprite 都放在角色正上方，靠 sprite 的 center（螢幕空間的錨點）把前景條的左端對齊背景條：
+// 若用 position 偏移，偏移量會跟著角色轉向，角色沒有背對鏡頭時進度條就會歪到一邊
+const BAR_W = 1.16
 function barSprites() {
   const bg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x222222, depthTest: false, transparent: true, opacity: 0.75 }))
   const fg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffd34d, depthTest: false }))
   bg.scale.set(1.2, 0.14, 1)
-  fg.scale.set(1.16, 0.1, 1)
-  bg.center.set(0, 0.5)
-  fg.center.set(0, 0.5)
+  fg.scale.set(BAR_W, 0.1, 1)
   bg.renderOrder = 11
   fg.renderOrder = 12
   const g = new THREE.Group()
   g.add(bg, fg)
-  bg.position.x = -0.6
-  fg.position.x = -0.58
   g.visible = false
   return { group: g, fg }
+}
+
+export type Bar = ReturnType<typeof barSprites>
+
+// 設定進度（0~1），前景條從左端開始填滿
+export function setBarProgress(bar: Bar, k: number) {
+  const w = BAR_W * Math.min(1, Math.max(0, k))
+  bar.fg.visible = w > 1e-3
+  if (!bar.fg.visible) return
+  bar.fg.scale.x = w
+  bar.fg.center.x = BAR_W / 2 / w
 }
 
 export interface GoblinAIState {
