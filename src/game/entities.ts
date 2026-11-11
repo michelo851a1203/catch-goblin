@@ -186,6 +186,17 @@ export class Elf extends Actor {
     this.fx = { bar, stunned }
   }
 
+  // ───── 動作狀態 ─────
+  // 精靈同一時間只會做一件事：打包 / 彈奏 / 拉琴準備隱身 / 衝鋒（硬直可疊加在上面）。
+  // 以下的轉移函式是唯一該改動這些欄位的地方，房主（判定）與加入者（套用事件）共用，避免兩邊各寫一份而不一致
+  get action(): ElfAction {
+    if (this.charge) return this.charge.phase
+    if (this.channel >= 0) return 'channel'
+    if (this.stealthCast >= 0) return 'stealthCast'
+    if (this.packing) return 'packing'
+    return 'idle'
+  }
+
   get busy() {
     return this.packing !== null || this.channel >= 0 || this.stagger > 0 || this.stealthCast >= 0 || this.charge !== null
   }
@@ -193,4 +204,75 @@ export class Elf extends Actor {
   get stealthed() {
     return this.stealth > 0
   }
+
+  // 彈奏（豎琴）
+  startChannel() {
+    this.channel = 0
+    this.musicAffected.clear()
+  }
+  stopChannel() {
+    this.channel = -1
+    this.cd.music = CONFIG.elf.music.cooldown
+  }
+
+  // 打包：精靈的 packing 與哥布林的 held 必須一起變動
+  startPacking(g: Goblin, total: number) {
+    g.held = true
+    this.packing = { g, t: 0, total }
+  }
+  // 結束打包（完成或被打斷），回傳被打包的哥布林
+  endPacking(): Goblin {
+    const g = this.packing!.g
+    this.packing = null
+    this.cd.capture = CONFIG.elf.capture.cooldown
+    g.held = false
+    return g
+  }
+
+  // 紫晶精靈：拉琴準備隱身 → 隱身 → 現身（進入冷卻）
+  startStealthCast() {
+    this.stealthCast = 0
+  }
+  enterStealth() {
+    this.stealthCast = -1
+    this.stealth = CONFIG.violin.stealth.duration
+  }
+  exitStealth() {
+    this.stealth = 0
+    this.cd.stealth = CONFIG.violin.stealth.cooldown
+  }
+
+  // 刺客之眼：開圖 → 瞬移或時間到 → 冷卻
+  openEye() {
+    this.eye = CONFIG.violin.eye.duration
+  }
+  closeEye() {
+    this.eye = 0
+    this.cd.eye = CONFIG.violin.eye.cooldown
+  }
+
+  // 衝鋒：前搖 → 突刺 → 收招 → 結束
+  startCharge(dir: THREE.Vector3) {
+    this.charge = { phase: 'windup', t: 0, dir, done: 0, hit: -1 }
+  }
+  recoverCharge(hit: number) {
+    const c = this.charge!
+    c.phase = 'recover'
+    c.t = 0
+    c.hit = hit
+    this.cd.charge = CONFIG.violin.charge.cooldown
+  }
+  cancelCharge() {
+    this.charge = null
+  }
+
+  // 結算：一定現身、停止所有持續中的技能狀態
+  resetForResult() {
+    this.stealth = 0
+    this.stealthCast = -1
+    this.eye = 0
+    this.charge = null
+  }
 }
+
+export type ElfAction = 'idle' | 'channel' | 'stealthCast' | 'packing' | ChargePhase

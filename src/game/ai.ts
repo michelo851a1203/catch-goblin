@@ -4,6 +4,9 @@ import type { Goblin } from './entities'
 import type { Game } from './Game'
 
 const tmp = new THREE.Vector3()
+// 哥布林被打包時的大招決策：還沒決定 / 決定不放（倒數不會歸零）
+const ULT_UNDECIDED = -1
+const ULT_NEVER = 999
 const tmp2 = new THREE.Vector3()
 
 function dist2d(a: THREE.Vector3, b: THREE.Vector3) {
@@ -32,12 +35,12 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
 
   // 被打包時：考慮使用大招
   if (g.held) {
-    if (ai.ultDelay < 0) ai.ultDelay = !g.ultUsed && Math.random() < 0.5 ? 0.5 + Math.random() * 1.3 : 999
+    if (ai.ultDelay < 0) ai.ultDelay = !g.ultUsed && Math.random() < 0.5 ? 0.5 + Math.random() * 1.3 : ULT_NEVER
     ai.ultDelay -= dt
     if (ai.ultDelay <= 0) game.goblinUlt(g)
     return
   }
-  ai.ultDelay = -1
+  ai.ultDelay = ULT_UNDECIDED
   if (g.stun > 0 || g.rooted > 0 || g.attract > 0 || g.terror > 0) return
 
   const packing = elf.packing
@@ -140,26 +143,7 @@ export function updateElfAI(game: Game, dt: number) {
   }
   const E = CONFIG.elf
   const now = game.elapsed
-
-  // 視覺
-  const fwdX = Math.sin(elf.yaw), fwdZ = Math.cos(elf.yaw)
-  for (const g of game.goblins) {
-    if (g.captured) {
-      ai.seen.delete(g)
-      continue
-    }
-    const dx = g.pos.x - elf.pos.x, dz = g.pos.z - elf.pos.z
-    const d = Math.hypot(dx, dz)
-    const facing = (dx * fwdX + dz * fwdZ) / (d || 1)
-    const visible = d < 4 || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
-    const rec = ai.seen.get(g)
-    if (visible) {
-      if (rec && now - rec.at < 0.5) {
-        rec.pos.copy(g.pos)
-        rec.at = now
-      } else ai.seen.set(g, { pos: g.pos.clone(), at: now, since: now })
-    }
-  }
+  senseGoblins(game)
 
   ai.think -= dt
   if (ai.think <= 0) {
@@ -216,63 +200,14 @@ export function updateElfAI(game: Game, dt: number) {
     return
   }
 
-  // 記憶中最後看到的位置
-  let lastPos: THREE.Vector3 | null = null
-  let lastAt = -Infinity
-  for (const [, rec] of ai.seen) {
-    if (rec.at > lastAt && now - rec.at < 7) {
-      lastAt = rec.at
-      lastPos = rec.pos
-    }
-  }
-  if (lastPos && dist2d(lastPos, elf.pos) > 2) {
-    elf.wish.copy(game.navigate(elf, lastPos))
-    return
-  }
-
-  // 巡邏：精靈的直覺會偏向有較多哥布林的洞
-  if (ai.patrolWait > 0) {
-    ai.patrolWait -= dt
-    elf.yaw += dt * 1.5
-    return
-  }
-  // 聽到洞外的哥布林
-  const outside = game.goblins.find((g) => !g.captured && g.zone < 0 && dist2d(g.pos, elf.pos) < 40)
-  if (outside && Math.random() < 0.005) ai.dest = outside.pos.clone()
-
-  if (!ai.dest) {
-    const weights = game.world.caves.map((c) => {
-      if (c.id === ai.patrolCave) return 0.05
-      let w = 1
-      for (const g of game.goblins) if (!g.captured && g.zone === c.id) w += 0.4
-      if (now < 90 && game.playerGoblin && game.playerGoblin.zone === c.id) w *= 0.25
-      return w
-    })
-    const sum = weights.reduce((a, b) => a + b, 0)
-    let r = Math.random() * sum
-    let pick = 0
-    for (let i = 0; i < weights.length; i++) {
-      r -= weights[i]
-      if (r <= 0) {
-        pick = i
-        break
-      }
-    }
-    ai.patrolCave = pick
-    const c = game.world.caves[pick]
-    const a = Math.random() * Math.PI * 2
-    ai.dest = new THREE.Vector3(c.center.x + Math.cos(a) * 5, 0, c.center.z + Math.sin(a) * 5)
-  }
-  if (dist2d(ai.dest, elf.pos) < 2.5) {
-    ai.dest = null
-    ai.patrolWait = 1.2
-    return
-  }
-  elf.wish.copy(game.navigate(elf, ai.dest))
+  if (chaseLastSeen(game)) return
+  // 豎琴精靈巡邏時會聽到洞外的哥布林
+  patrol(game, dt, true)
 }
 
 // ───────────────────────── 紫晶精靈 AI ─────────────────────────
 // 刺客打法：巡邏時隱身靠近 → 近距離衝鋒擊暈 → 捕獲；找不到目標時開刺客之眼，太遠就瞬移過去
+// 視覺（兩種精靈共用）：前方視野 + 視線；刺客之眼開圖中全部看得到
 function senseGoblins(game: Game) {
   const elf = game.elf
   const ai = elf.ai
@@ -391,9 +326,17 @@ function updateVioletAI(game: Game, dt: number) {
     return
   }
 
+  if (chaseLastSeen(game)) return
+  patrol(game, dt, false)
+}
+
+// 沒有目標時走向記憶中最後看到哥布林的位置（7 秒內）；有地方可去時回傳 true
+function chaseLastSeen(game: Game) {
+  const elf = game.elf
+  const now = game.elapsed
   let lastPos: THREE.Vector3 | null = null
   let lastAt = -Infinity
-  for (const [, rec] of ai.seen) {
+  for (const [, rec] of elf.ai.seen) {
     if (rec.at > lastAt && now - rec.at < 7) {
       lastAt = rec.at
       lastPos = rec.pos
@@ -401,13 +344,13 @@ function updateVioletAI(game: Game, dt: number) {
   }
   if (lastPos && dist2d(lastPos, elf.pos) > 2) {
     elf.wish.copy(game.navigate(elf, lastPos))
-    return
+    return true
   }
-  patrol(game, dt)
+  return false
 }
 
-// 巡邏：偏向有較多哥布林的洞（與豎琴精靈相同）
-function patrol(game: Game, dt: number) {
+// 巡邏：精靈的直覺會偏向有較多哥布林的洞。listen：聽得到洞外的哥布林（豎琴精靈）
+function patrol(game: Game, dt: number, listen: boolean) {
   const elf = game.elf
   const ai = elf.ai
   const now = game.elapsed
@@ -415,6 +358,10 @@ function patrol(game: Game, dt: number) {
     ai.patrolWait -= dt
     elf.yaw += dt * 1.5
     return
+  }
+  if (listen) {
+    const outside = game.goblins.find((g) => !g.captured && g.zone < 0 && dist2d(g.pos, elf.pos) < 40)
+    if (outside && Math.random() < 0.005) ai.dest = outside.pos.clone()
   }
   if (!ai.dest) {
     const weights = game.world.caves.map((c) => {

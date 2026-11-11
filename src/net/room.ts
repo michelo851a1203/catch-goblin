@@ -88,6 +88,8 @@ export function saveName(name: string) {
 }
 
 export type RoomError = 'full' | 'notFound' | 'started' | 'netFail' | 'hostLeft' | 'version'
+// 房間的生命週期：連線中 → 大廳 ⇄ 遊戲中；任何時候都可能 → 已關閉（離開、被拒絕、房主離開、斷線，不會再回來）
+export type RoomPhase = 'connecting' | 'lobby' | 'playing' | 'closed'
 
 export interface LobbyPlayer {
   id: string
@@ -151,7 +153,7 @@ class RoomFail extends Error {
 
 export class Room {
   readonly state = reactive({
-    phase: 'connecting' as 'connecting' | 'lobby' | 'playing',
+    phase: 'connecting' as RoomPhase,
     code: '',
     host: false,
     me: '',
@@ -169,7 +171,6 @@ export class Room {
   private pendingFail: ((why: RoomFail) => void) | null = null
   private unload = () => this.peer.destroy()
   private hostId = ''
-  private closed = false
   private gameListeners = new Set<(from: string, msg: { t: string }) => void>()
   private leaveListeners = new Set<(peer: string) => void>()
   private welcomed: (() => void) | null = null
@@ -241,6 +242,10 @@ export class Room {
       room.dispose()
       throw e instanceof RoomFail ? e.why : 'netFail'
     }
+  }
+
+  private get closed() {
+    return this.state.phase === 'closed'
   }
 
   // 已開局時的連線介面（重新連線時，開局訊息可能比 onStart 設定得還早）
@@ -552,7 +557,6 @@ export class Room {
 
   private begin(slots: [string, Slot][], elfKind: ElfKind) {
     const s = this.state
-    s.phase = 'playing'
     const all = new Map(slots)
     const numbers = new Map<Slot, number>()
     const names = new Map<Slot, string>()
@@ -563,7 +567,9 @@ export class Room {
       names.set(slot, cleanName(p.name))
     }
     const me = all.get(s.me)
+    // 角色分配裡沒有自己（不合法的開局訊息）：留在大廳，不要進入沒有連線介面的 playing
     if (me === undefined) return
+    s.phase = 'playing'
     all.delete(s.me)
     // 加入者只跟房主通訊，其他加入者由房主的 AI 狀態一併廣播
     const peers = s.host ? all : new Map<string, Slot>()
@@ -588,7 +594,7 @@ export class Room {
   }
 
   private dispose() {
-    this.closed = true
+    this.state.phase = 'closed'
     for (const e of this.conns.values()) {
       clearTimeout(e.iceTimer)
       clearTimeout(e.helloTimer)
@@ -599,7 +605,6 @@ export class Room {
 
   private close(why: RoomError | null) {
     if (this.closed) return
-    this.closed = true
     this.gameListeners.clear()
     this.leaveListeners.clear()
     this.rejoinHandler = null
