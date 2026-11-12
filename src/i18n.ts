@@ -1,3 +1,4 @@
+import { CONFIG } from './game/config'
 import { platformLocale, store } from './crazygames'
 import { ref } from 'vue'
 
@@ -16,7 +17,8 @@ const zh = {
   startAdventure: '開始冒險',
   elfWins: '精靈勝場 {n}',
   goblinWins: '哥布林勝場 {n}',
-  controls: '{keys} 移動・拖曳滑鼠（或雙擊鎖定）轉動視角・滾輪縮放',
+  controls: '{keys} 移動・拖曳滑鼠轉動視角・點擊左 / 右鍵施放技能・滾輪縮放{lock}',
+  lockHint: '・雙擊鎖定滑鼠',
   passive: '被動',
   controlsTouch: '左側搖桿移動・右側拖曳轉視角・雙指縮放',
   rotate: '請將裝置轉為橫向遊玩',
@@ -26,10 +28,10 @@ const zh = {
 
   elfName: '女精靈',
   elfTagline: '以琴聲與凝視狩獵的森林守護者',
-  elfGoal: '在 10 分鐘內捕獲所有哥布林',
+  elfGoal: '在 {min} 分鐘內捕獲所有哥布林',
   goblinName: '哥布林',
   goblinTagline: '群居在山洞裡、機靈又膽小的小傢伙',
-  goblinGoal: '和夥伴們一起撐過 10 分鐘',
+  goblinGoal: '和夥伴們一起撐過 {min} 分鐘',
 
   skillGaze: '凝視',
   skillGazeDesc: '射出愛心眼神射線，第一個被看到的哥布林定身 2 秒，之後的較短',
@@ -75,7 +77,7 @@ const zh = {
   hudSpectating: '👀 觀戰中：{name}（Tab 切換）',
   hudFast: '⏩ 快轉 x4',
   hudNormal: '▶ 正常速度',
-  hudHelp: '{keys} 移動・拖曳滑鼠轉視角（雙擊鎖定滑鼠）・滾輪縮放',
+  hudHelp: '{keys} 移動・拖曳滑鼠轉視角・左 / 右鍵施放技能・滾輪縮放{lock}',
   hudSpectatingTouch: '👀 觀戰中：{name}',
   hudNext: '▶ 切換',
   hudMenu: '回到選角',
@@ -110,15 +112,17 @@ const zh = {
   tYouCapturedTouch: '你被捕獲了……進入觀戰模式',
   tCaptured: '{name} 被捕獲了！剩下 {n} 隻哥布林',
   tHuntStart: '狩獵開始！找出躲在山洞裡的哥布林！',
-  tHideStart: '躲起來！撐過 10 分鐘！',
+  tHideStart: '躲起來！撐過 {min} 分鐘！',
   tMinutesLeft: '剩下 {n} 分鐘！',
+  tFinalHuntElf: '最終狩獵！所有哥布林都顯示在小地圖上',
+  tFinalHuntGoblin: '最終狩獵！精靈感應到你了，快跑！',
   tYouCharmed: '你被琴聲吸引了……（10 秒內更容易被捕獲）',
   tRadar: '⚠ 哥布林雷達：精靈已經進入你所在的山洞！',
 
   rElfWin: '精靈獲勝！',
   rGoblinWin: '哥布林獲勝！',
   rElfDetail: '精靈在 {mm} 分 {ss} 秒內捕獲了全部 {n} 隻哥布林。',
-  rGoblinDetail: '撐過了 10 分鐘！{free} 隻哥布林成功逃脫（被捕獲 {n} 隻）。',
+  rGoblinDetail: '撐過了 {min} 分鐘！{free} 隻哥布林成功逃脫（被捕獲 {n} 隻）。',
 
   hInterrupted: '被哥布林干擾了！',
   hPlaying: '彈奏中……移動或再按 {key} 解除',
@@ -190,7 +194,7 @@ const zh = {
 
   // 紫晶精靈（小提琴刺客）
   chooseElf: '選擇你的精靈',
-  harpSub: 'Sylvari Harpist',
+  harpSub: 'Sylvan Harpist',
   violinName: '紫晶精靈',
   violinSub: 'Amethyst Violinist',
   violinTagline: '以琴聲隱身、一擊制敵的紫晶刺客',
@@ -241,7 +245,8 @@ const en: Dict = {
   startAdventure: 'Start',
   elfWins: 'Elf wins {n}',
   goblinWins: 'Goblin wins {n}',
-  controls: '{keys} to move · Drag mouse (or double-click to lock) to look · Scroll to zoom',
+  controls: '{keys} to move · Drag mouse to look · Left / right click for skills · Scroll to zoom{lock}',
+  lockHint: ' · Double-click to lock the mouse',
   passive: 'Passive',
   controlsTouch: 'Left stick to move · Drag right side to look · Pinch to zoom',
   rotate: 'Rotate your device to landscape',
@@ -251,10 +256,10 @@ const en: Dict = {
 
   elfName: 'Elf',
   elfTagline: 'A forest guardian who hunts with her harp and gaze',
-  elfGoal: 'Capture every goblin within 10 minutes',
+  elfGoal: 'Capture every goblin within {min} minutes',
   goblinName: 'Goblin',
   goblinTagline: 'Clever, timid little critters living in caves',
-  goblinGoal: 'Survive 10 minutes with your friends',
+  goblinGoal: 'Survive {min} minutes with your friends',
 
   skillGaze: 'Gaze',
   skillGazeDesc: 'Fire a heart-eyed beam that roots the first goblin hit for 2s (shorter for the rest)',
@@ -300,7 +305,7 @@ const en: Dict = {
   hudSpectating: '👀 Spectating: {name} (Tab to switch)',
   hudFast: '⏩ Fast x4',
   hudNormal: '▶ Normal speed',
-  hudHelp: '{keys} move · Drag mouse to look (double-click to lock) · Scroll to zoom',
+  hudHelp: '{keys} move · Drag to look · Left / right click for skills · Scroll to zoom{lock}',
   hudSpectatingTouch: '👀 Spectating: {name}',
   hudNext: '▶ Next',
   hudMenu: 'Change side',
@@ -335,15 +340,17 @@ const en: Dict = {
   tYouCapturedTouch: "You've been captured… spectating",
   tCaptured: '{name} was captured! {n} goblins left',
   tHuntStart: 'The hunt begins! Find the goblins hiding in caves!',
-  tHideStart: 'Hide! Survive for 10 minutes!',
+  tHideStart: 'Hide! Survive for {min} minutes!',
   tMinutesLeft: '{n} min left!',
+  tFinalHuntElf: 'Final hunt! Every goblin is shown on your map',
+  tFinalHuntGoblin: 'Final hunt! The elf can sense you — run!',
   tYouCharmed: "You're lured by the harp… (easier to capture for 10s)",
   tRadar: '⚠ Goblin Radar: the elf just entered your cave!',
 
   rElfWin: 'The Elf Wins!',
   rGoblinWin: 'The Goblins Win!',
   rElfDetail: 'The elf captured all {n} goblins in {mm}:{ss}.',
-  rGoblinDetail: 'Survived 10 minutes! {free} goblins escaped ({n} captured).',
+  rGoblinDetail: 'Survived {min} minutes! {free} goblins escaped ({n} captured).',
 
   hInterrupted: 'Interrupted by a goblin!',
   hPlaying: 'Playing… move or press {key} to stop',
@@ -413,7 +420,7 @@ const en: Dict = {
   hudBackRoom: 'Back to room',
   tPlayerLeft: '{name} disconnected — AI takes over',
   chooseElf: 'Choose your elf',
-  harpSub: 'Sylvari Harpist',
+  harpSub: 'Sylvan Harpist',
   violinName: 'Amethyst Elf',
   violinSub: 'Amethyst Violinist',
   violinTagline: 'An assassin who vanishes into violin mist and strikes in a flash',
@@ -488,5 +495,6 @@ export function setLocale(l: Locale) {
 export function t(key: TKey, params?: Record<string, string | number>): string {
   let s = dicts[locale.value][key]
   if (params) for (const k in params) s = s.replaceAll(`{${k}}`, String(params[k]))
-  return s
+  // {min}：一局的分鐘數（CrazyGames 短局 4 分鐘、網站版 10 分鐘）
+  return s.replaceAll('{min}', String(CONFIG.matchDuration / 60))
 }

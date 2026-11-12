@@ -17,6 +17,7 @@ import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 import { t, type TKey } from '../i18n'
 import type { IconName } from '../icons'
 import * as crazygames from '../crazygames'
+import { isCrazyGames } from '../platform'
 import { lowPower, touchMode } from '../input/touch'
 import type { Pose } from './models'
 import type { NetLink } from '../net/room'
@@ -74,6 +75,9 @@ const ELF_ACTION_POSE: Record<ElfAction, Pose | null> = {
 }
 // 精靈模型載入的等待上限（毫秒）：超過就先用替身開局，模型載入後再換上
 const LOAD_TIMEOUT = 20000
+// 左鍵「點擊」的判定：放開時離按下的位置不到 6px、按住不到 0.35 秒（超過就當成拖曳轉視角）
+const CLICK_SLOP = 6
+const CLICK_MS = 350
 // 加入者：房主已經結束衝鋒、本機卻還停在突刺 / 收招超過這個秒數時（漏掉事件），以快照為準清掉
 const STALE_CHARGE = 0.6
 const r2 = (v: number) => Math.round(v * 100) / 100
@@ -155,6 +159,13 @@ function vec2(d: unknown) {
   return Array.isArray(d) ? new THREE.Vector3(finite(d[0]), 0, finite(d[1])) : new THREE.Vector3()
 }
 
+// 每隻哥布林的出生山洞。8 隻沿用原本的 [0,0,1,1,2,2,3,4]（玩家的 0 號洞有同伴）；
+// 其他數量先每個洞放一隻，多的再從 0 號洞開始補，讓每座洞都有人
+export function goblinCaves(count: number, caves: number) {
+  if (count === 8 && caves === 5) return [0, 0, 1, 1, 2, 2, 3, 4]
+  return Array.from({ length: count }, (_, i) => i % caves)
+}
+
 function d2(a: THREE.Vector3, b: THREE.Vector3) {
   return Math.hypot(a.x - b.x, a.z - b.z)
 }
@@ -204,6 +215,8 @@ export class Game {
   private camDist = 7
   private dragging = false
   private lastMouse = { x: 0, y: 0 }
+  // 左鍵按下的位置與時間：放開時移動很少、時間很短才算點擊（施放技能），否則是拖曳轉視角
+  private press: { x: number; y: number; at: number } | null = null
   private raycaster = new THREE.Raycaster()
   private spectateIdx = 0
   private radarWas = false
@@ -299,9 +312,9 @@ export class Game {
     // 哥布林：分散在各個山洞，玩家在第一個洞
     const caves = this.world.caves
     const names = (this.defaultNames = t('goblinNames').split(','))
-    const dist = [0, 0, 1, 1, 2, 2, 3, 4]
+    const dist = goblinCaves(CONFIG.goblinCount, caves.length)
     for (let i = 0; i < CONFIG.goblinCount; i++) {
-      const c = caves[dist[i] % caves.length]
+      const c = caves[dist[i]]
       const g = new Goblin(i, names[i], c.id)
       const a = Math.random() * Math.PI * 2
       g.pos.set(c.center.x + Math.cos(a) * 4, 0, c.center.z + Math.sin(a) * 4)
@@ -428,6 +441,11 @@ export class Game {
     else crazygames.gameplayStop()
   }
 
+  // 最終狩獵（短局版）：倒數最後 CONFIG.finalHunt 秒，精靈感知到所有哥布林
+  get finalHunt() {
+    return CONFIG.finalHunt > 0 && this.hud.phase === 'play' && this.duration - this.elapsed <= CONFIG.finalHunt
+  }
+
   setSpeed(s: number) {
     this.speed = s
     this.hud.speed = s
@@ -463,14 +481,29 @@ export class Game {
         if (e.button === 2) this.onAction('Mouse2')
         return
       }
+      // 不需要鎖定滑鼠也能用滑鼠施放技能：右鍵直接施放；左鍵拖曳轉視角，沒拖動的短按放開時施放
+      if (e.button === 2) {
+        this.onAction('Mouse2')
+        return
+      }
       this.dragging = true
       this.lastMouse = { x: e.clientX, y: e.clientY }
+      this.press = e.button === 0 ? { x: e.clientX, y: e.clientY, at: performance.now() } : null
     }))
-    this.on(canvas, 'dblclick', () => {
-      if (!touchMode.value) void canvas.requestPointerLock?.()
-    })
+    // 雙擊鎖定滑鼠（像 FPS 一樣轉視角）。鎖定只能用 Esc 解除，而 CrazyGames 上 Esc 也會退出平台的全螢幕，
+    // 所以 CrazyGames 版不提供鎖定（滑鼠技能已經不需要鎖定）
+    if (!isCrazyGames)
+      this.on(canvas, 'dblclick', () => {
+        if (!touchMode.value) void canvas.requestPointerLock?.()
+      })
     this.on(canvas, 'contextmenu', ((e: Event) => e.preventDefault()))
-    this.on(window, 'mouseup', () => (this.dragging = false))
+    this.on(window, 'mouseup', ((e: MouseEvent) => {
+      this.dragging = false
+      const p = this.press
+      this.press = null
+      if (!p || e.button !== 0 || document.pointerLockElement === canvas) return
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < CLICK_SLOP && performance.now() - p.at < CLICK_MS) this.onAction('Mouse0')
+    }))
     this.on(window, 'mousemove', ((e: MouseEvent) => {
       if (document.pointerLockElement === canvas) {
         this.rotateCam(e.movementX, e.movementY)
@@ -1611,8 +1644,13 @@ export class Game {
       for (const mark of [300, 120, 60]) {
         if (left < mark && !this.warned.has(mark) && this.duration > mark) {
           this.warned.add(mark)
-          this.toast(t('tMinutesLeft', { n: mark / 60 }), 'warn')
+          // 最終狩獵開始的那一刻改成最終狩獵的提示
+          if (mark !== CONFIG.finalHunt) this.toast(t('tMinutesLeft', { n: mark / 60 }), 'warn')
         }
+      }
+      if (CONFIG.finalHunt > 0 && left <= CONFIG.finalHunt && !this.warned.has(-1)) {
+        this.warned.add(-1)
+        this.toast(this.role === 'elf' ? t('tFinalHuntElf') : t('tFinalHuntGoblin'), 'warn')
       }
       if (left <= 0 && auth) {
         this.finish('goblin')
@@ -2152,8 +2190,9 @@ export class Game {
     if (this.role === 'elf') {
       for (const gb of this.goblins) {
         if (gb.captured) continue
-        // 刺客之眼：所有哥布林都顯示（紫色）
+        // 刺客之眼：所有哥布林都顯示（紫色）；最終狩獵：橘色
         if (elf.eye > 0) dot(gb.pos, '#d0a0ff', 3.2)
+        else if (this.finalHunt) dot(gb.pos, '#ffb347', 3.2)
         else if (d2(gb.pos, elf.pos) < 28 && this.world.lineOfSight(elf.pos, gb.pos)) dot(gb.pos, '#9effa0', 3)
       }
     } else {

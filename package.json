@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:cloudflare": "VITE_PLATFORM=cloudflare vite",
+    "dev:crazygame": "VITE_PLATFORM=crazygames vite",
     "build": "vue-tsc -b && vite build",
     "package": "bun run build && rm -f crazygames-build.zip && cd dist && zip -qr ../crazygames-build.zip . -x elf-preview.html 'assets/elfPreview-*'",
     "preview": "vite preview",

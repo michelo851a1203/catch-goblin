@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isCrazyGames } from '../platform'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Game, createHudState } from '../game/Game'
 import type { ElfKind, Role } from '../game/config'
@@ -149,7 +150,7 @@ function toggleSpeed() {
       <button v-if="!net" @click="toggleSpeed"><IconText :text="hud.speed === 1 ? t('hudFast') : t('hudNormal')" /></button>
     </div>
 
-    <div v-if="!touchMode" class="help">{{ t('hudHelp', { keys: moveKeys }) }}</div>
+    <div v-if="!touchMode" class="help">{{ t('hudHelp', { keys: moveKeys, lock: isCrazyGames ? '' : t('lockHint') }) }}</div>
 
     <div v-if="hud.phase === 'countdown'" class="countdown" :key="hud.countdown">{{ hud.countdown }}</div>
 

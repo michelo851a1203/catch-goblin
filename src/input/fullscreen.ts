@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { touchMode } from './touch'
-import { onCrazyGames } from '../crazygames'
+import { isCrazyGames } from '../platform'
 
 // 全螢幕：手機上瀏覽器的網址列 / 導覽列會擋住畫面，提供按鈕讓玩家切換。
 // iPhone Safari 不支援元素全螢幕（iPad 可以，舊版需 webkit 前綴），不支援時不顯示按鈕
@@ -15,7 +15,7 @@ const doc = (typeof document !== 'undefined' ? document : undefined) as Doc | un
 
 // CrazyGames 規定全螢幕由平台提供、遊戲內不可自己做：在 CrazyGames 上整個功能關閉（不顯示按鈕、不自動重新進入全螢幕）。
 // Cloudflare Pages 等其他網域照舊提供
-const onPlatformFullscreen = typeof location !== 'undefined' && onCrazyGames(location.hostname)
+const onPlatformFullscreen = isCrazyGames
 export const fullscreenSupported = !!doc && !onPlatformFullscreen && !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled)
 
 function current() {

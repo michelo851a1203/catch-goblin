@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isCrazyGames } from '../platform'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
@@ -99,7 +100,7 @@ const cards = computed<Card[]>(() => {
       },
     ]
   return [
-    { ...harp, id: 'elf', kind: undefined, sub: 'Sylvari Huntress', tagline: t('elfTagline') },
+    { ...harp, id: 'elf', kind: undefined, sub: 'Sylvan Huntress', tagline: t('elfTagline') },
     {
       id: 'goblin',
       role: 'goblin',
@@ -277,7 +278,7 @@ function start(c: Card) {
                   </div>
                 </li>
               </ul>
-              <p class="controls">{{ touchMode ? t('controlsTouch') : t('controls', { keys: moveKeys }) }}</p>
+              <p class="controls">{{ touchMode ? t('controlsTouch') : t('controls', { keys: moveKeys, lock: isCrazyGames ? '' : t('lockHint') }) }}</p>
               <div class="actions">
                 <button class="ghost" @click.stop="back">{{ t('back') }}</button>
                 <template v-if="lobby">

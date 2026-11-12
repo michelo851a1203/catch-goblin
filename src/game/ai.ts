@@ -222,8 +222,8 @@ function senseGoblins(game: Game) {
     const dx = g.pos.x - elf.pos.x, dz = g.pos.z - elf.pos.z
     const d = Math.hypot(dx, dz)
     const facing = (dx * fwdX + dz * fwdZ) / (d || 1)
-    // 刺客之眼開圖中：全部看得到
-    const visible = elf.eye > 0 || d < 4 || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
+    // 刺客之眼開圖中、最終狩獵：全部看得到
+    const visible = elf.eye > 0 || game.finalHunt || d < 4 || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
     const rec = ai.seen.get(g)
     if (visible) {
       if (rec && now - rec.at < 0.5) {

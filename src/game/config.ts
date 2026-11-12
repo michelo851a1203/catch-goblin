@@ -1,10 +1,23 @@
+import { isCrazyGames } from '../platform'
+
+// 短局版（CrazyGames）：網頁玩家單次遊玩時間短，改成 4 分鐘一局、較小的地圖、6 隻哥布林，
+// 最後 60 秒進入「最終狩獵」（精靈小地圖顯示所有哥布林），避免最後幾隻找不到而拖到時間結束。
+// 以無頭 AI 對 AI 模擬（每組 12 個種子）調整：玩家速度的豎琴精靈對 6 隻 AI 哥布林約 2/3 勝率（略偏精靈）；
+// 哥布林玩家面對的 AI 精靈約五五波。5 隻時精靈 9 成以上會贏、7 隻時 AI 精靈幾乎抓不完。
+// Cloudflare Pages 網站版維持原本的 10 分鐘長局。
+const SHORT = isCrazyGames
+
 // 遊戲平衡參數：整體對精靈有利，但哥布林靠團隊合作與技能仍有機會獲勝
 export const CONFIG = {
-  matchDuration: 600, // 10 分鐘
+  matchDuration: SHORT ? 240 : 600, // 4 分鐘 / 10 分鐘
   startCountdown: 3,
-  goblinCount: 8,
+  // 最終狩獵：剩下這麼多秒時，所有哥布林的位置顯示在精靈的小地圖上（0＝關閉）
+  finalHunt: SHORT ? 60 : 0,
+  goblinCount: SHORT ? 6 : 8,
 
-  worldRadius: 115,
+  worldRadius: SHORT ? 80 : 115,
+  // 山洞與小徑離中央的距離倍率（地圖邊界另由 worldRadius 決定）
+  mapScale: SHORT ? 0.7 : 1,
 
   goblin: {
     speed: 6.0,
@@ -19,7 +32,7 @@ export const CONFIG = {
 
   elf: {
     speed: 7.4,
-    aiSpeed: 6.2,
+    aiSpeed: SHORT ? 6.8 : 6.2,
     aiSight: 19,
     aiReaction: 1.0,
     aiGazeRange: 15,

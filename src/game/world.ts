@@ -75,7 +75,9 @@ export class World {
       { name: '西骨洞', x: -60, z: 6, rot: 1.4 },
       { name: '老哥布林窟', x: 48, z: 52, rot: 0.8 },
     ]
-    caveDefs.forEach((d, i) => this.buildCave(i, d.name, d.x, d.z, d.rot))
+    // 短局（CrazyGames 版）的地圖較小：山洞往中央靠攏（mapScale = 1 時與原本完全相同）
+    const k = CONFIG.mapScale
+    caveDefs.forEach((d, i) => this.buildCave(i, d.name, d.x * k, d.z * k, d.rot))
     this.buildCage()
     this.scatterNature()
     this.buildMountains()
@@ -152,7 +154,7 @@ export class World {
     for (let i = 0; i < 160; i++) {
       const t = i / 160
       const a = t * Math.PI * 2
-      const r = 34 + Math.sin(a * 3) * 6
+      const r = (34 + Math.sin(a * 3) * 6) * CONFIG.mapScale
       const s = mesh(new THREE.CircleGeometry(1.6 + rand() * 0.8, 7), pathMat, false)
       s.rotation.x = -Math.PI / 2
       s.position.set(Math.cos(a) * r, 0.02, Math.sin(a) * r)
