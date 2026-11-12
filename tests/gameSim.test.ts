@@ -5,7 +5,7 @@
 import './sim/env'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('three', async (importOriginal) => {
   const THREE = await importOriginal<typeof import('three')>()
@@ -69,6 +69,10 @@ vi.mock('../src/crazygames', async (importOriginal) => {
   }
 })
 vi.setConfig({ testTimeout: 60000 })
+// 每個模擬都是同步的長迴圈，vitest 在同一個檔案的測試之間不會讓出事件迴圈：整個檔案（CI 上約 2 分鐘）等於一段同步程式，
+// worker 回不了主行程的 RPC，超過 60 秒就報「Timeout calling "onTaskUpdate"」讓 CI 失敗（測試本身都通過）。
+// 每個測試開始前讓出一次（setImmediate 會先處理 I/O），RPC 就能即時回應；不影響亂數與 golden
+beforeEach(() => new Promise<void>((r) => setImmediate(r)))
 
 const { makeGame, runMultiplayer, runSolo } = await import('./sim/harness')
 const { sfxLog } = await import('./sim/sfxLog')
