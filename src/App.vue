@@ -11,6 +11,8 @@ import { t } from './i18n'
 import { music } from './game/music'
 import { icon } from './icons'
 import { preloadElves } from './game/elf/preload'
+import { isCrazyGames } from './platform'
+import { isNewPlayer } from './tutorial'
 
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
@@ -89,6 +91,15 @@ async function newRound(r: Role, kind?: ElfKind) {
 }
 // ?role=goblin 直接進入時也要決定 AI 精靈
 if (role.value === 'goblin' && !isElfKind(qElf)) elfKind.value = Math.random() < 0.5 ? 'harp' : 'violin'
+
+// 新手（CrazyGames 版）：直接進入遊戲（平台規定新玩家要落在遊戲中，最多點一下），
+// 當操作最簡單的哥布林、對手是招式最好懂的豎琴精靈，由遊戲中的教學卡帶著玩；第二局起才看到選角畫面。
+// 好友邀請 / 即時多人優先；開局前不播廣告
+if (isCrazyGames && !role.value && !auto.value && isNewPlayer()) {
+  role.value = 'goblin'
+  if (!isElfKind(qElf)) elfKind.value = 'harp'
+  sheet.value = false
+}
 
 // 輸入暱稱並連線成功後收起 sheet，左上角改為「已加入 <房號>」
 function attach(r: Room) {

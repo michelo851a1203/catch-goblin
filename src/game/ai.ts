@@ -321,7 +321,7 @@ function updateVioletAI(game: Game, dt: number) {
     game.violinStealth()
     return
   }
-  if (elf.cd.eye <= 0 && now > 25 && !elf.stealthed && elf.cd.charge <= 2) {
+  if (elf.cd.eye <= 0 && now > V.aiEyeAfter && !elf.stealthed && elf.cd.charge <= 2) {
     game.violinEye()
     return
   }
