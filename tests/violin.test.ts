@@ -6,7 +6,7 @@ import { inspectGlb } from '../tools/validate-glb.mjs'
 import { CONFIG } from '../src/game/config'
 import { ElfAnimState } from '../src/game/elf/ElfAnimState'
 import { ElfCharacter } from '../src/game/elf/ElfCharacter'
-import { VIOLINIST_ANIM, VIOLINIST_CLIPS, VIOLINIST_RIG } from '../src/game/elf/rigs'
+import { VIOLINIST_ANIM, VIOLINIST_CLIPS, VIOLINIST_COLLIDERS, VIOLINIST_RIG, VIOLINIST_SPRING_CHAINS } from '../src/game/elf/rigs'
 import { behindSpot, fearTargets, nearestTarget, sweepHit, type Target } from '../src/game/violin'
 import { fakeFallback, fileLoad, VIOLINIST_GLB } from './helpers'
 
@@ -68,7 +68,7 @@ describe('紫晶精靈動畫狀態機', () => {
     expect(s.update('pack', 0).clip).toBe('Capture')
   })
 
-  it('步態依 Mixamo 量測的參考速度播放（不滑步）', () => {
+  it('步態依建置腳本的參考速度播放（不滑步）', () => {
     const s = new ElfAnimState(VIOLINIST_ANIM)
     const r = s.update('normal', 1, 7.4)
     expect(r.clip).toBe('Run')
@@ -84,6 +84,8 @@ describe('紫晶精靈 GLB', () => {
     const names = info.animations.map((a: { name: string }) => a.name)
     for (const c of VIOLINIST_CLIPS) expect(names).toContain(c)
     for (const n of [...VIOLINIST_RIG.lod, 'prop_violin', 'prop_bow', 'Violin', 'Bow']) expect(info.nodes).toContain(n)
+    // 布料 / 頭髮的彈簧骨鏈都在骨架裡
+    for (const chains of Object.values(VIOLINIST_SPRING_CHAINS)) for (const c of chains) for (const b of c) expect(info.bones).toContain(b)
   })
 
   it('尺寸：約 1.7m；Mixamo rest（T-pose）腳底比動作中低約 0.1m（動作的骨盆位移會把腳放回地面）', () => {
@@ -114,6 +116,219 @@ describe('紫晶精靈 GLB', () => {
     elf.setOpacity(0.3)
     expect(elf.root.visible).toBe(true)
     elf.setOpacity(1)
+    elf.dispose()
+  })
+})
+
+// 紫晶精靈的儀態與布料（build_violinist.py 的 ground / rig_cloth）：
+// Meshy 的自動綁骨把裙擺、垂袖綁在腿骨上，骨架又比網格高 4 cm、膝關節在腿後方 16 cm——走路時布料黏著腿、關節繞著肢體外面的點轉
+describe('紫晶精靈的骨架與布料', () => {
+  // 彈簧鏈的抖動相位固定下來，量測值才不會每次不同
+  // （不能直接 mock Math.random：three 的 UUID 也用它，動作會互相覆蓋）
+  const load = async () => {
+    const elf = new ElfCharacter({ rig: VIOLINIST_RIG, load: fileLoad, fallback: fakeFallback(), lowEnd: false, random: () => 0.37 })
+    await elf.ready
+    return elf
+  }
+  const LEGS = /(UpLeg|Leg|Foot|ToeBase)$/
+  const CLOTH = /^(skirt_|drape_|hair_)/
+
+  // LOD0 的綁定姿勢：頂點座標、每個頂點各骨頭的權重、各骨頭的綁定位置
+  function bindData(elf: ElfCharacter) {
+    const mesh = elf.root.getObjectByName('VioletMesh_LOD0') as THREE.SkinnedMesh
+    const pos = mesh.geometry.attributes.position
+    const si = mesh.geometry.attributes.skinIndex
+    const sw = mesh.geometry.attributes.skinWeight
+    const bones = mesh.skeleton.bones
+    const bind = (name: string) => {
+      const i = bones.findIndex((b) => b.name === name)
+      return new THREE.Vector3().setFromMatrixPosition(mesh.skeleton.boneInverses[i].clone().invert())
+    }
+    const weights = (v: number) => {
+      const out: [string, number][] = []
+      for (let k = 0; k < 4; k++) if (sw.getComponent(v, k) > 0) out.push([bones[si.getComponent(v, k)].name, sw.getComponent(v, k)])
+      return out
+    }
+    return { pos, bind, weights, count: pos.count }
+  }
+
+  it('骨架與網格對齊：手腕關節在手的高度、膝關節在腿的中心（不在腿的後方）', async () => {
+    const elf = await load()
+    const { pos, bind, weights, count } = bindData(elf)
+    const box = (pred: (w: [string, number][], y: number) => boolean) => {
+      const b = new THREE.Box3()
+      for (let v = 0; v < count; v++) if (pred(weights(v), pos.getY(v))) b.expandByPoint(new THREE.Vector3().fromBufferAttribute(pos, v))
+      return b
+    }
+    // 手：LeftHand 權重為主的頂點（T-pose 手掌水平，厚度約 3 cm）
+    const hand = box((w) => w.some(([n, x]) => n === 'LeftHand' && x > 0.6))
+    const wrist = bind('LeftHand')
+    expect(wrist.y).toBeGreaterThan(hand.min.y - 0.015)
+    expect(wrist.y).toBeLessThan(hand.max.y + 0.015)
+    // 膝：膝關節高度附近、腿骨權重為主的頂點（腿本身；裙擺已不帶腿骨權重）
+    const knee = bind('LeftLeg')
+    const leg = box((w, y) => Math.abs(y - knee.y) < 0.03 && w.filter(([n]) => /^Left(UpLeg|Leg)$/.test(n)).reduce((a, [, x]) => a + x, 0) > 0.9)
+    const c = leg.getCenter(new THREE.Vector3())
+    expect(Math.abs(knee.z - c.z)).toBeLessThan(0.03)
+    expect(Math.abs(knee.x - c.x)).toBeLessThan(0.03)
+    // 腿的比例：大腿與小腿長度相近（原本膝蓋偏高：0.34 / 0.49）
+    const thigh = bind('LeftUpLeg').distanceTo(knee), shin = knee.distanceTo(bind('LeftFoot'))
+    expect(thigh / shin).toBeGreaterThan(0.8)
+    expect(thigh / shin).toBeLessThan(1.1)
+    elf.dispose()
+  })
+
+  it('布料不再綁在腿上：遠離腿的裙片 / 垂袖完全不帶腿骨權重，改由彈簧骨帶動', async () => {
+    const elf = await load()
+    const { pos, weights, count } = bindData(elf)
+    const sum = (w: [string, number][], re: RegExp) => w.filter(([n]) => re.test(n)).reduce((a, [, x]) => a + x, 0)
+    let cloth = 0, far = 0, dragged = 0
+    for (let v = 0; v < count; v++) {
+      const w = weights(v)
+      if (sum(w, CLOTH) > 0.3) cloth++
+      // 身體中線 26 cm 以外、腰以下：只有裙片與垂袖（原本這裡有上千個頂點跟著大腿 / 小腿動）。
+      // 更靠近腿的布料在臀部交界帶保留少量大腿權重做過渡（blend_cloth_boundary）
+      if (Math.abs(pos.getX(v)) > 0.26 && pos.getY(v) < 0.9) {
+        far++
+        if (sum(w, LEGS) > 0.05) dragged++
+      }
+    }
+    expect(cloth).toBeGreaterThan(4000)
+    expect(far).toBeGreaterThan(500)
+    expect(dragged).toBe(0)
+    elf.dispose()
+  })
+
+  it('彈簧骨：裙擺 8×4 + 垂袖 2×3 + 頭髮 3×3；rest pose 下尖端不在碰撞體內', async () => {
+    const elf = await load()
+    elf.animate(0.016, 0, 'normal')
+    expect(elf.springs.count).toBe(47)
+    expect(elf.springs.colliderCount).toBe(VIOLINIST_COLLIDERS.length)
+    const { worst, name } = elf.springs.restClearance(elf.root)
+    expect(worst, name).toBeGreaterThan(0)
+    elf.dispose()
+  })
+
+  it('靜止時布料穩定、不發散', async () => {
+    const elf = await load()
+    for (let i = 0; i < 240; i++) elf.animate(1 / 60, 0, 'normal')
+    const tips = ['skirt_B4', 'skirt_L4', 'drape_L3', 'hair_C3'].map((n) => elf.root.getObjectByName(n)!)
+    const a = tips.map((o) => o.getWorldPosition(new THREE.Vector3()))
+    for (let i = 0; i < 30; i++) elf.animate(1 / 60, 0, 'normal')
+    tips.forEach((o, k) => expect(o.getWorldPosition(new THREE.Vector3()).distanceTo(a[k]), o.name).toBeLessThan(0.03))
+    elf.root.traverse((o) => {
+      if ((o as THREE.Bone).isBone) expect(Number.isFinite(o.quaternion.x)).toBe(true)
+    })
+    elf.dispose()
+  })
+
+  it('走動時裙擺往後飄（輕盈），而且不會穿進腿裡', async () => {
+    const elf = await load()
+    const legs = ['LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot'].map((n) => elf.root.getObjectByName(n)!)
+    const skirt: THREE.Object3D[] = []
+    elf.root.traverse((o) => /^skirt_.*[234]$/.test(o.name) && skirt.push(o))
+    const hips = elf.root.getObjectByName('Hips')!
+    const back = elf.root.getObjectByName('skirt_B4')!
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), p = new THREE.Vector3(), c = new THREE.Vector3()
+    const trail = () => hips.getWorldPosition(a).z - back.getWorldPosition(b).z // 裙擺後緣在骨盆後方多遠（角色朝 +Z 前進）
+    for (let i = 0; i < 120; i++) elf.animate(1 / 60, 0, 'normal')
+    const still = trail()
+    const run = (speed: number, move: number, frames: number) => {
+      let worst = Infinity, sum = 0, n = 0
+      for (let i = 0; i < frames; i++) {
+        elf.root.position.z += speed / 60
+        elf.animate(1 / 60, move, 'normal')
+        if (i < 60) continue
+        sum += trail()
+        n++
+        for (const o of skirt) {
+          o.getWorldPosition(p)
+          for (let l = 0; l < legs.length; l += 3) {
+            for (const [from, to, r] of [[legs[l], legs[l + 1], 0.07], [legs[l + 1], legs[l + 2], 0.05]] as const) {
+              from.getWorldPosition(a)
+              to.getWorldPosition(b)
+              const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(b.clone().sub(a)) / b.distanceToSquared(a), 0, 1)
+              c.copy(a).lerp(b, t)
+              worst = Math.min(worst, p.distanceTo(c) - r)
+            }
+          }
+        }
+      }
+      return { worst, trail: sum / n }
+    }
+    const walk = run(2, 0.27, 180)
+    expect(elf.anim.current).toBe('Walk')
+    expect(walk.worst).toBeGreaterThan(0)
+    expect(walk.trail - still).toBeGreaterThan(0.08) // 走路就飄得起來
+    const sprint = run(7.4, 1, 180)
+    expect(elf.anim.current).toBe('Run')
+    expect(sprint.worst).toBeGreaterThan(0)
+    expect(sprint.trail - still).toBeGreaterThan(0.08)
+    // 迎風有上限：全速也不會被吹成水平（後緣仍明顯低於骨盆）
+    expect(back.getWorldPosition(p).y).toBeLessThan(hips.getWorldPosition(a).y - 0.1)
+    elf.dispose()
+  })
+
+  it('走路 / 跑步時支撐腳貼地（不浮空、不陷入地面）', async () => {
+    const elf = await load()
+    const feet = ['LeftFoot', 'RightFoot'].map((n) => elf.root.getObjectByName(n)!)
+    elf.animate(1 / 60, 0, 'normal')
+    elf.root.updateMatrixWorld(true)
+    const rest = feet.map((f) => f.getWorldPosition(new THREE.Vector3()).y) // 待機時腳踝高度
+    for (const [move, speed, flight] of [[0.27, 2, 0.015], [1, 7.4, 0.07]] as const) {
+      let maxLow = -Infinity, minLow = Infinity
+      for (let i = 0; i < 120; i++) {
+        elf.root.position.z += speed / 60
+        elf.animate(1 / 60, move, 'normal')
+        elf.root.updateMatrixWorld(true)
+        if (i < 40) continue
+        const low = Math.min(...feet.map((f, k) => f.getWorldPosition(new THREE.Vector3()).y - rest[k]))
+        maxLow = Math.max(maxLow, low)
+        minLow = Math.min(minLow, low)
+      }
+      expect(maxLow).toBeLessThan(flight) // 跑步騰空期只允許幾公分
+      expect(minLow).toBeGreaterThan(-0.03)
+    }
+    elf.dispose()
+  })
+
+  it('儀態：上身平穩滑行——骨盆上下起伏只有幾公分（原本的支撐期太長，跑步每步起伏 17 cm，像在彈跳）', async () => {
+    const elf = await load()
+    const hips = elf.root.getObjectByName('Hips')!
+    for (const [move, speed, limit] of [[0.27, 2, 0.045], [1, 7.4, 0.06]] as const) {
+      let lo = Infinity, hi = -Infinity
+      for (let i = 0; i < 240; i++) {
+        elf.root.position.z += speed / 60
+        elf.animate(1 / 60, move, 'normal')
+        if (i < 120) continue
+        lo = Math.min(lo, hips.position.y)
+        hi = Math.max(hi, hips.position.y)
+      }
+      expect(hi - lo).toBeGreaterThan(0.01) // 仍然有步伐的起伏
+      expect(hi - lo).toBeLessThan(limit)
+    }
+    elf.dispose()
+  })
+
+  it('急停時裙擺不會整片甩到身體前面；瞬移時重設', async () => {
+    const elf = await load()
+    const hips = elf.root.getObjectByName('Hips')!
+    const tips = ['skirt_B4', 'skirt_BL4', 'skirt_BR4'].map((n) => elf.root.getObjectByName(n)!)
+    const a = new THREE.Vector3(), b = new THREE.Vector3()
+    for (let i = 0; i < 120; i++) {
+      elf.root.position.z += 7.4 / 60
+      elf.animate(1 / 60, 1, 'normal')
+    }
+    let ahead = -Infinity
+    for (let i = 0; i < 90; i++) {
+      elf.animate(1 / 60, 0, 'normal') // 速度瞬間歸零
+      for (const o of tips) ahead = Math.max(ahead, o.getWorldPosition(b).z - hips.getWorldPosition(a).z)
+    }
+    expect(ahead).toBeLessThan(0.25) // 後片的下緣最多往前盪過骨盆一點（完全的慣性會甩到身前 0.6 m 以上）
+    elf.root.position.set(20, 0, -15)
+    elf.root.updateMatrixWorld(true)
+    elf.animate(1 / 60, 0, 'normal')
+    for (const o of tips) expect(o.getWorldPosition(b).distanceTo(hips.getWorldPosition(a))).toBeLessThan(1.2)
     elf.dispose()
   })
 })

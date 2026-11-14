@@ -12,14 +12,17 @@ Catch Goblin — 紫晶精靈（小提琴刺客）：Meshy.ai Mixamo 綁骨模�
       高模法線貼圖的烘焙結果快取在 tools/blender/out/violet_normal_bake.png，VIOLINIST_REBAKE=1 強制重新烘焙）
 
 輸出：
-    public/models/violinist/violinist.glb   LOD0 + LOD1 共用骨架、小提琴與琴弓（掛在 prop_violin / prop_bow 骨）、12 個動作
+    public/models/violinist/violinist.glb   LOD0 + LOD1 共用骨架（含布料 / 頭髮彈簧骨 47 根）、小提琴與琴弓（掛在 prop_violin / prop_bow 骨）、11 個動作
     tools/blender/out/violinist.blend
 
 流程：
-  1. 匯入 Mixamo GLB、套用 0.01 縮放（cm → m）、骨頭去掉 "mixamorig:" 前綴、腳底對齊 y=0
-  2. 量測 Walking / Running 的腳底速度（遊戲依實際移動速度調整播放速率，見 VIOLINIST_GAIT_REF）
+  1. 匯入 Mixamo GLB、套用 0.01 縮放（cm → m）、骨頭去掉 "mixamorig:" 前綴、腳底對齊 y=0（骨架與網格位移相同的量）
+  2. 腿部關節校正與布料（rig_cloth）：Meshy 的自動綁骨把膝關節放在腿後方 16 cm，裙擺 / 垂袖又全部綁在腿骨上。
+     以測地線把網格分成 腿 / 身體 / 裙擺 / 垂袖 / 頭髮，切開互相融合的橋接面，膝關節移回腿中心，
+     布料的腿骨權重改掛到彈簧骨鏈（裙擺 8×4、垂袖 2×3、頭髮 3×3），遊戲端以 SecondaryMotion 驅動
   3. 新增道具骨 prop_violin（左手）/ prop_bow（右手），小提琴減面後與程序化琴弓以骨頭父子關係掛上
-  4. 以「世界軸 + 相對 rest」與兩骨 IK 產生其餘動作：拉琴、刺客之眼、衝鋒前搖 / 突刺 / 收招、捕獲、勝利、暈眩
+  4. 以「世界軸 + 相對 rest」與兩骨 IK 產生所有動作：待機、走路、奔跑（IK 步態，取代 Mixamo 的 Walking / Running）、
+     拉琴、刺客之眼、衝鋒前搖 / 突刺 / 收招、捕獲、勝利、暈眩。
      道具骨每格依手的位置重新擺放（拉琴時琴弓永遠通過琴橋附近的接觸點）
   5. 由高模烘焙切線空間法線貼圖到低模（布料皺褶、飾品、五官細節，不增加面數）
   6. LOD1 減面、貼圖縮小為 WebP、匯出 GLB（EXT_meshopt_compression，含 MikkTSpace 切線）
@@ -68,6 +71,9 @@ VIOLIN_GRIP = 0.70  # 左手握在琴頸：由琴尾往上 70% 處
 BOW_LEN = 0.56
 FPS = 24
 SINK = 0.006
+# 程序化步態：timeScale=1 時腳底相對地面的速度（m/s）；遊戲端 VIOLINIST_ANIM.gaitRef 要一致
+WALK_FRAMES, WALK_REF = 16, 1.6  # 0.67 s 一個循環，步幅約 0.53 m
+RUN_FRAMES, RUN_REF = 12, 6.0  # 0.5 s 一個循環；精靈 7.4 m/s 時播放速率 1.23
 
 X, Y, Z = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))
 Sn, Cs, TAU = math.sin, math.cos, 2 * math.pi
@@ -197,7 +203,7 @@ def skin_vertices(me):
     """取每個頂點的平均 UV 對色彩貼圖取樣：膚色頂點（頭髮 / 瀏海是紫色，不屬於臉）"""
     m = me.data
     n = len(m.vertices)
-    img = next(nd.image for nd in m.materials[0].node_tree.nodes if nd.type == 'TEX_IMAGE' and nd.image and 'metallic' not in nd.image.name and 'rough' not in nd.image.name)
+    img = next(l.from_node.image for l in m.materials[0].node_tree.links if l.to_socket.name == 'Base Color' and l.from_node.type == 'TEX_IMAGE')
     W, H = img.size
     px = np.empty(W * H * 4, dtype=np.float32)
     img.pixels.foreach_get(px)
@@ -354,29 +360,441 @@ def ground(rig, me, fidx):
         o.select_set(True)
     bpy.context.view_layer.objects.active = rig
     bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+    # 網格是骨架的子物件：兩者各移 dz 再套用，網格資料實際位移 2×dz、骨頭只有 dz —— 整副骨架比網格高 |dz|（約 4 cm），
+    # 肩 / 肘 / 腕 / 髖 / 膝的轉軸都在肢體上方，道具（掛在手骨）也浮在手的上方。骨頭補上同樣的位移，讓關節回到肢體中心
+    rig.data.transform(Matrix.Translation((0, 0, dz)))
+    bpy.context.view_layer.update()
     print(f'[violinist] ground shift {dz:.3f} m')
     return dz
 
 
-def measure_gait(rig, act_name, frames):
-    """支撐腳相對骨盆往後移動的速度（m/s）＝ timeScale=1 時不滑步的移動速度"""
-    sc = bpy.context.scene
-    rig.animation_data.action = bpy.data.actions[act_name]
-    pos = {S: [] for S in ('Left', 'Right')}
-    for f in range(0, frames + 1):
-        sc.frame_set(f)
-        for S in pos:
-            pos[S].append((rig.matrix_world @ rig.pose.bones[f'{S}ToeBase'].head).copy())
-    rig.animation_data.action = None
-    speeds = []
-    for S, ps in pos.items():
-        zmin = min(p.z for p in ps)
-        for i in range(1, len(ps)):
-            if ps[i].z < zmin + 0.015 and ps[i - 1].z < zmin + 0.015:
-                speeds.append((ps[i].y - ps[i - 1].y) * FPS)  # 往 +Y（後方）為正
-    v = float(np.median(speeds)) if speeds else 0.0
-    print(f'[violinist] {act_name} gait ref {v:.2f} m/s')
-    return v
+# ───────────────────────── 1b. 腿部關節校正 / 布料 ─────────────────────────
+# Meshy（Mixamo 自動綁骨）的問題：
+#   - 膝關節被放在「腿 + 裙子」側面剪影的中間：比真正的膝蓋往後 16 cm、高 6 cm，腿彎曲時繞著腿外面的點轉
+#   - 裙擺、垂袖的下半部全部綁在腿骨上：走路時布料黏著腿、兩腿張開時被拉成一片
+# 這裡把膝關節移回腿的中心、重分大腿 / 小腿權重，並把布料上的腿骨權重改掛到彈簧骨鏈
+# （裙擺 8 條 × 4 節掛在 Hips、垂袖左右各 3 節掛在 Spine2），遊戲端以 SecondaryMotion 的 Verlet 彈簧驅動。
+CLOTH_PREFIX = ('skirt_', 'drape_', 'hair_')
+KNEE_Z = 0.50  # 腿部輪廓量測：小腿中心線在 0.44 以下垂直、0.44～0.53 往前移 4 cm（靴口正上方）；Mixamo 給的是 0.557
+# 真正的腿中心線（rest pose，由水平切面量測）：z → (|x|, y)
+LEG_Z = np.array([0.0, 0.12, 0.25, 0.35, 0.45, 0.55, 0.65, 0.85, 0.95])
+LEG_Y = np.array([-0.055, -0.055, -0.07, -0.075, -0.09, -0.125, -0.13, -0.115, -0.09])
+LEG_X = np.array([0.055, 0.055, 0.055, 0.057, 0.06, 0.06, 0.062, 0.075, 0.08])
+SEG_LABELS = ('LEG', 'BODY', 'SKIRT', 'SLEEVE', 'HAIR')
+# 裙擺鏈：方向（度，0 = 正前 -Y、90 = 左 +X）與節點高度；垂袖鏈的節點高度
+SKIRT_C = (0.0, -0.03)
+SKIRT_DIRS = [('F', 0), ('FL', 45), ('L', 90), ('BL', 135), ('B', 180), ('BR', -135), ('R', -90), ('FR', -45)]
+SKIRT_Z = [0.98, 0.76, 0.54, 0.32, 0.08]
+DRAPE_Z = [1.16, 0.93, 0.70, 0.46]
+# 背後的長髮（肩膀以下）：3 條鏈的 x 位置與節點高度；髮根（HAIR_ROOT 以上）維持跟著頭 / 脖子
+HAIR_X = [('L', 0.1), ('C', 0.0), ('R', -0.1)]
+HAIR_Z = [1.38, 1.24, 1.10, 0.95]
+HAIR_ROOT = (1.33, 1.41)
+
+
+def leg_names(me):
+    return [g.name for g in me.vertex_groups if g.name.endswith(('UpLeg', 'Leg', 'Foot', 'ToeBase'))]
+
+
+def mesh_co_edges(me):
+    m = me.data
+    co = np.empty(len(m.vertices) * 3)
+    m.vertices.foreach_get('co', co)
+    ev = np.empty(len(m.edges) * 2, dtype=np.int64)
+    m.edges.foreach_get('vertices', ev)
+    return co.reshape(-1, 3), ev.reshape(-1, 2)
+
+
+def read_weights(me):
+    names = [g.name for g in me.vertex_groups]
+    W = np.zeros((len(me.data.vertices), len(names)))
+    for v in me.data.vertices:
+        for g in v.groups:
+            W[v.index, g.group] = g.weight
+    return names, W
+
+
+def leg_dist(co):
+    """到真正的腿中心線的水平距離"""
+    x, y, z = co.T
+    return np.hypot(np.abs(x) - np.interp(z, LEG_Z, LEG_X), y - np.interp(z, LEG_Z, LEG_Y))
+
+
+def segment_cloth(me):
+    """多源測地線分區（Meshy 的網格是單一連通塊）：腿 / 身體 / 裙擺 / 垂袖。
+    種子：腿＝腿中心線附近的膚色（大腿）與靴子；裙擺＝遠離腿、帶腿骨權重的布料；垂袖＝手臂權重的垂片與最外側"""
+    co, ev = mesh_co_edges(me)
+    names, W = read_weights(me)
+    gi = {k: i for i, k in enumerate(names)}
+    wl = W[:, [gi[k] for k in leg_names(me)]].sum(1)
+    wa = W[:, [gi[k] for k in names if 'Arm' in k or 'Hand' in k]].sum(1)
+    wf = W[:, [gi[k] for k in names if 'Foot' in k or 'Toe' in k]].sum(1)
+    skin = skin_vertices(me)
+    x, y, z = co.T
+    ax = np.abs(x)
+    dleg = leg_dist(co)
+    # 頭髮：軀幹後方（背部表面在 y ≈ -0.06）、肩膀以下、不帶腿 / 手臂權重的非膚色頂點（一撮一撮獨立的髮束）
+    upper = (wl < 0.05) & (wa < 0.3)
+    hair = upper & ~skin & (y > -0.02) & (z > 0.95) & (z < 1.36) & (ax < 0.2)
+    # 確定是身體的：膚色、身體前半、頭部、腰以下、兩側；其餘（貼著背的髮束）由測地線距離決定
+    torso = upper & ~hair & (skin | (y < -0.06) | (z > 1.40) | (z < 0.93) | (ax > 0.2))
+    seeds = [
+        (skin & (dleg < 0.075) & (z > 0.38) & (z < 0.9)) | ((z < 0.42) & (dleg < 0.058)) | (wf > 0.3),
+        torso | (skin & (z > 0.86) & (z < 1.02) & (ax < 0.17) & (np.abs(y + 0.07) < 0.12)),
+        (wl > 0.2) & ~skin & (dleg > 0.11) & ((z < 0.42) | ((ax < 0.22) & (z < 0.9))),
+        ((wa > 0.5) & (z < 1.26) & (ax > 0.2) & ~skin) | ((ax > 0.36) & (z > 0.6) & (z < 1.2) & (wl > 0.2)),
+        hair,
+    ]
+    import heapq
+    n = len(co)
+    adj = [[] for _ in range(n)]
+    el = np.linalg.norm(co[ev[:, 0]] - co[ev[:, 1]], axis=1)
+    for (a, b), d in zip(ev.tolist(), el.tolist()):
+        adj[a].append((b, d))
+        adj[b].append((a, d))
+    lab = np.full(n, 1)
+    dist = np.full(n, np.inf)
+    h = []
+    for L, mk in enumerate(seeds):
+        for v in np.nonzero(mk)[0]:
+            if dist[v] > 0:
+                dist[v] = 0.0
+                lab[v] = L
+                h.append((0.0, int(v), L))
+    heapq.heapify(h)
+    while h:
+        d, v, L = heapq.heappop(h)
+        if d > dist[v]:
+            continue
+        for w, l in adj[v]:
+            nd = d + l
+            if nd < dist[w]:
+                dist[w] = nd
+                lab[w] = L
+                heapq.heappush(h, (nd, w, L))
+    print('[violinist] segment', {k: int((lab == i).sum()) for i, k in enumerate(SEG_LABELS)})
+    return lab
+
+
+def cut_cloth_bridges(me, lab):
+    """腿與布料接觸處被 Meshy 融合成的「橋接面」：腿一動就被拉成長條，直接切開（接觸處本來就互相遮住）"""
+    LEG = SEG_LABELS.index('LEG')
+    BODY, HAIR = SEG_LABELS.index('BODY'), SEG_LABELS.index('HAIR')
+    cloth = (SEG_LABELS.index('SKIRT'), SEG_LABELS.index('SLEEVE'))
+    bm = bmesh.new()
+    bm.from_mesh(me.data)
+    layer = bm.verts.layers.int.new('orig')
+    for v in bm.verts:
+        v[layer] = v.index
+    kill = []
+    for f in bm.faces:
+        ls = {int(lab[v.index]) for v in f.verts}
+        if LEG in ls and any(c in ls for c in cloth):
+            kill.append(f)
+        elif HAIR in ls and (any(c in ls for c in cloth) or (BODY in ls and f.calc_center_median().z < HAIR_ROOT[0])):
+            # 髮束黏在背上 / 垂袖 / 裙腰的融合面（髮根以上是頭髮本身的連接，不切）
+            kill.append(f)
+        elif ls == {LEG} and f.calc_center_median().z < 0.8:
+            # 左右靴子 / 大腿內側互相融合的面（胯下以上是連續的身體，不切）。分側規則與 fix_knees 相同：x > 0 為左
+            if len({v.co.x > 0 for v in f.verts}) == 2:
+                kill.append(f)
+    bmesh.ops.delete(bm, geom=kill, context='FACES')
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+    bm.verts.ensure_lookup_table()
+    orig = np.array([v[layer] for v in bm.verts])
+    bm.verts.layers.int.remove(layer)
+    bm.to_mesh(me.data)
+    bm.free()
+    me.data.update()
+    print(f'[violinist] cut {len(kill)} bridge faces (leg-cloth, left-right leg, hair-body)')
+    return lab[orig]
+
+
+def fix_knees(rig, me, lab):
+    """膝關節移到真正的腿中心（該高度腿部頂點外框的中心），並依新的膝蓋高度重分大腿 / 小腿權重"""
+    co, _ = mesh_co_edges(me)
+    LEG = lab == SEG_LABELS.index('LEG')
+    knees = {}
+    for S, s in (('Left', 1), ('Right', -1)):
+        m = LEG & (co[:, 0] * s > 0) & (np.abs(co[:, 2] - KNEE_Z) < 0.03)
+        lo, hi = co[m].min(0), co[m].max(0)
+        knees[S] = Vector(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, KNEE_Z))
+    bpy.ops.object.select_all(action='DESELECT')
+    rig.select_set(True)
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = rig.data.edit_bones
+    for S, k in knees.items():
+        old = eb[f'{S}Leg'].head.copy()
+        foot = eb[f'{S}Foot'].head.copy()
+        eb[f'{S}UpLeg'].tail = k
+        eb[f'{S}Leg'].head = k
+        eb[f'{S}Leg'].tail = foot
+        # 骨頭軸向改變後 roll 以「膝蓋朝前」重設（動作一律以世界軸 / IK 產生，不依賴 roll，但保持一致）
+        eb[f'{S}UpLeg'].align_roll(FWD)
+        eb[f'{S}Leg'].align_roll(FWD)
+        print(f'[violinist] knee {S}: {tuple(round(v, 3) for v in old)} -> {tuple(round(v, 3) for v in k)}')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    # 腿部頂點：同側「大腿 + 小腿」的總權重依高度重新分配（腳踝以下維持 Mixamo 的權重）
+    names, W = read_weights(me)
+    gi = {k: i for i, k in enumerate(names)}
+    z = co[:, 2]
+    kn = smoothstep_np(KNEE_Z - 0.05, KNEE_Z + 0.05, z)
+    # 胯下以下的腿部頂點只跟自己那一側的腿：Mixamo 在兩腿靠近處（靴子內側、大腿內側）混了對側的權重，兩腳一分開就被扯過去
+    PARTS = ('UpLeg', 'Leg', 'Foot', 'ToeBase')
+    for i in np.nonzero(LEG & (z < 0.78))[0]:
+        i = int(i)
+        S, O = ('Left', 'Right') if co[i, 0] > 0 else ('Right', 'Left')
+        for part in PARTS:
+            w = float(W[i, gi[O + part]])
+            if w > 1e-4:
+                me.vertex_groups[O + part].remove([i])
+                W[i, gi[S + part]] += w
+                W[i, gi[O + part]] = 0.0
+                me.vertex_groups[S + part].add([i], float(W[i, gi[S + part]]), 'REPLACE')
+    idx = np.nonzero(LEG & (z > 0.2))[0]
+    for S in ('Left', 'Right'):
+        up, lo = me.vertex_groups[f'{S}UpLeg'], me.vertex_groups[f'{S}Leg']
+        tot = W[:, gi[f'{S}UpLeg']] + W[:, gi[f'{S}Leg']]
+        for i in idx:
+            t = float(tot[i])
+            if t < 1e-4:
+                continue
+            k = float(kn[i])
+            up.add([int(i)], t * k, 'REPLACE')
+            lo.add([int(i)], t * (1 - k), 'REPLACE')
+
+
+def add_cloth_bones(rig, me, lab):
+    """依實際布料形狀建立彈簧骨鏈：裙擺每個方向取該扇形布料半徑的中位附近，垂袖取各高度的質心"""
+    co, _ = mesh_co_edges(me)
+    sk = co[lab == SEG_LABELS.index('SKIRT')]
+    rel = sk[:, :2] - np.array(SKIRT_C)
+    ang = np.degrees(np.arctan2(rel[:, 0], -rel[:, 1]))
+    rad = np.linalg.norm(rel, axis=1)
+    table = []
+    for name, a in SKIRT_DIRS:
+        da = np.abs((ang - a + 180) % 360 - 180)
+        ar = math.radians(a)
+        pts = []
+        for i, zz in enumerate(SKIRT_Z):
+            m = (da < 28) & (np.abs(sk[:, 2] - zz) < 0.07)
+            r = float(np.percentile(rad[m], 55)) if m.sum() > 12 else None
+            pts.append(r)
+        # 沒有布料的高度（正面開衩）沿用上一節的半徑外推，至少不小於腰部半徑
+        for i in range(len(pts)):
+            if pts[i] is None:
+                pts[i] = (pts[i - 1] + 0.03) if i > 0 and pts[i - 1] else 0.16
+            pts[i] = max(pts[i], 0.13)
+        nodes = [Vector((SKIRT_C[0] + math.sin(ar) * r, SKIRT_C[1] - math.cos(ar) * r, zz)) for r, zz in zip(pts, SKIRT_Z)]
+        table.append((f'skirt_{name}', nodes, 'Hips'))
+    sl = co[lab == SEG_LABELS.index('SLEEVE')]
+    for S, s in (('L', 1), ('R', -1)):
+        side = sl[sl[:, 0] * s > 0.18]
+        nodes = []
+        for zz in DRAPE_Z:
+            m = np.abs(side[:, 2] - zz) < 0.08
+            c = side[m].mean(0) if m.sum() > 8 else (nodes[-1] if nodes else Vector((s * 0.33, -0.05, zz)))
+            nodes.append(Vector((float(c[0]), float(c[1]), zz)))
+        table.append((f'drape_{S}', nodes, 'Spine2'))
+    hr = co[lab == SEG_LABELS.index('HAIR')]
+    for name, hx in HAIR_X:
+        nodes = []
+        for zz in HAIR_Z:
+            m = (np.abs(hr[:, 2] - zz) < 0.07) & (np.abs(hr[:, 0] - hx) < 0.08)
+            yy = float(np.median(hr[m, 1])) if m.sum() > 8 else (nodes[-1].y if nodes else 0.03)
+            nodes.append(Vector((hx * (1 + 0.15 * len(nodes)), yy, zz)))
+        table.append((f'hair_{name}', nodes, 'Spine2'))
+    bpy.ops.object.select_all(action='DESELECT')
+    rig.select_set(True)
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = rig.data.edit_bones
+    for prefix, nodes, parent in table:
+        prev = parent
+        for i in range(len(nodes) - 1):
+            b = eb.new(f'{prefix}{i + 1}')
+            b.head, b.tail = nodes[i], nodes[i + 1]
+            b.parent = eb[prev]
+            b.use_connect = i > 0
+            b.use_deform = True
+            prev = b.name
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print('[violinist] cloth bones', sum(len(n) - 1 for _, n, _ in table))
+    return table
+
+
+def cloth_weights(me, lab, table):
+    """布料頂點的「腿骨權重」改分給彈簧骨鏈（其餘權重——骨盆、脊椎、手臂——維持 Mixamo 的結果）：
+      裙擺：角度在相鄰兩條鏈之間線性混合、高度沿鏈以帽形函數混合；腰際交回 Hips；貼近大腿的保留一部分大腿權重
+      垂袖：沿鏈的高度混合"""
+    co, ev = mesh_co_edges(me)
+    names, W = read_weights(me)
+    n = len(co)
+    gi = {k: i for i, k in enumerate(names)}
+    x, y, z = co.T
+    legs = leg_names(me)
+    wl = W[:, [gi[k] for k in legs]].sum(1)
+    SK, SL = lab == SEG_LABELS.index('SKIRT'), lab == SEG_LABELS.index('SLEEVE')
+    HR = lab == SEG_LABELS.index('HAIR')
+    new = {}
+
+    def add(name, w):
+        new[name] = new.get(name, 0) + w
+
+    def hats(tt, nseg):
+        out = []
+        for j in range(nseg):
+            w = np.clip(1 - np.abs(tt - (j + 0.5)), 0, 1)
+            if j == 0:
+                w = np.where(tt < 0.5, 1.0, w)
+            if j == nseg - 1:
+                w = np.where(tt > nseg - 0.5, 1.0, w)
+            out.append(w)
+        return out
+
+    # 裙擺
+    kh = smoothstep_np(0.9, 1.0, z)  # 腰際 → Hips
+    dsurf = leg_dist(co) - 0.055
+    kth = 0.35 * (1 - smoothstep_np(0.015, 0.07, dsurf)) * smoothstep_np(KNEE_Z, KNEE_Z + 0.15, z)
+    share = wl * SK
+    add('Hips', share * kh)
+    for S, s in (('Left', 1), ('Right', -1)):
+        add(f'{S}UpLeg', share * (1 - kh) * kth * (x * s > 0))
+    chain = share * (1 - kh) * (1 - kth)
+    rel = co[:, :2] - np.array(SKIRT_C)
+    ang = np.degrees(np.arctan2(rel[:, 0], -rel[:, 1]))
+    nseg = len(SKIRT_Z) - 1
+    tt = np.interp(-z, -np.array(SKIRT_Z), np.arange(nseg + 1))
+    hz = hats(tt, nseg)
+    step = 360 / len(SKIRT_DIRS)
+    for name, a in SKIRT_DIRS:
+        wa = np.clip(1 - np.abs((ang - a + 180) % 360 - 180) / step, 0, 1)
+        for j in range(nseg):
+            add(f'skirt_{name}{j + 1}', chain * wa * hz[j])
+    # 垂袖
+    nseg = len(DRAPE_Z) - 1
+    tt = np.interp(-z, -np.array(DRAPE_Z), np.arange(nseg + 1))
+    hz = hats(tt, nseg)
+    for S, s in (('L', 1), ('R', -1)):
+        share = wl * SL * (x * s > 0)
+        for j in range(nseg):
+            add(f'drape_{S}{j + 1}', share * hz[j])
+
+    # 頭髮：髮根以下整個交給髮鏈（x 方向在相鄰兩條之間混合、沿高度混合）；原本的權重（頭 / 脊椎）依比例縮小
+    kroot = (1 - smoothstep_np(HAIR_ROOT[0], HAIR_ROOT[1], z)) * HR
+    hx = np.array([v for _, v in HAIR_X])
+    nseg = len(HAIR_Z) - 1
+    tt = np.interp(-z, -np.array(HAIR_Z), np.arange(nseg + 1))
+    hz = hats(tt, nseg)
+    for i, (name, v) in enumerate(HAIR_X):
+        wx = np.clip(1 - np.abs(x - v) / abs(hx[1] - hx[0]), 0, 1)
+        if i == 0:
+            wx = np.where(x > v, 1.0, wx)
+        if i == len(HAIR_X) - 1:
+            wx = np.where(x < v, 1.0, wx)
+        for j in range(nseg):
+            add(f'hair_{name}{j + 1}', kroot * wx * hz[j])
+
+    # 在布料頂點之間平滑幾次（分區邊界、鏈與鏈之間不要有折痕），再與原本的非腿骨權重合併
+    cloth = SK | SL | HR
+    M = np.stack([new[k] for k in new], 1)
+    order = list(new)
+    a, b = ev[:, 0], ev[:, 1]
+    both = cloth[a] & cloth[b]
+    a, b = a[both], b[both]
+    for _ in range(3):
+        acc = M.copy()
+        deg = np.ones(n)
+        np.add.at(acc, a, M[b])
+        np.add.at(acc, b, M[a])
+        np.add.at(deg, a, 1)
+        np.add.at(deg, b, 1)
+        sm = acc / deg[:, None]
+        # 平滑不改變每個頂點分給布料骨的總量
+        tot0, tot1 = M.sum(1), sm.sum(1)
+        M = np.where(cloth[:, None], sm * (tot0 / np.maximum(tot1, 1e-9))[:, None], M)
+    for k in order:
+        if k not in me.vertex_groups:
+            me.vertex_groups.new(name=k)
+    leg_groups = [me.vertex_groups[k] for k in legs]
+    idx = np.nonzero(cloth & ((wl > 1e-4) | (kroot > 1e-4)))[0]
+    keep = [k for k in names if k not in legs]
+    for i in idx:
+        i = int(i)
+        scale = 1.0 - float(kroot[i])  # 頭髮：原本的權重讓位給髮鏈
+        cand = [(k, float(W[i, gi[k]]) * scale) for k in keep if W[i, gi[k]] > 1e-3]
+        acc = {}
+        for k, w in cand:
+            acc[k] = acc.get(k, 0.0) + w
+        for j, k in enumerate(order):
+            w = float(M[i, j])
+            if w > 1e-3:
+                acc[k] = acc.get(k, 0.0) + w
+        top = sorted(acc.items(), key=lambda kv: -kv[1])[:4]
+        tot = sum(w for _, w in top) or 1.0
+        for g in leg_groups:
+            g.remove([i])
+        for k in list(acc):
+            me.vertex_groups[k].remove([i])
+        for k, w in top:
+            me.vertex_groups[k].add([i], w / tot, 'REPLACE')
+    print(f'[violinist] cloth weights: {len(idx)} verts re-skinned to {len(order)} bones')
+    blend_cloth_boundary(me, lab)
+    limit_influences(me)
+
+
+def blend_cloth_boundary(me, lab, rings=4, iters=6):
+    """臀部一帶「跟著骨盆 / 大腿的身體」緊鄰「跟著裙擺鏈的布料」：權重在一個面之內跳變，大腿一擺就把那一圈面扯長。
+    在交界兩側各 rings 圈頂點的範圍內，對完整的權重向量做拉普拉斯平滑，把形變攤開"""
+    co, ev = mesh_co_edges(me)
+    names, W = read_weights(me)
+    n = len(co)
+    SK = lab == SEG_LABELS.index('SKIRT')
+    BD = lab == SEG_LABELS.index('BODY')
+    a, b = ev[:, 0], ev[:, 1]
+    cross = (SK[a] & BD[b]) | (SK[b] & BD[a])
+    band = np.zeros(n, dtype=bool)
+    band[a[cross]] = True
+    band[b[cross]] = True
+    band &= co[:, 2] < 1.02
+    for _ in range(rings - 1):
+        grow = band.copy()
+        grow[a[band[b]]] = True
+        grow[b[band[a]]] = True
+        band = grow & (SK | BD) & (co[:, 2] < 1.02)
+    M = W.copy()
+    for _ in range(iters):
+        acc = M.copy()
+        deg = np.ones(n)
+        np.add.at(acc, a, M[b])
+        np.add.at(acc, b, M[a])
+        np.add.at(deg, a, 1)
+        np.add.at(deg, b, 1)
+        M = np.where(band[:, None], acc / deg[:, None], M)
+    groups = [me.vertex_groups[k] for k in names]
+    for i in np.nonzero(band)[0]:
+        i = int(i)
+        row = M[i]
+        top = np.argsort(-row)[:4]
+        tot = float(row[top].sum()) or 1.0
+        for j in np.nonzero(W[i] > 0)[0]:
+            groups[int(j)].remove([i])
+        for j in top:
+            if row[j] > 1e-3:
+                groups[int(j)].add([i], float(row[j]) / tot, 'REPLACE')
+    print(f'[violinist] blended {int(band.sum())} verts around the body-skirt boundary')
+
+
+def rig_cloth(rig, me):
+    for pb in rig.pose.bones:
+        pb.matrix_basis = Matrix()
+    bpy.context.view_layer.update()
+    lab = segment_cloth(me)
+    lab = cut_cloth_bridges(me, lab)
+    fix_knees(rig, me, lab)
+    table = add_cloth_bones(rig, me, lab)
+    cloth_weights(me, lab, table)
 
 
 # ───────────────────────── 2. 道具 ─────────────────────────
@@ -545,7 +963,7 @@ def build_actions(rig, me, fidx):
     bones = rig.data.bones
     for pb in rig.pose.bones:
         pb.rotation_mode = 'QUATERNION'
-    keyed = [b.name for b in bones if b.name not in ('headfront', 'HeadTop_End')]
+    keyed = [b.name for b in bones if b.name not in ('headfront', 'HeadTop_End') and not b.name.startswith(CLOTH_PREFIX)]
     head0 = {b.name: b.head_local.copy() for b in bones}
     L = {S: dict(up=(head0[f'{S}ForeArm'] - head0[f'{S}Arm']).length, lo=(head0[f'{S}Hand'] - head0[f'{S}ForeArm']).length)
          for S in ('Left', 'Right')}
@@ -610,12 +1028,13 @@ def build_actions(rig, me, fidx):
             upd()
             aim(P, f'{S}Hand', P[f'{S}Hand'].head + Vector(wrist))
 
-    def leg(P, S, ankle, pole=FWD, flat=True):
+    def leg(P, S, ankle, pole=FWD, flat=True, pitch=0.0):
         ik(P, f'{S}UpLeg', f'{S}Leg', LL[S]['up'], LL[S]['lo'], ankle, pole)
-        if flat:  # 腳掌維持 rest 的世界方向（高跟鞋貼地）
+        if flat:  # 腳掌維持 rest 的世界方向（高跟鞋貼地）；pitch > 0 腳尖下壓（度）
             upd()
             pb = P[f'{S}Foot']
-            pb.matrix = Matrix.Translation(pb.head) @ bones[f'{S}Foot'].matrix_local.to_3x3().to_4x4()
+            rest3 = bones[f'{S}Foot'].matrix_local.to_3x3()
+            pb.matrix = Matrix.Translation(pb.head) @ (Matrix.Rotation(math.radians(pitch), 3, 'X') @ rest3).to_4x4()
             upd()
 
     def hips(P, off=(0, 0, 0), *rots):
@@ -659,8 +1078,9 @@ def build_actions(rig, me, fidx):
 
     def violin_play(P, stroke):
         """拉琴：琴尾靠在左鎖骨、下巴夾琴；琴弓永遠通過琴橋附近的接觸點"""
-        d = Vector((0.55, -0.82, 0.12)).normalized()
-        tail = Vector((0.055, -0.085, chin.z - 0.025))
+        # 琴身接近水平、琴尾在鎖骨的高度：下巴在琴的上方，整張臉露出來（原本舉在嘴巴 / 眼睛的高度，把臉擋住）
+        d = Vector((0.55, -0.82, 0.06)).normalized()
+        tail = Vector((0.055, -0.085, chin.z - 0.05))
         grip = tail + d * (VIOLIN_GRIP * VIOLIN_LEN)
         arm(P, 'Left', grip - d * 0.05 + Vector((0, 0.0, -0.035)), (0.3, 0.3, -1), wrist=(0.1, -0.5, 0.6))
         # 琴弓接近水平、垂直琴弦（朝左後方），琴面法線由兩者決定（自然往右傾）
@@ -720,6 +1140,83 @@ def build_actions(rig, me, fidx):
             hand = vlerp(sh + Vector((s * (L[S]['up'] + L[S]['lo']), 0, 0)), sh + Vector((s * 0.085, -0.07, -0.28 + 0.004 * b)), k)
             arm(P, S, hand, (s * 0.2, 0.6, 0), wrist=(s * 0.15, -0.25, -1))
 
+    # ── 步態（取代 Mixamo 的 Walking / Running：那是運動員式的大步衝刺，甩著琴與弓、上身前傾駝背）──
+    def gait(frames, speed, stance, lift, lean, twist, sway, narrow, pose_arms, flight=0.0, dip=0.012, toe=14.0, bob=1.0):
+        """IK 步態：支撐腳鎖在地面、以 speed（m/s，timeScale=1 時）往後移動 → 遊戲依實際速度調整播放速率就不滑步。
+        骨盆高度＝支撐腳（留一點彎曲）碰得到地面的最高位置；騰空期在前後支撐之間內插並加上小跳。
+        narrow：兩腳往中線收的比例（走一直線的貓步）；pose_arms(t, P, a)：上肢與道具"""
+        cyc = frames / FPS
+        D = speed * stance * cyc  # 支撐期內腳相對骨盆往後移的距離
+        hip0 = {S: head0[f'{S}UpLeg'] for S in ('Left', 'Right')}
+
+        def foot(S, t):
+            p = (t + (0.0 if S == 'Left' else 0.5)) % 1.0
+            a = ANK[S]
+            if p < stance:
+                fwd, h, q = D / 2 - p / stance * D, 0.0, None
+            else:
+                q = (p - stance) / (1 - stance)
+                e = (1 - math.cos(math.pi * q)) / 2
+                fwd, h = -D / 2 + e * D, lift * math.sin(math.pi * q) ** 0.9
+            return Vector((a.x * narrow, a.y - fwd, a.z + h)), q
+
+        N = 64
+        dz = []
+        for i in range(N):
+            lim = []
+            for S in ('Left', 'Right'):
+                tgt, q = foot(S, i / N)
+                if q is None:
+                    hp = hip0[S]
+                    hd = math.hypot(tgt.x - hp.x, tgt.y - hp.y)
+                    reach = (LL[S]['up'] + LL[S]['lo']) * 0.975
+                    lim.append(tgt.z + math.sqrt(max(reach * reach - hd * hd, 0.0)) - hp.z)
+            dz.append(min(lim) - dip if lim else None)
+        for i in range(N):
+            if dz[i] is None:
+                j0 = next(k for k in range(1, N) if dz[(i - k) % N] is not None)
+                j1 = next(k for k in range(1, N) if dz[(i + k) % N] is not None)
+                a0, a1 = dz[(i - j0) % N], dz[(i + j1) % N]
+                u = j0 / (j0 + j1)
+                dz[i] = a0 + (a1 - a0) * u + flight * math.sin(math.pi * u)
+        # 骨盆起伏壓小（bob < 1）：裙襬下的腳步輕、上身平穩滑行
+        zmax = max(dz)
+        dz = [zmax - (zmax - v) * bob for v in dz]
+
+        def f(t, P):
+            a, c = Sn(t * TAU), Cs(t * TAU)
+            x = t * N
+            i0 = int(x) % N
+            z = dz[i0] + (dz[(i0 + 1) % N] - dz[i0]) * (x - int(x))
+            # 骨盆：跟著跨步左右扭、重心移向支撐腳；軀幹反向扭回來，頭保持朝前、下巴微收
+            hips(P, (0.006 * sway * c, 0, z - SINK), (Z, twist * a), (Y, sway * c), (X, lean * 0.35))
+            P['Spine'].rotation_quaternion = R('Spine', (Z, -twist * 0.5 * a), (X, lean * 0.3))
+            P['Spine1'].rotation_quaternion = R('Spine1', (Z, -twist * 0.4 * a), (Y, -sway * 0.5 * c), (X, lean * 0.2))
+            P['Spine2'].rotation_quaternion = R('Spine2', (Z, -twist * 0.3 * a), (X, lean * 0.15))
+            P['Neck'].rotation_quaternion = R('Neck', (X, -lean * 0.35))
+            P['Head'].rotation_quaternion = R('Head', (Z, twist * 0.2 * a), (X, -lean * 0.4))
+            for S in ('Left', 'Right'):
+                tgt, q = foot(S, t)
+                tgt.z -= SINK
+                # 擺動期：離地時腳尖下壓、落地前收平；膝蓋朝前略往內（不外八）
+                pitch = toe * math.sin(math.pi * q) * (1 - q) * 2 if q is not None else 0.0
+                leg(P, S, tgt, (0.08 if S == 'Left' else -0.08, -1, 0.1), pitch=pitch)
+            pose_arms(t, P, a)
+        return f
+
+    def carry_arms(swing, back, lift_bow):
+        """步行 / 奔跑的上肢：不擺臂（手上是琴與弓）。左手把小提琴提在身側、右手持弓斜向後下方，隨步伐小幅擺動"""
+        def f(t, P, a):
+            upd()
+            for S, s in (('Left', 1), ('Right', -1)):
+                sh = P[f'{S}Arm'].head.copy()
+                k = a * s  # 與對側腳同步
+                # 手肘微彎、略離開身體，手腕自然下垂（指尖朝下略往後）；隨步伐前後小幅擺動
+                hand = sh + Vector((s * (0.13 + 0.008 * k), back + 0.02 + 0.04 * swing * k, -0.262 + 0.01 * swing * abs(a) + (lift_bow if S == 'Right' else 0.0)))
+                arm(P, S, hand, (s * 0.35, 0.9, 0.0), wrist=(s * 0.02, 0.12 + back * 0.5, -1))
+            hang(P)
+        return f
+
     def idle(t, P):
         b = Sn(t * TAU)
         hips(P, (0, 0, 0), (Y, 1.5 * b), (Z, 3 * b))
@@ -737,8 +1234,9 @@ def build_actions(rig, me, fidx):
         P['Spine'].rotation_quaternion = R('Spine', (Z, 6), (Y, -2 * sway))
         P['Spine1'].rotation_quaternion = R('Spine1', (Y, -3 * sway), (X, -2))
         P['Spine2'].rotation_quaternion = R('Spine2', (Z, 5))
-        P['Neck'].rotation_quaternion = R('Neck', (Y, 10), (X, 6))
-        P['Head'].rotation_quaternion = R('Head', (Y, 14 + 2 * sway), (Z, 12), (X, 10))
+        # 頭往左傾、轉向琴，只微微低頭（低太多下巴會埋進琴身）
+        P['Neck'].rotation_quaternion = R('Neck', (Y, 10), (X, 2))
+        P['Head'].rotation_quaternion = R('Head', (Y, 14 + 2 * sway), (Z, 12), (X, 3))
         violin_play(P, stroke)
 
     def cast(t, P):
@@ -845,6 +1343,11 @@ def build_actions(rig, me, fidx):
         hang(P)
 
     make('Idle', 60, idle, 3)
+    # 走路：小步、兩腳收向中線、上身挺直；奔跑：輕盈的小跳步、上身只微微前傾，手臂收在身後
+    # 骨盆起伏要小（bob）：支撐期腳掌前後移動的距離越長，腿伸直也碰不到地、骨盆就得下沉越多。
+    # 奔跑用短支撐、長騰空的輕跳步（支撐期只佔 24%），骨盆上下約 4 cm；原本支撐 36% 時每步起伏 17 cm，像在彈跳
+    make('Walk', WALK_FRAMES, gait(WALK_FRAMES, WALK_REF, 0.6, 0.05, 2.5, 5, 2.5, 0.55, carry_arms(1.0, 0.0, 0.0), bob=0.5), 1, ground=False)
+    make('Run', RUN_FRAMES, gait(RUN_FRAMES, RUN_REF, 0.24, 0.12, 9, 7, 2.5, 0.8, carry_arms(0.6, 0.11, 0.02), flight=0.02, dip=0.02, toe=24, bob=0.55), 1, ground=False)
     make('Play', 48, play, 2)
     make('Cast', 16, cast, 2, loop=False)
     make('ChargeWindup', 12, windup, 2, loop=False, ground=False)
@@ -1079,6 +1582,18 @@ def use_normal_map(me, nimg):
     nt.links.new(nm.outputs['Normal'], bsdf.inputs['Normal'])
 
 
+def limit_influences(ob, n=4):
+    """每個頂點只保留最大的 n 個權重並正規化（遊戲端的蒙皮每個頂點最多 4 根骨頭）"""
+    for v in ob.data.vertices:
+        gs = sorted(((g.group, g.weight) for g in v.groups), key=lambda x: -x[1])
+        keep = gs[:n]
+        tot = sum(w for _, w in keep) or 1.0
+        for g, _ in gs[n:]:
+            ob.vertex_groups[g].remove([v.index])
+        for g, w in keep:
+            ob.vertex_groups[g].add([v.index], w / tot, 'REPLACE')
+
+
 def make_lod1(lod0, rig):
     bpy.ops.object.select_all(action='DESELECT')
     lod0.select_set(True)
@@ -1092,15 +1607,10 @@ def make_lod1(lod0, rig):
     dec = lod1.modifiers.new('Dec', 'DECIMATE')
     dec.ratio = LOD1_RATIO
     bpy.ops.object.modifier_apply(modifier='Dec')
+    # 減面可能留下退化的面：清掉，否則匯出器會警告網格不合法
+    lod1.data.validate(clean_customdata=False)
     # 減面會內插權重：每個頂點只保留最大的 4 個並正規化
-    for v in lod1.data.vertices:
-        gs = sorted(((g.group, g.weight) for g in v.groups), key=lambda x: -x[1])
-        keep = gs[:4]
-        s = sum(w for _, w in keep) or 1.0
-        for g, _ in gs[4:]:
-            lod1.vertex_groups[g].remove([v.index])
-        for g, w in keep:
-            lod1.vertex_groups[g].add([v.index], w / s, 'REPLACE')
+    limit_influences(lod1)
     mod = lod1.modifiers.new('Armature', 'ARMATURE')
     mod.object = rig
     return lod1
@@ -1171,8 +1681,12 @@ def main(do_export=True):
         hm = high.data
         bpy.data.objects.remove(high, do_unlink=True)
         bpy.data.meshes.remove(hm)
-    walk_ref = measure_gait(rig, 'Walk', 24)
-    run_ref = measure_gait(rig, 'Run', 15)
+    # Mixamo 的 Walking / Running 不再使用（膝關節校正後也不適用）：改由 build_actions 產生
+    for name in ('Walk', 'Run'):
+        if name in bpy.data.actions:
+            bpy.data.actions.remove(bpy.data.actions[name])
+    rig_cloth(rig, me)
+    fidx = foot_verts(me)  # 切開橋接面會移除孤立頂點，頂點索引改變
     add_prop_bones(rig)
     violin = load_violin()
     attach(violin, rig, 'prop_violin')
@@ -1191,7 +1705,7 @@ def main(do_export=True):
         lod1.hide_render = False
     if do_export:
         export(rig, [me, lod1, violin, bow])
-    print(f'[violinist] VIOLINIST_GAIT_REF = {{ Walk: {walk_ref:.2f}, Run: {run_ref:.2f} }}')
+    print(f'[violinist] VIOLINIST_GAIT_REF = {{ Walk: {WALK_REF:.2f}, Run: {RUN_REF:.2f} }}')
 
 
 if __name__ == '__main__' or __name__ == '<run_path>' or __name__ == 'builtins':

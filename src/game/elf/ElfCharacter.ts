@@ -27,6 +27,8 @@ export interface ElfCharacterOptions {
   loadTexture?: ((url: string) => Promise<THREE.Texture>) | null
   // 眨眼（角色規格有量測眼睛位置時才有效，見 blink.ts）；目前只用在選角詳情頁
   blink?: boolean
+  // 布料彈簧的相位亂數來源（預設 Math.random；測試時固定）
+  random?: () => number
 }
 
 export type ElfStatus = 'loading' | 'ready' | 'fallback' | 'disposed'
@@ -125,6 +127,7 @@ export class ElfCharacter implements CharacterModel {
     this.anim = new ElfAnimState(this.rig.anim)
     this.lowEnd = opts.lowEnd ?? isLowEndDevice()
     this.fallback = opts.fallback ?? null
+    if (opts.random) this.springs.random = opts.random
     this.root.name = 'ElfCharacter'
     if (this.fallback) this.root.add(this.fallback.root)
     this.harpPivot.name = 'HarpPivot'

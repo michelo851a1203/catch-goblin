@@ -16,6 +16,13 @@ export interface SpringParams {
   maxAngle: number // 與 rest 方向的最大夾角（rad），避免極端翻轉
   wind: number // 待機時的微風擾動
   colliders: number // 碰撞群組位元遮罩（COLLIDE.*）
+  // 以下為選用（薄紗用）。不設定時空氣阻力 = drag、沒有上限，與原本的行為完全相同
+  air?: number // 0~1，角色移動時迎面的風：每步把尖端往後帶「角色位移 × air」
+  airMax?: number // 迎風位移的上限（每步，單位 = 骨長）：走路就飄得起來，跑步也不會被吹成水平
+  flutter?: number // 移動時的抖動（與速度成正比，沿骨鏈有相位差 → 往下傳的波紋）
+  // 0~1，角色速度改變（起跑、急停、衝鋒）時布料承受的慣性比例。預設 1 = 完全的慣性：
+  // 遊戲裡的角色是瞬間加減速，薄紗會整片被甩到身體前面 / 甩成水平
+  inertia?: number
 }
 
 export const COLLIDE = { body: 1, legs: 2, arms: 4, head: 8 } as const
@@ -51,6 +58,7 @@ interface Joint {
   prev: THREE.Vector3
   p: SpringParams
   phase: number
+  ripple: number // 沿骨鏈遞增的相位（波紋）
 }
 
 const STEP = 1 / 60
@@ -69,16 +77,24 @@ const _pq = new THREE.Quaternion()
 const _pqInv = new THREE.Quaternion()
 const _gravity = new THREE.Vector3(0, -1, 0)
 const _root = new THREE.Vector3()
+const _air = new THREE.Vector3()
+const _side = new THREE.Vector3()
 
 export class SecondaryMotion {
+  // 抖動 / 微風的相位來源（測試時換成固定值，量測才可重現）
+  random: () => number = Math.random
   private joints: Joint[] = []
   private colliders: Collider[] = []
   private acc = 0
   private t = 0
   private initialized = false
   private lastRoot = new THREE.Vector3()
+  // 角色每一步（1/60 秒）的位移：迎風與抖動用
+  private rootStep = new THREE.Vector3()
+  private prevRootStep = new THREE.Vector3()
 
   addChain(bones: THREE.Bone[], p: SpringParams) {
+    const base = this.random() * Math.PI * 2
     bones.forEach((bone, i) => {
       const child = bones[i + 1] ?? (bone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined)
       let axis: THREE.Vector3
@@ -100,7 +116,8 @@ export class SecondaryMotion {
         tail: new THREE.Vector3(),
         prev: new THREE.Vector3(),
         p,
-        phase: Math.random() * Math.PI * 2,
+        phase: this.random() * Math.PI * 2,
+        ripple: base - i * 1.1,
       })
     })
   }
@@ -134,7 +151,12 @@ export class SecondaryMotion {
   update(dt: number, root: THREE.Object3D) {
     if (dt <= 0 || !this.joints.length) return
     root.getWorldPosition(_root)
-    if (!this.initialized || _root.distanceTo(this.lastRoot) > TELEPORT) this.settle()
+    const teleport = !this.initialized || _root.distanceTo(this.lastRoot) > TELEPORT
+    if (teleport) {
+      this.settle()
+      this.rootStep.set(0, 0, 0)
+      this.prevRootStep.set(0, 0, 0)
+    } else this.rootStep.subVectors(_root, this.lastRoot).multiplyScalar(STEP / dt)
     this.lastRoot.copy(_root)
     this.acc = Math.min(this.acc + dt, STEP * MAX_STEPS)
     while (this.acc >= STEP) {
@@ -183,9 +205,34 @@ export class SecondaryMotion {
       if (lenW < 1e-6) continue
       _d0.subVectors(_rest, _head).divideScalar(lenW)
 
-      // Verlet
-      _v.subVectors(j.tail, j.prev).multiplyScalar(1 - p.drag)
-      _next.copy(j.tail).add(_v)
+      // Verlet。尖端的位移 = 角色的位移 + 相對位移：相對位移以 drag 衰減（布料自己的阻尼），
+      // 角色的位移則有一部分（air）被空氣擋下來 → 布料往後飄。air 預設 = drag、不設上限時等同於整體乘上 (1 - drag)
+      // 相對位移以「上一步的角色位移」為基準；角色速度的變化量只有 inertia 的比例轉成布料的相對運動
+      _v.subVectors(j.tail, j.prev).sub(this.prevRootStep)
+      if (p.inertia !== undefined) {
+        // 衝擊量另設上限（衝鋒 24 m/s 的瞬間加速，否則尾端會翹過水平）
+        _air.subVectors(this.prevRootStep, this.rootStep).multiplyScalar(p.inertia)
+        const kick = _air.length()
+        const cap = 0.22 * lenW
+        if (kick > cap) _air.multiplyScalar(cap / kick)
+        _v.add(_air)
+      } else _v.add(this.prevRootStep).sub(this.rootStep)
+      _v.multiplyScalar(1 - p.drag)
+      _air.copy(this.rootStep).multiplyScalar(p.air ?? p.drag)
+      const speed = this.rootStep.length()
+      if (p.airMax !== undefined) {
+        const push = _air.length()
+        const cap = p.airMax * lenW
+        if (push > cap) _air.multiplyScalar(cap / push)
+      }
+      _next.copy(j.tail).add(this.rootStep).add(_v).sub(_air)
+      if (p.flutter && speed > 1e-4) {
+        // 垂直於前進方向的抖動：左右 + 上下，頻率不同、沿骨鏈往下傳
+        const f = p.flutter * Math.min(speed, 0.07)
+        _side.set(this.rootStep.z, 0, -this.rootStep.x).divideScalar(speed)
+        _next.addScaledVector(_side, Math.sin(this.t * 13 + j.ripple) * f * 0.5)
+        _next.y += Math.sin(this.t * 9.1 + j.ripple * 1.4 + j.phase) * f
+      }
       _next.addScaledVector(_d0, p.stiffness * lenW)
       _next.addScaledVector(_gravity, p.gravity * lenW)
       if (p.wind > 0) {
@@ -229,6 +276,7 @@ export class SecondaryMotion {
       bone.quaternion.copy(_pqInv).multiply(_q).multiply(_pq).multiply(j.restQ)
       bone.updateWorldMatrix(false, false)
     }
+    this.prevRootStep.copy(this.rootStep)
   }
 
   reset() {
@@ -280,4 +328,9 @@ export const SPRINGS = {
   hair: { stiffness: 0.05, gravity: 0.02, drag: 0.16, hitRadius: 0.025, maxAngle: 1.2, wind: 0.002, colliders: COLLIDE.body | COLLIDE.arms | COLLIDE.head },
   skirt: { stiffness: 0.09, gravity: 0.012, drag: 0.2, hitRadius: 0.03, maxAngle: 0.9, wind: 0.0012, colliders: COLLIDE.legs | COLLIDE.body },
   sleeve: { stiffness: 0.035, gravity: 0.05, drag: 0.14, hitRadius: 0.03, maxAngle: 2.4, wind: 0.002, colliders: COLLIDE.body | COLLIDE.legs },
+  // 紫晶精靈：薄紗長裙與垂袖——回彈弱、空氣阻力大，走動時往後飄、停下來慢慢落回
+  silk: { stiffness: 0.03, gravity: 0.018, drag: 0.12, air: 0.16, airMax: 0.036, flutter: 0.045, inertia: 0.4, hitRadius: 0.035, maxAngle: 0.85, wind: 0.002, colliders: COLLIDE.legs | COLLIDE.body },
+  drape: { stiffness: 0.022, gravity: 0.022, drag: 0.1, air: 0.16, airMax: 0.04, flutter: 0.06, inertia: 0.4, hitRadius: 0.035, maxAngle: 1.0, wind: 0.0025, colliders: COLLIDE.body | COLLIDE.legs },
+  // 紫晶精靈背後的長髮：比薄紗重，飄得少、落得快
+  tress: { stiffness: 0.14, gravity: 0.03, drag: 0.3, air: 0.1, airMax: 0.02, flutter: 0.012, inertia: 0.3, hitRadius: 0.008, maxAngle: 0.55, wind: 0.0012, colliders: COLLIDE.body },
 } satisfies Record<string, SpringParams>

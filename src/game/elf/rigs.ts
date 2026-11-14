@@ -2,7 +2,7 @@
 import type { ElfKind } from '../config'
 import { ELF_ASSETS, ELF_CLIPS, ELF_COLLIDERS, ELF_NODES, ELF_SPRING_CHAINS } from './assets'
 import { HARP_ANIM, type AnimSpec } from './ElfAnimState'
-import type { ColliderDef } from './SecondaryMotion'
+import { COLLIDE, type ColliderDef } from './SecondaryMotion'
 import type { CelParams } from './celShading'
 import type { BlinkSpec } from './blink'
 
@@ -89,12 +89,32 @@ export const VIOLINIST_ANIM: AnimSpec = {
     play: 'Play', cast: 'Cast', attack: 'ChargeRecover', pack: 'Capture', stunned: 'Stunned',
     windup: 'ChargeWindup', dash: 'ChargeDash', recover: 'ChargeRecover',
   },
-  // build_violinist.py 量測的 Mixamo Walking / Running 腳底速度
-  gaitRef: { Walk: 1.58, Run: 5.65 },
+  // build_violinist.py 的程序化步態（WALK_REF / RUN_REF）：timeScale=1 時腳底相對地面的速度
+  gaitRef: { Walk: 1.6, Run: 6.0 },
   gaitRange: { Walk: [0.5, 2.0], Run: [0.6, 1.5] },
   // 前搖動作 0.5 s（12 格 @24fps）；突刺循環加快；收招配合 0.4 s
   timeScale: { Cast: 1.4, ChargeDash: 1.6, ChargeRecover: 1.25 },
 }
+
+const vchain = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
+
+// 紫晶精靈的布料 / 頭髮彈簧骨（build_violinist.py 的 rig_cloth）：裙擺一圈 8 條 × 4 節掛在 Hips、垂袖左右各 3 節掛在 Spine2
+export const VIOLINIST_SPRING_CHAINS = {
+  silk: ['F', 'FL', 'L', 'BL', 'B', 'BR', 'R', 'FR'].map((d) => vchain(`skirt_${d}`, 4)),
+  drape: [vchain('drape_L', 3), vchain('drape_R', 3)],
+  // 背後的長髮（肩膀以下）3 條 × 3 節，掛在 Spine2
+  tress: [vchain('hair_L', 3), vchain('hair_C', 3), vchain('hair_R', 3)],
+}
+
+// 碰撞體（Mixamo 骨名）：腿把裙擺推開、垂袖不穿進身體；半徑略小於實際身形，rest pose 不會一開始就穿入
+export const VIOLINIST_COLLIDERS: readonly ColliderDef[] = [
+  { from: 'Hips', to: 'Spine1', radius: 0.1, group: COLLIDE.body },
+  { from: 'Spine1', to: 'Neck', radius: 0.095, group: COLLIDE.body },
+  ...(['Left', 'Right'] as const).flatMap((s): ColliderDef[] => [
+    { from: `${s}UpLeg`, to: `${s}Leg`, radius: 0.07, group: COLLIDE.legs },
+    { from: `${s}Leg`, to: `${s}Foot`, radius: 0.05, group: COLLIDE.legs },
+  ]),
+]
 
 export const VIOLINIST_RIG: ElfRig = {
   kind: 'violin',
@@ -102,9 +122,10 @@ export const VIOLINIST_RIG: ElfRig = {
   clips: VIOLINIST_CLIPS,
   anim: VIOLINIST_ANIM,
   lod: ['VioletMesh_LOD0', 'VioletMesh_LOD1'],
-  springChains: {},
-  colliders: [],
-  stripTracks: /^$/,
+  springChains: VIOLINIST_SPRING_CHAINS,
+  colliders: VIOLINIST_COLLIDERS,
+  // 布料骨由程式驅動；道具骨（prop_）每個動作各自打了關鍵影格，不能移除
+  stripTracks: /^(skirt_|drape_|hair_)/,
   atlasMaterial: 'M_Violet',
   cel: {},
   hiResMap: VIOLINIST_ASSETS.colorHiRes,
