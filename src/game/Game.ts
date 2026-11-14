@@ -597,6 +597,8 @@ export class Game {
     if (slot === 'elf') {
       const elf = this.elf
       if (!(elf.kind === 'violin' ? VIOLIN_ACTS : HARP_ACTS).includes(act)) return
+      // 擊暈鍵兼打包鍵：在房主端判定，加入者送來的 stun / charge 也會照當下狀態轉成打包
+      if ((act === 'stun' || act === 'charge') && this.packReady()) act = 'capture'
       const dirOf = () => {
         const dir = vec2(d)
         if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
@@ -722,6 +724,15 @@ export class Game {
     best.dashT = 0
     this.emit({ e: 'stun', g: best.id })
     return true
+  }
+
+  // 身邊有可打包的暈眩哥布林、捕獲冷卻已好：此時擊暈 / 衝鋒鍵改成打包
+  // （手機上擊暈後來不及換按鈕，同一顆鍵連點就能打包）
+  private packReady() {
+    const elf = this.elf
+    if (elf.packing || elf.cd.capture > 0) return false
+    const R = CONFIG.elf.capture.range
+    return this.goblins.some((g) => !g.captured && !g.held && g.stun > 0 && d2(g.pos, elf.pos) < R)
   }
 
   elfStartCapture() {
@@ -2070,10 +2081,13 @@ export class Game {
     else if (this.role === 'elf') {
       const E = CONFIG.elf
       const b = this.binds.elf
+      const pack = this.packReady()
       h.skills = [
         { key: keyLabel(b.gaze), code: b.gaze, name: t('skillGaze'), icon: 'skill-gaze', cd: elf.cd.gaze, max: E.gaze.cooldown, active: false, usable: !elf.busy },
         { key: keyLabel(b.music), code: b.music, name: elf.channel >= 0 ? t('skillMusicStop') : t('skillMusic'), icon: 'skill-music', cd: elf.cd.music, max: E.music.cooldown, active: elf.channel >= 0, usable: !elf.packing && elf.stagger <= 0 },
-        { key: keyLabel(b.stun), code: b.stun, name: t('skillStun'), icon: 'skill-stun', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
+        pack
+          ? { key: keyLabel(b.stun), code: b.stun, name: t('skillCapture'), icon: 'skill-capture', cd: 0, max: E.capture.cooldown, active: false, usable: !elf.busy }
+          : { key: keyLabel(b.stun), code: b.stun, name: t('skillStun'), icon: 'skill-stun', cd: elf.cd.stun, max: E.stun.cooldown, active: false, usable: !elf.busy },
         { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: 'skill-capture', cd: elf.cd.capture, max: E.capture.cooldown, active: !!elf.packing, usable: !elf.busy },
       ]
       h.radar = false
@@ -2081,7 +2095,7 @@ export class Game {
       if (elf.stagger > 0) h.hint = t('hInterrupted')
       else if (elf.packing) h.hint = ''
       else if (elf.channel >= 0) h.hint = touch ? t('hPlayingTouch') : t('hPlaying', { key: keyLabel(b.music) })
-      else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.capture) })
+      else if (pack) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.stun) })
       else if (near.length && elf.cd.stun <= 0) h.hint = touch ? t('hStunTouch') : t('hStun', { key: keyLabel(b.stun) })
       else h.hint = ''
       h.progress = elf.packing ? elf.packing.t / elf.packing.total : -1
@@ -2119,6 +2133,8 @@ export class Game {
     const V = CONFIG.violin
     const b = this.binds.elf
     const free = elf.stagger <= 0 && !elf.packing && !elf.charge
+    const pack = this.packReady()
+    const packUsable = (free || elf.charge?.phase === 'recover') && elf.stealthCast < 0
     h.skills = [
       {
         key: keyLabel(b.gaze), code: b.gaze, name: elf.stealthed ? t('skillUnstealth') : t('skillStealth'), icon: elf.stealthed ? 'skill-reveal' : 'skill-stealth',
@@ -2128,15 +2144,16 @@ export class Game {
         key: keyLabel(b.music), code: b.music, name: elf.eye > 0 ? t('skillBlink') : t('skillEye'), icon: elf.eye > 0 ? 'skill-blink' : 'skill-eye',
         cd: elf.cd.eye, max: V.eye.cooldown, active: elf.eye > 0, usable: free && elf.stealthCast < 0,
       },
-      { key: keyLabel(b.stun), code: b.stun, name: t('skillCharge'), icon: 'skill-charge', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge, usable: free && elf.stealthCast < 0 },
-      { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: 'skill-capture', cd: elf.cd.capture, max: CONFIG.elf.capture.cooldown, active: !!elf.packing, usable: (free || elf.charge?.phase === 'recover') && elf.stealthCast < 0 },
+      pack
+        ? { key: keyLabel(b.stun), code: b.stun, name: t('skillCapture'), icon: 'skill-capture', cd: 0, max: CONFIG.elf.capture.cooldown, active: false, usable: packUsable }
+        : { key: keyLabel(b.stun), code: b.stun, name: t('skillCharge'), icon: 'skill-charge', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge, usable: free && elf.stealthCast < 0 },
+      { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: 'skill-capture', cd: elf.cd.capture, max: CONFIG.elf.capture.cooldown, active: !!elf.packing, usable: packUsable },
     ]
     h.radar = false
-    const near = this.goblins.filter((g) => !g.captured && !g.held && d2(g.pos, elf.pos) < CONFIG.elf.capture.range)
     if (elf.stagger > 0) h.hint = t('hInterrupted')
     else if (elf.packing) h.hint = ''
     else if (elf.stealthCast >= 0) h.hint = t('hStealthCast')
-    else if (near.some((g) => g.stun > 0) && elf.cd.capture <= 0) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.capture) })
+    else if (pack) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.stun) })
     else if (elf.eye > 0) h.hint = touch ? t('hEyeTouch', { s: Math.ceil(elf.eye) }) : t('hEye', { key: keyLabel(b.music), s: Math.ceil(elf.eye) })
     else if (elf.stealthed) h.hint = touch ? t('hStealthTouch', { s: Math.ceil(elf.stealth) }) : t('hStealth', { key: keyLabel(b.gaze), s: Math.ceil(elf.stealth) })
     else h.hint = ''
