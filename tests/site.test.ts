@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { normalizeSiteUrl, robots, sitePlugin, sitemap, transformHtml } from '../site/plugin.ts'
+import { manifest, normalizeSiteUrl, robots, sitePlugin, sitemap, transformHtml } from '../site/plugin.ts'
 
 const indexHtml = readFileSync(resolve(import.meta.dirname, '../index.html'), 'utf8')
 const URL_ = 'https://elf-and-goblins.pages.dev/'
@@ -39,6 +39,17 @@ describe('網站版 SEO 外掛', () => {
     expect(html).toMatch(/<div id="app">[\s\S]*<h1>Elf &amp; Goblins<\/h1>[\s\S]*FAQ[\s\S]*<\/div>/)
     // 遊戲入口仍然存在
     expect(html).toContain('src="/src/main.ts"')
+  })
+
+  it('加入主畫面：manifest 以全螢幕橫向開啟，圖示檔案存在', () => {
+    const html = transformHtml(indexHtml, URL_)
+    expect(html).toContain('<link rel="manifest" href="manifest.webmanifest" />')
+    expect(html).toContain('<meta name="apple-mobile-web-app-capable" content="yes" />')
+    const m = JSON.parse(manifest())
+    expect(m.display).toBe('fullscreen')
+    expect(m.orientation).toBe('landscape')
+    expect(m.start_url).toBe('./')
+    for (const i of m.icons) expect(existsSync(resolve(import.meta.dirname, '../site/public', i.src))).toBe(true)
   })
 
   it('robots.txt 與 sitemap.xml 指向網站網址', () => {

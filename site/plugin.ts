@@ -7,7 +7,7 @@ import type { Plugin } from 'vite'
 //   - index.html 注入 SEO / 社群卡片（Open Graph、X）/ JSON-LD
 //   - #app 預先放入載入畫面與遊戲介紹文字：不跑 JS 的爬蟲（社群卡片、AI 爬蟲）也讀得到，Vue 掛載後會被取代
 //   - 拿掉 CrazyGames SDK（在其他網域本來就不會啟用，省一個第三方請求）
-//   - 輸出 robots.txt、sitemap.xml、llms.txt 與 site/public/ 底下的檔案（卡片圖）
+//   - 輸出 robots.txt、sitemap.xml、llms.txt、manifest.webmanifest 與 site/public/ 底下的檔案（卡片圖、App 圖示）
 
 const dir = import.meta.dirname
 
@@ -57,6 +57,12 @@ export function headTags(url: string) {
     `<link rel="canonical" href="${esc(url)}" />`,
     `<meta name="theme-color" content="${SITE.themeColor}" />`,
     `<link rel="apple-touch-icon" href="apple-touch-icon.png" />`,
+    // 加入主畫面後以全螢幕開啟（引導步驟見 src/input/install.ts）
+    `<link rel="manifest" href="manifest.webmanifest" />`,
+    meta('name', 'mobile-web-app-capable', 'yes'),
+    meta('name', 'apple-mobile-web-app-capable', 'yes'),
+    meta('name', 'apple-mobile-web-app-status-bar-style', 'black-translucent'),
+    meta('name', 'apple-mobile-web-app-title', SITE.name),
     meta('property', 'og:type', 'website'),
     meta('property', 'og:site_name', SITE.name),
     meta('property', 'og:title', SITE.title),
@@ -91,6 +97,31 @@ export function transformHtml(html: string, url: string) {
   return out
 }
 
+// Web App Manifest：Android 安裝 / iOS 加入主畫面後全螢幕、橫向開啟（iOS 不支援鎖定方向，直拿時遊戲會提示轉向）
+export function manifest() {
+  return (
+    JSON.stringify(
+      {
+        name: SITE.name,
+        short_name: SITE.name,
+        description: SITE.description,
+        start_url: './',
+        scope: './',
+        display: 'fullscreen',
+        orientation: 'landscape',
+        background_color: SITE.themeColor,
+        theme_color: SITE.themeColor,
+        icons: [
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+        ],
+      },
+      null,
+      2,
+    ) + '\n'
+  )
+}
+
 export function robots(url: string) {
   return `User-agent: *\nAllow: /\n\nSitemap: ${url}sitemap.xml\n`
 }
@@ -120,6 +151,7 @@ export function sitePlugin(rawUrl: string | undefined): Plugin | null {
     closeBundle() {
       if (!existsSync(outDir)) return
       cpSync(resolve(dir, 'public'), outDir, { recursive: true })
+      writeFileSync(resolve(outDir, 'manifest.webmanifest'), manifest())
       writeFileSync(resolve(outDir, 'robots.txt'), robots(url))
       writeFileSync(resolve(outDir, 'sitemap.xml'), sitemap(url))
       writeFileSync(resolve(outDir, 'llms.txt'), readFileSync(resolve(dir, 'llms.txt'), 'utf8').replaceAll('{{SITE_URL}}', url))

@@ -13,6 +13,7 @@ import { icon } from './icons'
 import { preloadElves } from './game/elf/preload'
 import { isCrazyGames } from './platform'
 import { isNewPlayer } from './tutorial'
+import { canPrompt, installGuide, promptInstall } from './input/install'
 
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
@@ -160,7 +161,33 @@ function leaveRoom() {
     <CharacterSelect :room="room" @start="newRound" @multiplayer="sheet = true" @leave="leaveLobby" />
     <RoomSheet v-if="sheet" :key="auto?.kind === 'join' ? auto.code : ''" :auto="auto" :room="room" :error="roomError" @close="closeSheet" @leave="leaveLobby" @room="attach" />
   </template>
-  <div class="rotate"><img :src="icon('ui-rotate')" alt="" /><span>{{ t('rotate') }}</span></div>
+  <div class="rotate">
+    <img :src="icon('ui-rotate')" alt="" />
+    <span>{{ t('rotate') }}</span>
+    <!-- 網站版：教玩家加入主畫面（之後以全螢幕開啟，見 input/install.ts） -->
+    <section v-if="installGuide" class="install">
+      <h2>{{ t('installTitle') }}</h2>
+      <ol v-if="installGuide === 'ios'">
+        <li>
+          <template v-for="(part, i) in t('installIos1').split('{share}')" :key="i">
+            <svg v-if="i" class="share" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M8 10H6v10h12V10h-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>{{ part }}
+          </template>
+        </li>
+        <li>{{ t('installIos2') }}</li>
+        <li>{{ t('installIos3') }}</li>
+      </ol>
+      <template v-else>
+        <button v-if="canPrompt" class="install-btn" @click="promptInstall">{{ t('installButton') }}</button>
+        <ol>
+          <li>{{ t('installAndroid1') }}</li>
+          <li>{{ t('installAndroid2') }}</li>
+          <li>{{ t('installAndroid3') }}</li>
+        </ol>
+      </template>
+    </section>
+  </div>
 </template>
 
 <style scoped>
@@ -178,6 +205,9 @@ function leaveRoom() {
     align-items: center;
     justify-content: center;
     gap: 16px;
+    padding: 24px 16px;
+    overflow-y: auto;
+    box-sizing: border-box;
     background: #0b1411;
     color: #fff3d6;
     font-family: var(--font);
@@ -189,6 +219,47 @@ function leaveRoom() {
   }
   .rotate span {
     font-size: 18px;
+  }
+  .install {
+    width: min(100%, 360px);
+    margin-top: 12px;
+    padding: 16px 18px;
+    border: 1px solid rgba(255, 240, 200, 0.25);
+    border-radius: 14px;
+    background: rgba(255, 243, 214, 0.06);
+    font-size: 15px;
+    line-height: 1.5;
+    text-align: left;
+  }
+  .install h2 {
+    margin: 0 0 10px;
+    font-size: 16px;
+    color: #ffd98a;
+  }
+  .install ol {
+    margin: 0;
+    padding-left: 1.3em;
+  }
+  .install li + li {
+    margin-top: 6px;
+  }
+  .install .share {
+    width: 1.2em;
+    height: 1.2em;
+    margin: 0 2px;
+    vertical-align: -0.2em;
+  }
+  .install-btn {
+    display: block;
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 10px;
+    border: 0;
+    border-radius: 10px;
+    background: linear-gradient(#ffd98a, #c9a24e);
+    color: #2a1d08;
+    font: inherit;
+    font-weight: 700;
   }
 }
 </style>
