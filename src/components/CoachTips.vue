@@ -151,7 +151,7 @@ const card = computed((): { icon: IconName; text: string } | null => {
     case 'combo': {
       const violin = props.elfKind === 'violin'
       if (touch) return { icon: violin ? 'skill-charge' : 'skill-gaze', text: violin ? t('coachComboViolinTouch') : t('coachComboTouch') }
-      const keys = { a: k(e.gaze), b: k(e.stun), c: k(e.capture) }
+      const keys = { a: k(e.gaze), b: k(e.stun) }
       return { icon: violin ? 'skill-charge' : 'skill-gaze', text: violin ? t('coachComboViolin', keys) : t('coachCombo', keys) }
     }
     default:
