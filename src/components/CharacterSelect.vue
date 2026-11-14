@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isCrazyGames } from '../platform'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
 import goblinArt from '../assets/art/goblin-card.webp'
@@ -17,6 +17,7 @@ import { touchMode } from '../input/touch'
 import { fullscreenSupported } from '../input/fullscreen'
 import FullscreenButton from './FullscreenButton.vue'
 import IconText from './IconText.vue'
+import CharacterDetail from './CharacterDetail.vue'
 import { icon, type IconName } from '../icons'
 import { displayName, type Room } from '../net/room'
 import type { Pick } from '../net/assign'
@@ -25,14 +26,12 @@ import type { Pick } from '../net/assign'
 const props = defineProps<{ room?: Room | null }>()
 const emit = defineEmits<{ start: [role: Role, kind: ElfKind]; multiplayer: []; leave: [] }>()
 
-// 卡片：精靈 → 點下後飛出兩張精靈卡（豎琴 / 紫晶）；哥布林直接翻牌
+// 卡片：精靈 → 點下後飛出兩張精靈卡（豎琴 / 紫晶）；哥布林 / 豎琴 / 紫晶 → 進入角色詳情頁（模型 + 技能，見 CharacterDetail）
 type CardId = 'elf' | 'goblin' | ElfKind
-const chosen = ref<CardId | null>(null)
+const detailId = ref<CardId | null>(null)
 const elfMenu = ref(false)
-const offsets = ref<Record<CardId, number>>({ elf: 0, goblin: 0, harp: 0, violin: 0 })
 // 飛出動畫的起點（相對於最終位置的水平位移）
 const flyFrom = ref<Record<CardId, number>>({ elf: 0, goblin: 0, harp: 0, violin: 0 })
-const stage = ref<HTMLElement | null>(null)
 const cardEls = ref<Record<string, HTMLElement | null>>({})
 const stats = loadStats()
 const binds = ref(loadKeybinds())
@@ -144,7 +143,7 @@ function pickRole(p: Pick, kind?: ElfKind) {
   sfx.unlock()
   sfx.flip()
   props.room?.setPick(p, kind)
-  chosen.value = null
+  detailId.value = null
   elfMenu.value = false
 }
 function startRoom() {
@@ -159,8 +158,8 @@ function toggleLocale() {
   setLocale(locale.value === 'zh' ? 'en' : 'zh')
 }
 
-async function choose(id: CardId) {
-  if (chosen.value) return
+function choose(id: CardId) {
+  if (detailId.value) return
   sfx.unlock()
   sfx.flip()
   if (id === 'elf') {
@@ -172,27 +171,38 @@ async function choose(id: CardId) {
     elfMenu.value = true
     return
   }
-  const st = stage.value!.getBoundingClientRect()
-  const el = cardEls.value[id]!.getBoundingClientRect()
-  offsets.value[id] = st.left + st.width / 2 - (el.left + el.width / 2)
-  await nextTick()
-  chosen.value = id
+  detailId.value = id
 }
 
-// 翻面的精靈卡返回 → 回到兩張精靈卡；兩張精靈卡返回 → 回到陣營選擇
+// 詳情頁返回 → 回到原本的卡片（精靈詳情回到兩張精靈卡）；兩張精靈卡返回 → 回到陣營選擇
 function back() {
   sfx.flip()
-  if (chosen.value) chosen.value = null
+  if (detailId.value) detailId.value = null
   else elfMenu.value = false
 }
 
-function start(c: Card) {
-  emit('start', c.role, c.kind ?? 'harp')
+const detail = computed(() => cards.value.find((c) => c.id === detailId.value) ?? null)
+const controlsText = computed(() => (touchMode.value ? t('controlsTouch') : t('controls', { keys: moveKeys.value, lock: isCrazyGames ? '' : t('lockHint') })))
+// 詳情頁的主按鈕：單機直接開始；多人大廳為選角（已選則取消）
+const detailAction = computed(() => {
+  const c = detail.value
+  if (!c) return { label: '', disabled: false }
+  if (!lobby.value) return { label: t('startAdventure'), disabled: false }
+  if (isMine(c)) return { label: t('mpUnpick'), disabled: false }
+  const ok = canPick(c.role)
+  return { label: ok ? t('mpPickThis') : c.role === 'elf' ? t('mpTaken') : t('mpGoblinFull'), disabled: !ok }
+})
+function confirm() {
+  const c = detail.value
+  if (!c) return
+  sfx.unlock()
+  if (!lobby.value) return emit('start', c.role, c.kind ?? 'harp')
+  pickRole(isMine(c) ? 'random' : c.role, isMine(c) ? undefined : c.kind)
 }
 </script>
 
 <template>
-  <div class="select" :class="{ entered, picked: chosen, 'elf-menu': elfMenu }">
+  <div class="select" :class="{ entered, 'elf-menu': elfMenu }">
     <div class="glow"></div>
     <button class="lang" :class="{ solo: touchMode, 'with-fs': touchMode && fullscreenSupported }" @click="toggleLocale">{{ t('langSwitch') }}</button>
     <FullscreenButton class="menu-fs" />
@@ -219,34 +229,25 @@ function start(c: Card) {
       <p class="lead">{{ elfMenu ? t('chooseElf') : t('chooseSide') }}</p>
     </header>
 
-    <!-- 翻牌時灑落的夢幻藍色靈粉（Shaders：天藍光暈 + 冰藍光點 + 薰衣草藍光暈 + 閃爍星芒） -->
     <!-- 精靈卡飛出時的紫色星塵 -->
-    <Shader v-if="elfMenu && !chosen" key="elf-menu" class="fairy-dust violet">
+    <Shader v-if="elfMenu && !detailId" key="elf-menu" class="fairy-dust violet">
       <FloatingParticles shape="glow" particle-color="#c9a0ff" :count="160" :particle-size="2.4" :softness="0.9" :speed="0.14" :angle="270" :angle-variance="50" :speed-variance="0.5" :randomness="0.6" :twinkle="0.9" />
       <FloatingParticles particle-color="#f0e4ff" :count="500" :particle-size="0.9" :softness="0.3" :speed="0.2" :angle="270" :angle-variance="30" :speed-variance="0.6" :randomness="0.45" :twinkle="1" />
       <Sparkle :size="60" :intensity="7" :threshold="0.5" :ray-length="6" :colorize="0.8" :speed="1.2" />
     </Shader>
-    <Shader v-if="chosen" :key="chosen" class="fairy-dust">
-      <FloatingParticles shape="glow" particle-color="#8fd3ff" :count="260" :particle-size="2.6" :softness="0.9" :speed="0.16" :angle="270" :angle-variance="40" :speed-variance="0.5" :randomness="0.6" :twinkle="0.9" />
-      <FloatingParticles shape="glow" particle-color="#b4a6ff" :count="90" :particle-size="3.4" :softness="1" :speed="0.1" :angle="270" :angle-variance="50" :speed-variance="0.5" :randomness="0.7" :twinkle="0.7" />
-      <FloatingParticles particle-color="#e4f6ff" :count="900" :particle-size="0.9" :softness="0.3" :speed="0.22" :angle="270" :angle-variance="25" :speed-variance="0.6" :randomness="0.45" :twinkle="1" />
-      <Sparkle :size="70" :intensity="9" :threshold="0.45" :ray-length="7" :colorize="0.75" :speed="1.2" />
-    </Shader>
 
-    <div ref="stage" class="stage">
+    <div class="stage">
       <div
         v-for="c in cards"
         :key="c.id"
         :ref="(el) => (cardEls[c.id] = el as HTMLElement)"
         class="card-wrap"
         :class="{
-          chosen: chosen === c.id,
-          hidden: chosen && chosen !== c.id,
           mine: isMine(c),
           taken: lobby && !canPick(c.role) && myPick !== c.role,
           fly: !!c.kind,
         }"
-        :style="{ '--dx': offsets[c.id] + 'px', '--from': flyFrom[c.id] + 'px' }"
+        :style="{ '--from': flyFrom[c.id] + 'px' }"
       >
         <!-- 多人大廳：在卡片上緣標示選了這個角色的玩家 -->
         <div v-if="lobby && pickers(c).length" class="pickers">
@@ -264,37 +265,26 @@ function start(c: Card) {
               <p>{{ c.tagline }}</p>
             </div>
           </div>
-          <div class="face back">
-            <div class="back-inner">
-              <span class="sub">{{ c.sub }}</span>
-              <h2>{{ c.name }}</h2>
-              <p class="goal"><img class="gi" :src="icon('ui-goal')" alt="" />{{ c.goal }}</p>
-              <ul>
-                <li v-for="s in c.skills" :key="s.name">
-                  <img class="icon" :src="icon(s.icon)" alt="" />
-                  <div>
-                    <b>{{ s.name }} <kbd v-if="!touchMode">{{ s.key }}</kbd></b>
-                    <small>{{ s.desc }}</small>
-                  </div>
-                </li>
-              </ul>
-              <p class="controls">{{ touchMode ? t('controlsTouch') : t('controls', { keys: moveKeys, lock: isCrazyGames ? '' : t('lockHint') }) }}</p>
-              <div class="actions">
-                <button class="ghost" @click.stop="back">{{ t('back') }}</button>
-                <template v-if="lobby">
-                  <button v-if="isMine(c)" class="go" @click.stop="pickRole('random')">{{ t('mpUnpick') }}</button>
-                  <button v-else class="go" :disabled="!canPick(c.role)" @click.stop="pickRole(c.role, c.kind)">
-                    {{ canPick(c.role) ? t('mpPickThis') : c.role === 'elf' ? t('mpTaken') : t('mpGoblinFull') }}
-                  </button>
-                </template>
-                <button v-else class="go" @click.stop="start(c)">{{ t('startAdventure') }}</button>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
-    <button v-if="elfMenu && !chosen" class="ghost elf-back" @click="back">← {{ t('back') }}</button>
+    <button v-if="elfMenu" class="ghost elf-back" @click="back">← {{ t('back') }}</button>
+
+    <CharacterDetail
+      v-if="detail"
+      :key="detail.id"
+      :role="detail.role"
+      :kind="detail.kind"
+      :name="detail.name"
+      :sub="detail.sub"
+      :goal="detail.goal"
+      :skills="detail.skills"
+      :controls="controlsText"
+      :action="detailAction.label"
+      :disabled="detailAction.disabled"
+      @back="back"
+      @confirm="confirm"
+    />
 
     <footer v-if="lobby" class="lobby-bar">
       <span class="my-pick"><img class="gi" :src="icon(myPickIcon)" alt="" />{{ t('mpMyPick', { pick: myPickLabel }) }}</span>
@@ -534,8 +524,7 @@ h1.logo::after {
 .card-wrap {
   position: relative;
   width: clamp(240px, 26vw, 340px);
-  /* 平板橫向（iPad mini 等）網址列展開時可見高度不足，卡片也依高度縮小，翻牌放大後才不會超出畫面 */
-  /* 大螢幕（iPad 13 吋、桌機）卡片放大到 400px，技能說明不必捲動 */
+  /* 依可見高度縮小，平板橫向（iPad mini 等）網址列展開時也放得下 */
   width: min(clamp(240px, 26vw, 400px), 44dvh);
   aspect-ratio: 0.66;
   transition:
@@ -557,24 +546,11 @@ h1.logo::after {
 .entered footer {
   opacity: 1;
 }
-.entered .card-wrap.chosen,
-.entered .card-wrap.hidden {
-  transition-delay: 0s;
-}
-.card-wrap.hidden {
-  opacity: 0;
-  transform: scale(0.8);
-  pointer-events: none;
-}
-.card-wrap.chosen {
-  transform: translateX(var(--dx)) scale(1.12);
-  z-index: 3;
-}
 /* 精靈卡飛出：從被點的精靈卡位置展開成兩張 */
-.card-wrap.fly:not(.chosen):not(.hidden) {
+.card-wrap.fly {
   animation: fly-out 0.85s cubic-bezier(0.2, 0.9, 0.25, 1.1) both;
 }
-.card-wrap.fly + .card-wrap.fly:not(.chosen):not(.hidden) {
+.card-wrap.fly + .card-wrap.fly {
   animation-delay: 0.08s;
 }
 @keyframes fly-out {
@@ -601,12 +577,6 @@ h1.logo::after {
 }
 .violin .plate {
   background: linear-gradient(transparent, rgba(36, 18, 60, 0.94) 55%);
-}
-.violin.card .back,
-.card.violin .back {
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.05), transparent 40%),
-    #231833;
 }
 .fairy-dust.violet {
   animation-duration: 2.4s;
@@ -662,13 +632,11 @@ h1.logo::after {
   width: 100%;
   height: 100%;
   cursor: pointer;
-  transform-style: preserve-3d;
-  transition: transform 0.9s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
 /* 滑過卡片：以金色光暈強調，不位移 / 傾斜卡片——並排的兩張卡永遠等高對齊
    （點下精靈卡後游標仍停在豎琴卡上、觸控裝置點擊後 :hover 會殘留，原本的上浮會讓兩張卡一高一低） */
 @media (hover: hover) and (pointer: fine) {
-  .card-wrap:not(.chosen):not(.hidden):not(.mine):not(.taken) .card:hover .face {
+  .card-wrap:not(.mine):not(.taken) .card:hover .face {
     box-shadow:
       0 20px 50px rgba(0, 0, 0, 0.55),
       0 0 0 2px #e8c770,
@@ -680,19 +648,10 @@ h1.logo::after {
 .face {
   transition: box-shadow 0.35s ease;
 }
-.card-wrap.chosen .card {
-  transform: rotateY(180deg);
-  cursor: default;
-}
-/* Safari 的 3D 翻牌：翻到背面後正面仍可能攔截點擊 */
-.card-wrap.chosen .front {
-  pointer-events: none;
-}
 .face {
   position: absolute;
   inset: 0;
   border-radius: 18px;
-  backface-visibility: hidden;
   overflow: hidden;
   box-shadow:
     0 20px 50px rgba(0, 0, 0, 0.55),
@@ -745,8 +704,7 @@ h1.logo::after {
   color: #e6c878;
   text-transform: uppercase;
 }
-.plate h2,
-.back h2 {
+.plate h2 {
   margin: 2px 0 4px;
   font-size: 30px;
   color: #fff6dc;
@@ -763,77 +721,12 @@ h1.logo::after {
 .goblin .plate {
   background: linear-gradient(transparent, rgba(60, 20, 12, 0.9) 55%);
 }
-.back {
-  transform: rotateY(180deg);
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.05), transparent 40%),
-    #1d2a22;
-}
-.goblin .back {
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.05), transparent 40%),
-    #2e1d16;
-}
-.back-inner {
-  position: absolute;
-  inset: 12px;
-  border: 1px solid rgba(255, 230, 170, 0.45);
-  border-radius: 12px;
-  padding: 16px 16px 12px;
-  display: flex;
-  flex-direction: column;
-  text-align: center;
-}
-.goal {
-  margin: 4px 0 10px;
-  font-size: 13px;
-  color: #ffe9a8;
-}
-ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  text-align: left;
-  flex: 1;
-  /* 卡片背面高度固定：技能說明放不下時（iPad mini、窄卡片、英文）只有技能清單捲動，
-     開始按鈕永遠固定在卡片底部看得到、點得到 */
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
-  scrollbar-width: none;
-}
-ul::-webkit-scrollbar {
-  display: none;
-}
-.back-inner > :not(ul) {
-  flex: none;
-}
-li {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.05);
-}
-.icon {
-  width: 34px;
-  height: 34px;
-  flex: none;
-}
-.goal,
 .my-pick {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
 }
-.goal .gi,
 .my-pick .gi {
   width: 22px;
   height: 22px;
@@ -846,36 +739,6 @@ li {
   width: 22px;
   height: 22px;
   display: block;
-}
-li b {
-  display: block;
-  font-size: 14px;
-  color: #fff3d6;
-}
-li small {
-  font-size: 11.5px;
-  color: #cfc4a8;
-  line-height: 1.4;
-  display: block;
-}
-kbd {
-  font-family: ui-monospace, monospace;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: #e6c878;
-  color: #2a1d08;
-  margin-left: 4px;
-}
-.controls {
-  font-size: 11px;
-  color: #a99f86;
-  margin: 8px 0;
-}
-.actions {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
 }
 button {
   font-family: inherit;
@@ -907,9 +770,7 @@ button:disabled {
   font-size: 13px;
   padding: 5px 16px;
 }
-/* 翻牌後放大的卡片會蓋到副標與戰績：翻牌時淡出；兩張精靈卡畫面也收起戰績，矮視窗才不會被擠出畫面 */
-.picked .lead,
-.select.picked footer,
+/* 兩張精靈卡畫面收起戰績，矮視窗才不會被擠出畫面 */
 .select.elf-menu footer.stats {
   opacity: 0;
   pointer-events: none;
@@ -970,55 +831,9 @@ footer {
     width: min(44vw, 45dvh);
   }
 }
-/* 中等高度（筆電瀏覽器、iPad mini 橫向）：卡片受高度限制變窄，翻牌後收起標題、卡片放大置中，背面文字稍微緊湊，
-   才不會只看得到一個技能 */
-@media (min-height: 501px) and (max-height: 760px) {
-  .card-wrap.chosen {
-    transform: translateX(var(--dx)) translateY(-4dvh) scale(1.22);
-  }
-  .picked header {
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.3s ease 0s;
-  }
-  .back-inner {
-    padding: 12px 12px 10px;
-  }
-  .back h2 {
-    font-size: 22px;
-    letter-spacing: 0.08em;
-    margin: 0 0 2px;
-  }
-  .goal {
-    font-size: 12px;
-    margin: 2px 0 8px;
-  }
-  ul {
-    gap: 5px;
-  }
-  li {
-    padding: 5px 6px;
-    gap: 8px;
-  }
-  .icon {
-    width: 28px;
-    height: 28px;
-  }
-  li b {
-    font-size: 13px;
-  }
-  li small {
-    font-size: 11px;
-    line-height: 1.35;
-  }
-  .controls {
-    font-size: 10px;
-    margin: 6px 0;
-  }
-}
 /* iOS Safari 的 vh 以工具列收起時的高度計算，網址列 / 分頁列展開時卡片會超出畫面、點不到開始按鈕，
    所以卡片尺寸改用 dvh（實際可見高度） */
-/* 矮螢幕（手機橫向）：卡片依高度縮小，翻牌後放大並隱藏標題，背面內容可捲動 */
+/* 矮螢幕（手機橫向）：卡片依高度縮小 */
 @media (max-height: 500px) {
   .select {
     gap: 1vh;
@@ -1043,15 +858,6 @@ footer {
     width: 42vh;
     width: 42dvh;
   }
-  .card-wrap.chosen {
-    transform: translateX(var(--dx)) translateY(-3vh) scale(1.3);
-    transform: translateX(var(--dx)) translateY(-3dvh) scale(1.3);
-  }
-  .picked header,
-  .picked footer {
-    opacity: 0;
-    pointer-events: none;
-  }
   .pickers span {
     font-size: 9px;
     padding: 1px 6px;
@@ -1063,63 +869,14 @@ footer {
   .plate {
     padding: 30px 10px 10px;
   }
-  .plate h2,
-  .back h2 {
+  .plate h2 {
     font-size: 18px;
   }
   .plate p {
     font-size: 10px;
   }
-  .back-inner {
-    inset: 6px;
-    padding: 8px 8px 6px;
-  }
   .sub {
     font-size: 8px;
-  }
-  /* 卡片背面的英文副標只是裝飾，手機上把高度讓給技能清單 */
-  .back .sub {
-    display: none;
-  }
-  .back h2 {
-    letter-spacing: 0.06em;
-    white-space: nowrap;
-  }
-  .back .icon {
-    width: 22px;
-    height: 22px;
-  }
-  .goal .gi {
-    width: 16px;
-    height: 16px;
-  }
-  .goal {
-    font-size: 9px;
-    margin: 2px 0 4px;
-  }
-  ul {
-    gap: 3px;
-  }
-  li {
-    padding: 3px 5px;
-    gap: 5px;
-  }
-  .icon {
-    font-size: 13px;
-  }
-  li b {
-    font-size: 9px;
-  }
-  li small {
-    font-size: 7.5px;
-  }
-  .controls {
-    font-size: 7.5px;
-    margin: 4px 0;
-  }
-  .actions button {
-    font-size: 10px;
-    padding: 4px 12px;
   }
   footer {
     font-size: 11px;

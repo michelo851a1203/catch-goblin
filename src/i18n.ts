@@ -218,6 +218,8 @@ const zh = {
 
   // 紫晶精靈（小提琴刺客）
   chooseElf: '選擇你的精靈',
+  detailDrag: '拖曳可旋轉角色',
+  detailLoadFail: '角色模型載入失敗，請檢查網路後重新整理',
   harpSub: 'Sylvan Harpist',
   violinName: '紫晶精靈',
   violinSub: 'Amethyst Violinist',
@@ -468,6 +470,8 @@ const en: Dict = {
   hudBackRoom: 'Back to room',
   tPlayerLeft: '{name} disconnected — AI takes over',
   chooseElf: 'Choose your elf',
+  detailDrag: 'Drag to rotate',
+  detailLoadFail: 'Could not load the character model. Check your connection and refresh',
   harpSub: 'Sylvan Harpist',
   violinName: 'Amethyst Elf',
   violinSub: 'Amethyst Violinist',

@@ -73,8 +73,9 @@ const CAST_POSES: Pose[] = ['normal', 'cast', 'attack']
 const ELF_ACTION_POSE: Record<ElfAction, Pose | null> = {
   windup: 'windup', dash: 'dash', recover: 'recover', channel: 'play', stealthCast: 'play', packing: 'pack', idle: null,
 }
-// 精靈模型載入的等待上限（毫秒）：超過就先用替身開局，模型載入後再換上
-const LOAD_TIMEOUT = 20000
+// 精靈模型載入的等待上限（毫秒）：寧可載入畫面久一點，也不要以程序化替身開局（會破壞遊戲體驗）。
+// 下載失敗（重試用完）時 ready 會立刻完成、改用替身；這個上限只防網路卡住永遠不回應
+const LOAD_TIMEOUT = 60000
 // 左鍵「點擊」的判定：放開時離按下的位置不到 6px、按住不到 0.35 秒（超過就當成拖曳轉視角）
 const CLICK_SLOP = 6
 const CLICK_MS = 350

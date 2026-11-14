@@ -4,6 +4,7 @@ import { ELF_ASSETS, ELF_CLIPS, ELF_COLLIDERS, ELF_NODES, ELF_SPRING_CHAINS } fr
 import { HARP_ANIM, type AnimSpec } from './ElfAnimState'
 import type { ColliderDef } from './SecondaryMotion'
 import type { CelParams } from './celShading'
+import type { BlinkSpec } from './blink'
 
 const base = (import.meta.env?.BASE_URL ?? '/').replace(/\/?$/, '/')
 
@@ -27,6 +28,11 @@ export interface ElfRig {
   // 非低階裝置在模型載入後另外載入的高解析貼圖（替換貼圖集材質的 map / normalMap），放大看時保有細節
   hiResMap?: string
   hiResNormal?: string
+  // 眨眼（見 blink.ts）：眼睛在綁定姿勢中的位置，以正面正交視角在眼睛中心、上下眼瞼、眼角射線量測
+  blink?: BlinkSpec
+  // 站定展示（holdPose，選角詳情頁）時讓道具確實握在手裡：把道具上握把那一段（grip，道具網格局部座標的兩端點，
+  // 第二點朝道具頂端）對齊到手的軸線、放進手掌截面中心（見 ElfCharacter.applyHoldProp，執行時依實際網格計算）
+  holdProp?: { node: string; hand: string; grip: readonly [readonly [number, number, number], readonly [number, number, number]] }
 }
 
 export const HARP_RIG: ElfRig = {
@@ -41,6 +47,14 @@ export const HARP_RIG: ElfRig = {
   colliders: ELF_COLLIDERS,
   stripTracks: /^(hair_|skirt_|sleeve|prop_)/,
   atlasMaterial: 'M_Elf',
+  blink: {
+    eyes: [
+      { center: [-0.033, 1.6061, 0.1102], radius: [0.021, 0.0125, 0.025] },
+      { center: [0.0336, 1.6058, 0.1111], radius: [0.021, 0.0125, 0.025] },
+    ],
+    skin: 0xf6d4c8,
+    lash: 0x4a2c22,
+  },
 }
 
 // 紫晶精靈（小提琴刺客）：tools/blender/build_violinist.py 產生；小提琴與琴弓掛在 prop_violin / prop_bow 骨，
@@ -95,6 +109,19 @@ export const VIOLINIST_RIG: ElfRig = {
   cel: {},
   hiResMap: VIOLINIST_ASSETS.colorHiRes,
   hiResNormal: VIOLINIST_ASSETS.normalHiRes,
+  // 待機時小提琴垂在左手前緣、琴頸斜斜伸到胸口，看起來像浮在手旁邊（手指沒有骨骼，無法彎曲包住琴頸）。
+  // 站定展示時把琴頸（局部 z -0.045～0.035，寬 2.6 cm、厚 2.2 cm，比手掌的 4 cm 厚度薄）整段放進手裡：
+  // 手掌與手指從四周蓋住琴頸，琴頭在手腕旁露出、琴身垂在指尖下＝單手提著琴頸，任何角度都看得出握住。
+  // 只用在選角詳情頁，遊戲中各動作的道具位置不受影響
+  holdProp: { node: 'Violin', hand: 'LeftHand', grip: [[0.065, 0.052, -0.045], [0.065, 0.052, 0.035]] },
+  blink: {
+    eyes: [
+      { center: [-0.0332, 1.4696, 0.1872], radius: [0.02, 0.0118, 0.025] },
+      { center: [0.0328, 1.4696, 0.1875], radius: [0.02, 0.0118, 0.025] },
+    ],
+    skin: 0xe9c3c3,
+    lash: 0x3a2238,
+  },
 }
 
 export function rigOf(kind: ElfKind): ElfRig {

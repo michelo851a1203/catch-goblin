@@ -9,6 +9,7 @@ import { SPRINGS, SecondaryMotion } from './SecondaryMotion'
 import { applyCelShading } from './celShading'
 import { isTouchDevice } from '../../input/touch'
 import { fetchModel } from './preload'
+import { applyBlink, BlinkTimer } from './blink'
 
 export type GltfLoad = (url: string) => Promise<Pick<GLTF, 'scene' | 'animations'>>
 
@@ -24,6 +25,8 @@ export interface ElfCharacterOptions {
   autoLoad?: boolean
   // 高解析貼圖載入器（預設 THREE.TextureLoader）；傳 null 停用
   loadTexture?: ((url: string) => Promise<THREE.Texture>) | null
+  // 眨眼（角色規格有量測眼睛位置時才有效，見 blink.ts）；目前只用在選角詳情頁
+  blink?: boolean
 }
 
 export type ElfStatus = 'loading' | 'ready' | 'fallback' | 'disposed'
@@ -108,6 +111,13 @@ export class ElfCharacter implements CharacterModel {
   private readonly opts: ElfCharacterOptions
   // 隱身：1 = 正常、0~1 = 半透明（精靈玩家自己看）、0 = 完全看不見
   private opacity = 1
+  private blinkU: { value: number } | null = null
+  private blinkTimer: BlinkTimer | null = null
+  // 停在目前動作的這一格（選角詳情頁：角色站定不晃動）；settled：頭髮 / 裙擺的彈簧已模擬到靜止
+  private held = false
+  private settled = false
+  // holdProp 已套用的節點與原本的局部變換（解除 holdPose 時還原）
+  private propShift: { node: THREE.Object3D; matrix: THREE.Matrix4 } | null = null
 
   constructor(opts: ElfCharacterOptions = {}) {
     this.opts = opts
@@ -175,8 +185,10 @@ export class ElfCharacter implements CharacterModel {
           // cel shading 的暗面已經提亮，自發光只留一點點，避免整體泛白
           ;(mat as THREE.MeshStandardMaterial).emissive.setHex(0x161412)
         }
+        if (this.opts.blink && rig.blink && mat.name === rig.atlasMaterial) this.blinkU = applyBlink(mat as THREE.MeshStandardMaterial, rig.blink)
       }
     })
+    if (this.blinkU) this.blinkTimer = new BlinkTimer()
     if ((rig.hiResMap || rig.hiResNormal) && !this.lowEnd) void this.loadHiRes(scene)
 
     // 動作
@@ -345,6 +357,66 @@ export class ElfCharacter implements CharacterModel {
     this.anim.victory = on
   }
 
+  // 停住動作（維持目前這一格的姿勢）；頭髮等次級動畫會自然靜止，眨眼照常
+  holdPose(on: boolean) {
+    this.held = on
+    this.settled = false
+    if (!on && this.propShift) {
+      this.propShift.matrix.decompose(this.propShift.node.position, this.propShift.node.quaternion, this.propShift.node.scale)
+      this.propShift = null
+    }
+  }
+
+  // 站定展示：把道具的握把段對齊到手裡（rig.holdProp）。模型載入後、第一次停住姿勢時依當下姿勢計算一次：
+  //  1. 手：取 LOD0 中手骨權重 > 0.6 的頂點（套用骨架後的世界座標），主成分 = 手的軸線（指尖 → 手腕）
+  //  2. 握點：沿手軸的中段截面中心（手掌與手指厚度的正中間）
+  //  3. 道具：握把段以最小旋轉轉到與手軸平行（頂端朝手腕），中點移到握點
+  applyHoldProp() {
+    const hp = this.rig.holdProp
+    if (!hp || this.propShift || !this.model) return
+    const node = this.model.getObjectByName(hp.node)
+    const mesh = this.lods[0] ? findSkinned(this.lods[0]) : null
+    if (!node || !node.parent || !mesh) return
+    const hi = mesh.skeleton.bones.findIndex((b) => b.name === hp.hand)
+    if (hi < 0) return
+    this.root.updateMatrixWorld(true)
+    const g = mesh.geometry
+    const si = g.attributes.skinIndex, sw = g.attributes.skinWeight
+    const pts: THREE.Vector3[] = []
+    for (let i = 0; i < g.attributes.position.count; i++) {
+      let w = 0
+      for (let k = 0; k < 4; k++) if (si.getComponent(i, k) === hi) w += sw.getComponent(i, k)
+      if (w > 0.6) pts.push(mesh.getVertexPosition(i, new THREE.Vector3()).applyMatrix4(mesh.matrixWorld))
+    }
+    if (pts.length < 20) return
+    const c = pts.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(pts.length)
+    const axis = principalAxis(pts, c)
+    // 手軸朝手腕（手骨原點）
+    const wrist = mesh.skeleton.bones[hi].getWorldPosition(new THREE.Vector3())
+    if (axis.dot(wrist.clone().sub(c)) < 0) axis.negate()
+    const ts = pts.map((p) => p.clone().sub(c).dot(axis))
+    const tMin = Math.min(...ts), tMax = Math.max(...ts)
+    const mid = pts.filter((_, i) => ts[i] > tMin + (tMax - tMin) * 0.25 && ts[i] < tMin + (tMax - tMin) * 0.75)
+    const grip = mid.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(mid.length)
+    // 截面中心：去掉沿手軸的分量，放回手軸的中點
+    grip.sub(axis.clone().multiplyScalar(grip.clone().sub(c).dot(axis))).add(axis.clone().multiplyScalar((tMin + tMax) / 2))
+
+    node.updateMatrixWorld(true)
+    const a = new THREE.Vector3(...hp.grip[0]).applyMatrix4(node.matrixWorld)
+    const b = new THREE.Vector3(...hp.grip[1]).applyMatrix4(node.matrixWorld)
+    const neckMid = a.clone().add(b).multiplyScalar(0.5)
+    const q = new THREE.Quaternion().setFromUnitVectors(b.clone().sub(a).normalize(), axis)
+    const world = new THREE.Matrix4()
+      .makeTranslation(grip.x, grip.y, grip.z)
+      .multiply(new THREE.Matrix4().makeRotationFromQuaternion(q))
+      .multiply(new THREE.Matrix4().makeTranslation(-neckMid.x, -neckMid.y, -neckMid.z))
+      .multiply(node.matrixWorld)
+    const local = new THREE.Matrix4().copy(node.parent.matrixWorld).invert().multiply(world)
+    this.propShift = { node, matrix: node.matrix.clone() }
+    local.decompose(node.position, node.quaternion, node.scale)
+    node.updateMatrixWorld(true)
+  }
+
   get harpVisible() {
     return this.harpPivot.visible
   }
@@ -373,10 +445,17 @@ export class ElfCharacter implements CharacterModel {
       if (this.active && this.active !== next) next.crossFadeFrom(this.active, d.fade, false)
       this.active = next
     }
-    if (this.active) this.active.timeScale = d.timeScale
+    if (this.active) this.active.timeScale = this.held ? 0 : d.timeScale
     this.mixer.update(dt)
+    if (this.blinkU && this.blinkTimer) this.blinkU.value = this.blinkTimer.update(dt)
     this.root.updateMatrixWorld(true)
-    this.springs.update(dt, this.root)
+    if (!this.held) this.springs.update(dt, this.root)
+    else if (!this.settled) {
+      this.applyHoldProp()
+      // 姿勢停住後，彈簧仍會慢慢下垂、擺盪好幾秒（看起來像在抖）：一次模擬 4 秒讓它停下來，之後就不再更新
+      for (let i = 0; i < 240; i++) this.springs.update(1 / 60, this.root)
+      this.settled = true
+    }
 
     // 豎琴：彈奏時從手上長出來（縮放）
     const target = this.harpOn || pose === 'play' ? 1 : 0
@@ -456,6 +535,28 @@ export function optimizeMaterial(mat: THREE.MeshStandardMaterial, atlas = 'M_Elf
     // 臉與頭髮用微弱自發光避免在陰影中發灰，維持插畫感
     mat.emissive = new THREE.Color(name === 'M_Hair' ? 0x2a1e08 : 0x2a1810)
   }
+}
+
+function findSkinned(o: THREE.Object3D) {
+  let m: THREE.SkinnedMesh | null = null
+  o.traverse((x) => {
+    if (!m && (x as THREE.SkinnedMesh).isSkinnedMesh) m = x as THREE.SkinnedMesh
+  })
+  return m as THREE.SkinnedMesh | null
+}
+
+// 點雲的主軸（共變異矩陣最大特徵向量，冪次迭代）
+function principalAxis(pts: THREE.Vector3[], c: THREE.Vector3) {
+  let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0
+  for (const p of pts) {
+    const x = p.x - c.x, y = p.y - c.y, z = p.z - c.z
+    xx += x * x; xy += x * y; xz += x * z; yy += y * y; yz += y * z; zz += z * z
+  }
+  const v = new THREE.Vector3(0, 1, 0)
+  for (let i = 0; i < 32; i++) {
+    v.set(xx * v.x + xy * v.y + xz * v.z, xy * v.x + yy * v.y + yz * v.z, xz * v.x + yz * v.y + zz * v.z).normalize()
+  }
+  return v
 }
 
 function easeOutBack(k: number) {
