@@ -76,15 +76,19 @@ export interface GoblinAIState {
   walk: number
 }
 
+// 哥布林的生命週期：逃竄中 ⇄ 被打包（held）→ 已捕獲（captured，終態）
+// 只存一個欄位，「同時 held 又 captured」在結構上就不可能出現；
+// 只能經由下面的轉移函式改變（打包由 Elf.startPacking / endPacking 成對呼叫）
+export type GoblinLife = 'roaming' | 'held' | 'captured'
+
 export class Goblin extends Actor {
-  captured = false
+  private _life: GoblinLife = 'roaming'
   stun = 0
   rooted = 0
   // 紫晶精靈現身時的恐懼：緩慢遠離精靈、不受控制
   terror = 0
   attract = 0
   charm = 0
-  held = false
   grace = 0
   dashT = 0
   dashCd = 0
@@ -136,9 +140,33 @@ export class Goblin extends Actor {
     this.fx = { radar, eyeWarn, bar }
   }
 
-  get free() {
-    return !this.captured
+  get life(): GoblinLife {
+    return this._life
   }
+  get captured() {
+    return this._life === 'captured'
+  }
+  get held() {
+    return this._life === 'held'
+  }
+
+  // 被精靈抓住開始打包（已捕獲的不能再被打包）
+  grab() {
+    if (this._life === 'roaming') this._life = 'held'
+  }
+  // 打包結束（完成或被打斷）時放開
+  release() {
+    if (this._life === 'held') this._life = 'roaming'
+  }
+  // 抓進牢籠（終態）。房主完成打包、加入者收到 caught 事件時呼叫
+  capture() {
+    this._life = 'captured'
+  }
+  // 加入者套用房主快照：房主的狀態為準（captured 優先於 held）
+  syncLife(captured: boolean, held: boolean) {
+    this._life = captured ? 'captured' : held ? 'held' : 'roaming'
+  }
+
   get disabled() {
     return this.stun > 0 || this.rooted > 0 || this.terror > 0 || this.held || this.captured
   }
@@ -227,7 +255,7 @@ export class Elf extends Actor {
 
   // 打包：精靈的 packing 與哥布林的 held 必須一起變動
   startPacking(g: Goblin, total: number) {
-    g.held = true
+    g.grab()
     this.packing = { g, t: 0, total }
   }
   // 結束打包（完成或被打斷），回傳被打包的哥布林
@@ -235,7 +263,7 @@ export class Elf extends Actor {
     const g = this.packing!.g
     this.packing = null
     this.cd.capture = CONFIG.elf.capture.cooldown
-    g.held = false
+    g.release()
     return g
   }
 
@@ -276,12 +304,18 @@ export class Elf extends Actor {
     this.charge = null
   }
 
-  // 結算：一定現身、停止所有持續中的技能狀態
+  // 結算：一定現身、停止所有持續中的技能狀態。
+  // 打包也要中止並放開哥布林，否則結算後打包計時照跑，時間到獲勝的哥布林會在結算畫面被抓走
   resetForResult() {
     this.stealth = 0
     this.stealthCast = -1
     this.eye = 0
     this.charge = null
+    this.channel = -1
+    if (this.packing) {
+      this.packing.g.release()
+      this.packing = null
+    }
   }
 }
 

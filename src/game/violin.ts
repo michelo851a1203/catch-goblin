@@ -36,7 +36,7 @@ export function nearestTarget<T extends Target>(pos: THREE.Vector3, list: readon
 }
 
 // 哥布林身後 dist 公尺（依面向）；out 為輸出
-export function behindSpot(g: Target, dist: number, out = new THREE.Vector3()) {
+export function behindSpot(g: Pick<Target, 'pos' | 'yaw'>, dist: number, out = new THREE.Vector3()) {
   return out.set(g.pos.x - Math.sin(g.yaw) * dist, 0, g.pos.z - Math.cos(g.yaw) * dist)
 }
 

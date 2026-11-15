@@ -133,6 +133,7 @@ function invariants(game: Game): string | null {
   const acts = [e.packing && 'packing', e.channel >= 0 && 'channel', e.stealthCast >= 0 && 'stealthCast', e.charge && 'charge'].filter(Boolean)
   if (acts.length > 1) return `精靈同時處於 ${acts.join('+')}`
   if (e.stealthed && e.stealthCast >= 0) return '隱身中又在拉琴準備隱身'
+  if (game.hud.phase === 'over' && acts.length) return `結算後精靈仍在 ${acts.join('+')}`
   for (const g of game.goblins) if (g.captured && g.held) return `哥布林 ${g.id} 同時 captured 與 held`
   if (game.authority) {
     if (e.packing && (!e.packing.g.held || e.packing.g.captured)) return `打包中的哥布林 ${e.packing.g.id} 不是 held`
@@ -265,6 +266,49 @@ describe('紫晶精靈隱身的狀態轉移', () => {
   })
 })
 
+describe('時間到結算時精靈正在打包', () => {
+  const run = (game: ReturnType<typeof makeGame>, sec: number) => {
+    for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)
+  }
+
+  it('哥布林獲勝後不會再被抓走：打包中止、哥布林放開、沒有 caught 事件', () => {
+    const game = makeGame('elf', 'harp')
+    const G = game as unknown as { present(ev: { e: string }): void; duration: number }
+    const events: string[] = []
+    const orig = G.present.bind(game)
+    G.present = (ev) => (events.push(ev.e), orig(ev))
+    run(game, 4)
+    expect(game.hud.phase).toBe('play')
+    const g = game.goblins[0]
+    g.pos.copy(game.elf.pos).add({ x: 1, y: 0, z: 0 } as never)
+    g.stun = 3
+    expect(game.elfStartCapture()).toBe(true)
+    expect(g.held).toBe(true)
+    // 打包還要好幾秒，比賽只剩 0.3 秒
+    game.elapsed = G.duration - 0.3
+    run(game, 8)
+    expect(game.hud.result?.winner).toBe('goblin')
+    expect(events).not.toContain('caught')
+    expect(g.captured).toBe(false)
+    expect(g.held).toBe(false)
+    expect(game.elf.packing).toBeNull()
+    expect(game.elf.action).toBe('idle')
+    game.dispose()
+  })
+
+  it('彈奏中時間到：結算後不再彈奏', () => {
+    const game = makeGame('elf', 'harp')
+    const G = game as unknown as { duration: number }
+    run(game, 4)
+    expect(game.elfStartMusic()).toBe(true)
+    game.elapsed = G.duration - 0.1
+    run(game, 1)
+    expect(game.hud.phase).toBe('over')
+    expect(game.elf.channel).toBe(-1)
+    game.dispose()
+  })
+})
+
 describe('開局前的載入', () => {
   const settled = async (p: Promise<unknown>) => {
     let done = false
@@ -302,6 +346,51 @@ describe('開局前的載入', () => {
     expect(await settled(client.ready)).toBe(true)
     client.dispose()
     host.dispose()
+  })
+})
+
+describe('哥布林生命週期', async () => {
+  const { Goblin, Elf } = await import('../src/game/entities')
+  it('逃竄 → 打包 → 放開 → 打包 → 捕獲；held 與 captured 不會同時成立', () => {
+    const g = new Goblin(0, 'g', 0)
+    expect(g.life).toBe('roaming')
+    g.grab()
+    expect([g.held, g.captured]).toEqual([true, false])
+    g.release()
+    expect(g.life).toBe('roaming')
+    g.grab()
+    g.capture()
+    expect([g.held, g.captured]).toEqual([false, true])
+  })
+
+  it('已捕獲是終態：不能再被打包或放開', () => {
+    const g = new Goblin(0, 'g', 0)
+    g.capture()
+    g.grab()
+    g.release()
+    expect(g.life).toBe('captured')
+  })
+
+  it('套用房主快照：captured 優先於 held', () => {
+    const g = new Goblin(0, 'g', 0)
+    g.syncLife(false, true)
+    expect(g.life).toBe('held')
+    g.syncLife(true, true)
+    expect(g.life).toBe('captured')
+    g.syncLife(false, false)
+    expect(g.life).toBe('roaming')
+  })
+
+  it('精靈打包與哥布林 held 成對變動；結算時中止打包並放開', () => {
+    const elf = new Elf('harp')
+    const g = new Goblin(0, 'g', 0)
+    elf.startPacking(g, 2)
+    expect(g.held).toBe(true)
+    elf.startChannel()
+    elf.resetForResult()
+    expect(elf.packing).toBeNull()
+    expect(elf.channel).toBe(-1)
+    expect(g.life).toBe('roaming')
   })
 })
 

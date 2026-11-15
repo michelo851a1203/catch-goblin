@@ -821,7 +821,7 @@ export class Game {
     const to = new THREE.Vector3()
     const tries = [0, 0.9, -0.9, 1.8, -1.8, Math.PI]
     for (const a of tries) {
-      behindSpot({ ...g, yaw: g.yaw + a }, E.behind, to)
+      behindSpot({ pos: g.pos, yaw: g.yaw + a }, E.behind, to)
       if (!this.world.blockedAt(to.x, to.z, elf.radius)) break
     }
     this.world.resolve(to, elf.radius)
@@ -965,7 +965,7 @@ export class Game {
     const elf = this.elf
     const g = elf.endPacking()
     const n = this.goblins.filter((x) => x.captured).length
-    g.captured = true
+    g.capture()
     g.stun = g.rooted = g.attract = g.charm = 0
     g.capturedAt = this.elapsed
     g.zone = -2
@@ -1122,8 +1122,7 @@ export class Game {
         const g = this.goblins[ev.g]
         const from = new THREE.Vector3(ev.from[0], 0, ev.from[1])
         const to = new THREE.Vector3(ev.to[0], 0, ev.to[1])
-        g.captured = true
-        g.held = false
+        g.capture()
         g.zone = -2
         g.net = null
         g.pos.copy(to)
@@ -1449,8 +1448,7 @@ export class Game {
     m.g.forEach((G, i) => {
       const g = this.goblins[i]
       if (!g) return
-      g.captured = !!(G[5] & 1)
-      g.held = !!(G[5] & 2)
+      g.syncLife(!!(G[5] & 1), !!(G[5] & 2))
       g.ultUsed = !!(G[5] & 4)
       ;[g.stun, g.rooted, g.attract, g.charm, g.grace, g.dashT, g.dashCd, g.interfereCd] = G.slice(6, 14)
       g.terror = G[15] ?? 0
