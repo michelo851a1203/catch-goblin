@@ -23,9 +23,14 @@ export interface SpringParams {
   // 0~1，角色速度改變（起跑、急停、衝鋒）時布料承受的慣性比例。預設 1 = 完全的慣性：
   // 遊戲裡的角色是瞬間加減速，薄紗會整片被甩到身體前面 / 甩成水平
   inertia?: number
+  // 抖動 / 微風的相位各骨鏈一致（預設每條鏈各自亂數）。疊了好幾層的裙子要設 true：
+  // 相鄰骨鏈各抖各的會讓內外層互相剪穿；相位一致時整件裙子是同一道由上往下傳的波紋，層與層一起動
+  flutterSync?: boolean
+  // 抖動幅度隨速度增加的上限（每步位移，預設 0.07 ≈ 4.2 m/s）：設成走路的速度時，奔跑不會抖得比走路更大
+  flutterMax?: number
 }
 
-export const COLLIDE = { body: 1, legs: 2, arms: 4, head: 8 } as const
+export const COLLIDE = { body: 1, legs: 2, arms: 4, head: 8, skirt: 16 } as const
 
 export interface ColliderDef {
   from: string // 骨頭名稱
@@ -34,6 +39,7 @@ export interface ColliderDef {
   t1?: number
   offset?: readonly [number, number, number] // 球心在 from 骨區域空間的偏移
   radius: number
+  radiusEnd?: number // 膠囊末端（to / t1）的半徑：與 radius 不同時是圓錐（裙子）
   group: number
 }
 
@@ -44,6 +50,7 @@ interface Collider {
   t1: number
   offset: THREE.Vector3
   radius: number
+  radiusEnd: number
   group: number
   pa: THREE.Vector3 // 本步的世界座標（每步更新一次）
   pb: THREE.Vector3
@@ -94,7 +101,7 @@ export class SecondaryMotion {
   private prevRootStep = new THREE.Vector3()
 
   addChain(bones: THREE.Bone[], p: SpringParams) {
-    const base = this.random() * Math.PI * 2
+    const base = p.flutterSync ? 0 : this.random() * Math.PI * 2
     bones.forEach((bone, i) => {
       const child = bones[i + 1] ?? (bone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined)
       let axis: THREE.Vector3
@@ -116,7 +123,7 @@ export class SecondaryMotion {
         tail: new THREE.Vector3(),
         prev: new THREE.Vector3(),
         p,
-        phase: this.random() * Math.PI * 2,
+        phase: p.flutterSync ? 0 : this.random() * Math.PI * 2,
         ripple: base - i * 1.1,
       })
     })
@@ -133,6 +140,7 @@ export class SecondaryMotion {
       t1: def.t1 ?? 1,
       offset: new THREE.Vector3(...(def.offset ?? [0, 0, 0])),
       radius: def.radius,
+      radiusEnd: def.radiusEnd ?? def.radius,
       group: def.group,
       pa: new THREE.Vector3(),
       pb: new THREE.Vector3(),
@@ -228,7 +236,7 @@ export class SecondaryMotion {
       _next.copy(j.tail).add(this.rootStep).add(_v).sub(_air)
       if (p.flutter && speed > 1e-4) {
         // 垂直於前進方向的抖動：左右 + 上下，頻率不同、沿骨鏈往下傳
-        const f = p.flutter * Math.min(speed, 0.07)
+        const f = p.flutter * Math.min(speed, p.flutterMax ?? 0.07)
         _side.set(this.rootStep.z, 0, -this.rootStep.x).divideScalar(speed)
         _next.addScaledVector(_side, Math.sin(this.t * 13 + j.ripple) * f * 0.5)
         _next.y += Math.sin(this.t * 9.1 + j.ripple * 1.4 + j.phase) * f
@@ -255,7 +263,7 @@ export class SecondaryMotion {
         for (const c of this.colliders) {
           if (!(c.group & p.colliders)) continue
           closestOnSegment(_next, c.pa, c.pb, _c)
-          const r = c.radius + p.hitRadius
+          const r = c.radius + (c.radiusEnd - c.radius) * _segT + p.hitRadius
           _v.subVectors(_next, _c)
           const d2 = _v.lengthSq()
           if (d2 < r * r) {
@@ -300,7 +308,7 @@ export class SecondaryMotion {
         j.bone.updateWorldMatrix(true, false)
         j.bone.localToWorld(_rest.copy(j.axis).multiplyScalar(j.len))
         closestOnSegment(_rest, c.pa, c.pb, _c)
-        const m = _rest.distanceTo(_c) - c.radius - j.p.hitRadius
+        const m = _rest.distanceTo(_c) - (c.radius + (c.radiusEnd - c.radius) * _segT) - j.p.hitRadius
         if (m < worst) {
           worst = m
           name = `${j.bone.name}↔${c.a.name}`
@@ -315,12 +323,16 @@ export class SecondaryMotion {
 const _ab = new THREE.Vector3()
 const _ap = new THREE.Vector3()
 
+// 最近點在線段上的參數（0 = a、1 = b）：圓錐碰撞體依此內插半徑
+let _segT = 0
+
 function closestOnSegment(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, out: THREE.Vector3) {
   _ab.subVectors(b, a)
   const l2 = _ab.lengthSq()
+  _segT = 0
   if (l2 < 1e-10) return out.copy(a)
-  const t = Math.min(1, Math.max(0, _ap.subVectors(p, a).dot(_ab) / l2))
-  return out.copy(a).addScaledVector(_ab, t)
+  _segT = Math.min(1, Math.max(0, _ap.subVectors(p, a).dot(_ab) / l2))
+  return out.copy(a).addScaledVector(_ab, _segT)
 }
 
 // 值以 1/60 秒為一步：stiffness / gravity 是每步相對骨長的位移
@@ -331,6 +343,14 @@ export const SPRINGS = {
   // 紫晶精靈：薄紗長裙與垂袖——回彈弱、空氣阻力大，走動時往後飄、停下來慢慢落回
   silk: { stiffness: 0.03, gravity: 0.018, drag: 0.12, air: 0.16, airMax: 0.036, flutter: 0.045, inertia: 0.4, hitRadius: 0.035, maxAngle: 0.85, wind: 0.002, colliders: COLLIDE.legs | COLLIDE.body },
   drape: { stiffness: 0.022, gravity: 0.022, drag: 0.1, air: 0.16, airMax: 0.04, flutter: 0.06, inertia: 0.4, hitRadius: 0.035, maxAngle: 1.0, wind: 0.0025, colliders: COLLIDE.body | COLLIDE.legs },
+  // 豎琴精靈的多層長裙（綠色外裙疊在白色襯裙上、下襬是一片片尖角）。
+  // 走路時往後飄約 30 cm（紫晶精靈的薄紗 38 cm 的八成：這件裙子正面開衩，飄得一樣開時側面看整雙腿都露在外面）；
+  // 奔跑時不再加大（airMax / maxAngle 收小），裙子維持蓋住腿、往後拖的鐘形。
+  // flutterSync：各骨鏈的抖動相位一致（各抖各的時，疊在一起的幾層布互相剪穿，綠色外裙上冒出白色襯裙的碎片）；
+  // hitRadius 較大：奔跑時腿擺得快，裙擺節點要離腿遠一點才不會被追上
+  gown: { stiffness: 0.04, gravity: 0.022, drag: 0.12, air: 0.15, airMax: 0.026, flutter: 0.07, flutterSync: true, flutterMax: 0.04, inertia: 0.35, hitRadius: 0.05, maxAngle: 0.55, wind: 0.002, colliders: COLLIDE.legs | COLLIDE.body },
+  // 豎琴精靈的寬袖：重力為主（手舉高時仍往下垂）、回彈很弱，走動時往後飄；披在裙子的圓錐外面
+  veil: { stiffness: 0.02, gravity: 0.05, drag: 0.12, air: 0.16, airMax: 0.03, flutter: 0.07, flutterSync: true, flutterMax: 0.035, inertia: 0.3, hitRadius: 0.03, maxAngle: 2.6, wind: 0.002, colliders: COLLIDE.body | COLLIDE.skirt },
   // 紫晶精靈背後的長髮：比薄紗重，飄得少、落得快
   tress: { stiffness: 0.14, gravity: 0.03, drag: 0.3, air: 0.1, airMax: 0.02, flutter: 0.012, inertia: 0.3, hitRadius: 0.008, maxAngle: 0.55, wind: 0.0012, colliders: COLLIDE.body },
 } satisfies Record<string, SpringParams>

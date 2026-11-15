@@ -45,15 +45,21 @@ export const HARP_RIG: ElfRig = {
   lod: ELF_NODES.lod,
   springChains: ELF_SPRING_CHAINS,
   colliders: ELF_COLLIDERS,
-  stripTracks: /^(hair_|skirt_|sleeve|prop_)/,
+  // 布料骨由程式驅動；prop_harp 每個動作各自打了關鍵影格（琴身保持直立），不能移除
+  stripTracks: /^(hair_|skirt_|sleeve_|col_)/,
   atlasMaterial: 'M_Elf',
+  // 與紫晶精靈相同的 cel shading（臉部遮罩 _facemask 與橢球法線由 build_harpist.py 產生）
+  // 這個角色的皮膚與白色布料貼圖本身很亮（接近 1.0），亮面壓低一些才不會整片曝白、看不出皺褶與金飾
+  cel: { lit: 0.42, shade: 0.62, faceShade: 0.86 },
+  hiResMap: ELF_ASSETS.colorHiRes,
+  hiResNormal: ELF_ASSETS.normalHiRes,
   blink: {
     eyes: [
-      { center: [-0.033, 1.6061, 0.1102], radius: [0.021, 0.0125, 0.025] },
-      { center: [0.0336, 1.6058, 0.1111], radius: [0.021, 0.0125, 0.025] },
+      { center: [-0.0383, 1.5545, 0.178], radius: [0.0215, 0.012, 0.025] },
+      { center: [0.036, 1.5545, 0.178], radius: [0.0215, 0.012, 0.025] },
     ],
-    skin: 0xf6d4c8,
-    lash: 0x4a2c22,
+    skin: 0xfce9e3,
+    lash: 0x422e24,
   },
 }
 

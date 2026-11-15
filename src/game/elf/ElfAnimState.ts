@@ -32,15 +32,15 @@ export const CLIP_SPECS: Record<ElfClip, ClipSpec> = {
 // 移動量門檻（含遲滯，避免在邊界來回切換）；約 3.3 m/s 以上改為跑步
 export const LOCO = { walkIn: 0.12, walkOut: 0.06, runIn: 0.45, runOut: 0.36 }
 
-// 步態動作在 timeScale = 1 時腳底相對地面的速度（m/s），與 build_elf_meshy.py 的 WALK_REF / RUN_REF 一致。
+// 步態動作在 timeScale = 1 時腳底相對地面的速度（m/s），與 build_harpist.py 的 WALK_REF / RUN_REF 一致。
 // 依角色實際移動速度調整播放速率 → 支撐腳不會在地面上滑動（看起來不像飄著走）
-export const GAIT_REF = { Walk: 1.9, Run: 6.6 }
+export const GAIT_REF = { Walk: 1.6, Run: 6.5 }
 
 export const HARP_ANIM: AnimSpec = {
   clips: CLIP_SPECS,
   poseClip: { play: 'Play', cast: 'Cast', attack: 'Strike', pack: 'Capture', stunned: 'Stunned' },
   gaitRef: GAIT_REF,
-  gaitRange: { Walk: [0.5, 1.9], Run: [0.55, 1.35] },
+  gaitRange: { Walk: [0.5, 2.0], Run: [0.6, 1.5] },
   timeScale: { Cast: 1.6 },
 }
 

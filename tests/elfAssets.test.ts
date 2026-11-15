@@ -21,19 +21,19 @@ describe('GLB 資源驗證', () => {
 
   it('包含 LOD 網格、骨架與豎琴掛點', () => {
     expect(elf.skins).toHaveLength(1)
-    for (const n of [...ELF_NODES.lod, ELF_NODES.harpSocket, 'hand.L', 'hair_C1', 'skirt_F1']) expect(elf.nodes).toContain(n)
-    for (const chains of Object.values(ELF_SPRING_CHAINS)) for (const c of chains) for (const b of c) expect(elf.bones).toContain(b.replace(/(L|R)$/, '.$1').replace(/^(hair|skirt)_(.*)\.(L|R)$/, '$1_$2$3'))
+    for (const n of [...ELF_NODES.lod, ELF_NODES.harpSocket, 'LeftHand', 'hair_C1', 'skirt_F1', 'sleeve_LC3', 'col_skirt2']) expect(elf.nodes).toContain(n)
+    for (const chains of Object.values(ELF_SPRING_CHAINS)) for (const c of chains) for (const b of c) expect(elf.bones).toContain(b)
   })
 
   it('貼圖與材質都內嵌', () => {
-    // Meshy 模型：單一貼圖集（BaseColor + 金屬度 / 粗糙度）
-    expect(elf.images).toEqual(expect.arrayContaining(['elf_color', 'elf_orm']))
+    // 單一貼圖集（BaseColor + 金屬度 / 粗糙度 + 由高模烘焙的法線）
+    expect(elf.images).toEqual(expect.arrayContaining(['elf_color', 'elf_orm', 'elf_normal']))
     expect(elf.texturedMaterials).toEqual(['M_Elf'])
     expect(harp.images).toContain('harp_color')
     expect(harp.texturedMaterials).toEqual(['M_HarpWood'])
   })
 
-  it('尺寸：角色約 1.75m、站在 y=0；豎琴約 0.5m', () => {
+  it('尺寸：角色約 1.7m、站在 y=0；豎琴約 0.5m', () => {
     expect(elf.bounds.size[1]).toBeGreaterThan(1.6)
     expect(elf.bounds.size[1]).toBeLessThan(1.9)
     expect(Math.abs(elf.bounds.min[1])).toBeLessThan(0.02)

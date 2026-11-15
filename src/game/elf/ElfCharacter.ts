@@ -33,10 +33,11 @@ export interface ElfCharacterOptions {
 
 export type ElfStatus = 'loading' | 'ready' | 'fallback' | 'disposed'
 
-// 豎琴掛在 prop_harp 骨（左手）上的偏移；在 elf-preview.html 中調整
+// 豎琴掛在 prop_harp 骨上的偏移。build_harpist.py 讓這根骨頭在每個動作裡都保持直立（+Y 朝上、+X 朝共鳴箱），
+// 原點就是握把，所以不需要再轉；在 elf-preview.html 中可微調
 export const HARP_OFFSET = {
-  position: new THREE.Vector3(-0.036, -0.059, -0.065),
-  rotation: new THREE.Euler(0.138, 0.409, -0.054),
+  position: new THREE.Vector3(0, 0, 0),
+  rotation: new THREE.Euler(0, 0, 0),
   scale: 0.95,
 }
 

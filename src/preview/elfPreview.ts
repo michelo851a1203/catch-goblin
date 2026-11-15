@@ -46,9 +46,10 @@ Object.assign(window, { __preview: { camera, controls } })
 
 // ?kind=violin 預覽紫晶精靈
 const kind = new URLSearchParams(location.search).get('kind') === 'violin' ? 'violin' : 'harp'
-const elf = new ElfCharacter({ rig: rigOf(kind) })
+const elf = new ElfCharacter({ rig: rigOf(kind), blink: true })
 elf.setCamera(camera)
 scene.add(elf.root)
+Object.assign((window as unknown as { __preview: object }).__preview, { elf, scene, renderer, outline })
 const old = createElf()
 old.root.position.x = -1.2
 old.root.visible = false

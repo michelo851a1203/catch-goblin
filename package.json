@@ -12,7 +12,7 @@
     "package": "bun run build && rm -f crazygames-build.zip && cd dist && zip -qr ../crazygames-build.zip . -x elf-preview.html 'assets/elfPreview-*'",
     "preview": "vite preview",
     "test": "vitest run",
-    "validate:elf": "node tools/validate-glb.mjs public/models/elf/elf.glb --expect-anims Idle,Walk,Run,Play,Cast,Strike,Capture,Victory,Stunned --expect-nodes prop_harp,ElfMesh_LOD0,ElfMesh_LOD1",
+    "validate:elf": "node tools/validate-glb.mjs public/models/elf/elf.glb --expect-anims Idle,Walk,Run,Play,Cast,Strike,Capture,Victory,Stunned --expect-nodes prop_harp,ElfMesh_LOD0,ElfMesh_LOD1,skirt_B1,skirt_B4,sleeve_LA1,sleeve_RC3,hair_C1,hair_C3",
     "validate:violinist": "node tools/validate-glb.mjs public/models/violinist/violinist.glb --expect-anims Idle,Walk,Run,Play,Cast,ChargeWindup,ChargeDash,ChargeRecover,Capture,Victory,Stunned --expect-nodes prop_violin,prop_bow,VioletMesh_LOD0,VioletMesh_LOD1,skirt_B1,skirt_B4,drape_L1,drape_R3,hair_C1,hair_C3"
   },
   "dependencies": {
