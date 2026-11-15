@@ -11,7 +11,8 @@ import { markStep, skipTutorial, stepDone, type CoachStep } from '../tutorial'
 
 // 新手教學卡：依遊戲中發生的事情，在畫面左側顯示一次性的圖示＋短句提示（看過就不再出現，可略過）。
 // 只讀取遊戲狀態、不改動遊戲邏輯，對局結果與 golden master 不受影響
-const props = defineProps<{ game: () => Game | null; hud: HudState; role: Role; elfKind: ElfKind }>()
+// online：多人連線時模擬不能停，確認彈窗開著也不暫停
+const props = defineProps<{ game: () => Game | null; hud: HudState; role: Role; elfKind: ElfKind; online?: boolean }>()
 
 const binds = loadKeybinds()
 const k = (code: string) => keyLabel(code)
@@ -28,6 +29,9 @@ let shownAt = 0
 let startX = 0
 let startZ = 0
 let timer = 0
+// 「結束教學」確認彈窗：電腦按 Esc、手機點教學卡上的按鈕開啟
+const confirming = ref(false)
+let confirmAt = 0
 
 function me(g: Game) {
   return props.role === 'elf' ? g.elf : g.playerGoblin
@@ -101,8 +105,11 @@ function tick() {
   if (!g || h.phase !== 'play' || h.result || h.spectating) {
     // 結算或觀戰時收起（還沒看完的下次再出現）
     if (current.value && (h.result || h.spectating)) current.value = null
+    if (confirming.value && h.result) closeConfirm()
     return
   }
+  // 確認彈窗開著時教學卡停在原地
+  if (confirming.value) return
   const now = performance.now()
   // 被打包是最緊急的：先插隊顯示掙脫
   if (current.value !== 'ult' && STEPS.includes('ult') && !stepDone('ult') && triggered('ult', g)) {
@@ -121,17 +128,56 @@ function tick() {
   }
 }
 
-function skip() {
+// 教學還沒結束（還有沒看過的卡）才需要彈窗
+let active = false
+
+function stop() {
+  active = false
+  clearInterval(timer)
+  window.removeEventListener('keydown', onKey)
+}
+
+function openConfirm() {
+  const h = props.hud
+  if (!active || confirming.value || h.phase !== 'play' || h.result) return
+  confirming.value = true
+  confirmAt = performance.now()
+  // 單人：彈窗期間暫停遊戲，不會在看彈窗時被抓
+  if (!props.online) props.game()?.pause('coach')
+}
+
+function closeConfirm() {
+  if (!confirming.value) return
+  confirming.value = false
+  // 彈窗期間不算進教學卡的顯示時間
+  shownAt += performance.now() - confirmAt
+  props.game()?.resume('coach')
+}
+
+function endTutorial() {
   skipTutorial()
   current.value = null
+  closeConfirm()
+  stop()
+}
+
+function onKey(e: KeyboardEvent) {
+  if (e.code !== 'Escape' || e.repeat) return
+  if (confirming.value) closeConfirm()
+  else openConfirm()
 }
 
 onMounted(() => {
   // 全部看過就不必再檢查
   if (STEPS.every(stepDone)) return
+  active = true
   timer = window.setInterval(tick, 200)
+  window.addEventListener('keydown', onKey)
 })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  props.game()?.resume('coach')
+  stop()
+})
 
 const card = computed((): { icon: IconName; text: string } | null => {
   const touch = touchMode.value
@@ -167,7 +213,23 @@ const card = computed((): { icon: IconName; text: string } | null => {
       <div class="body">
         <span class="tag">{{ t('coachTag') }}</span>
         <p>{{ card.text }}</p>
-        <button class="skip" @pointerdown.stop @click="skip">{{ t('coachSkip') }}</button>
+        <!-- 手機：明顯的按鈕；電腦：提示 Esc（也可以直接點） -->
+        <button class="skip" :class="{ big: touchMode }" @pointerdown.stop @click="openConfirm">
+          <template v-if="touchMode">✕ {{ t('coachSkip') }}</template>
+          <template v-else><kbd>Esc</kbd>{{ t('coachSkip') }}</template>
+        </button>
+      </div>
+    </div>
+  </Transition>
+  <Transition name="ask">
+    <div v-if="confirming" class="ask" role="dialog" aria-modal="true" @pointerdown.stop>
+      <div class="box">
+        <h3>{{ t('coachEndTitle') }}</h3>
+        <p>{{ t('coachEndBody') }}</p>
+        <div class="btns">
+          <button class="no" @click="closeConfirm">{{ t('coachEndNo') }}</button>
+          <button class="yes" @click="endTutorial">{{ t('coachEndYes') }}</button>
+        </div>
       </div>
     </div>
   </Transition>
@@ -225,8 +287,91 @@ p {
   color: #d8cba8;
   font: inherit;
   font-size: 12px;
-  text-decoration: underline;
   cursor: pointer;
+}
+.skip kbd {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e6c878;
+  color: #2a1d08;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+/* 手機：大顆、好點的膠囊按鈕 */
+.skip.big {
+  margin-top: 6px;
+  min-height: 36px;
+  padding: 6px 16px;
+  border: 1px solid #e6c878;
+  border-radius: 999px;
+  background: rgba(230, 200, 120, 0.18);
+  color: #fff3d6;
+  font-size: 14px;
+  font-weight: 700;
+  touch-action: manipulation;
+}
+.ask {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  font-family: var(--font);
+}
+.box {
+  max-width: min(400px, 86vw);
+  padding: 22px 28px;
+  border-radius: 16px;
+  background: #1d2a22;
+  border: 2px solid #c9a24e;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  color: #e3d8bd;
+}
+.box h3 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  color: #fff3d0;
+}
+.box p {
+  font-size: 14px;
+  font-weight: 400;
+}
+.btns {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 16px;
+}
+.btns button {
+  min-height: 40px;
+  padding: 8px 22px;
+  border-radius: 999px;
+  border: 1px solid #e6c878;
+  font-family: inherit;
+  font-size: 15px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.no {
+  background: transparent;
+  color: #e6c878;
+}
+.yes {
+  background: linear-gradient(#f4d983, #c9973a);
+  color: #2a1d08;
+  font-weight: 700;
+}
+.ask-enter-active,
+.ask-leave-active {
+  transition: opacity 0.2s;
+}
+.ask-enter-from,
+.ask-leave-to {
+  opacity: 0;
 }
 .coach-enter-active,
 .coach-leave-active {

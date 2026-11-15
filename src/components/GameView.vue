@@ -128,7 +128,7 @@ function toggleSpeed() {
     <div v-if="hud.hint" class="hint">{{ hud.hint }}</div>
 
     <!-- 新手教學卡（一次性，可略過） -->
-    <CoachTips v-if="!loading" :game="() => game" :hud="hud" :role="role" :elf-kind="kind" />
+    <CoachTips v-if="!loading" :game="() => game" :hud="hud" :role="role" :elf-kind="kind" :online="!!net" />
 
     <!-- 技能列 -->
     <div v-if="!hud.spectating" class="skills">
