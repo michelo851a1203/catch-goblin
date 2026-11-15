@@ -29,6 +29,8 @@ let nextId = 0
 
 class FakeConn extends Emitter {
   open = false
+  // 在通道打開前就被關閉（真的 PeerJS 會中止連線）
+  closed = false
   other!: FakeConn
   constructor(
     public peer: string,
@@ -42,6 +44,7 @@ class FakeConn extends Emitter {
     queueMicrotask(() => o.open && o.emit('data', data))
   }
   close() {
+    this.closed = true
     if (!this.open && !this.other.open) return
     this.open = false
     this.emit('close')
@@ -74,6 +77,7 @@ class FakePeer extends Emitter {
       if (!host) return this.emit('error', { type: 'peer-unavailable' })
       host.conns.push(theirs)
       host.emit('connection', theirs)
+      if (theirs.closed) return
       mine.open = theirs.open = true
       theirs.emit('open')
       mine.emit('open')
@@ -185,7 +189,7 @@ describe('Room 狀態流程', () => {
   })
 
   it('房號不存在 → notFound', async () => {
-    await expect(Room.join('0000')).rejects.toBe('notFound')
+    await expect(Room.join('000000')).rejects.toBe('notFound')
   })
 
   it('遊戲中斷線的玩家用同一個識別碼連回 → 回到原本的角色', async () => {
@@ -212,5 +216,64 @@ describe('Room 狀態流程', () => {
     expect(rejoin.mock.calls[0][1]).toBe(prev)
     expect(back.state.phase).toBe('playing')
     expect(back.current?.me).toBe(prev)
+  })
+})
+
+describe('Room 資安', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const conns = (r: RoomT) => (r as unknown as { conns: Map<string, unknown> }).conns
+
+  it('房號為 6 碼數字', async () => {
+    const host = await Room.create()
+    open.push(host)
+    expect(host.state.code).toMatch(/^\d{6}$/)
+  })
+
+  it('房主踢人：對方收到 kicked 並關閉，之後用同一個識別碼也加不回來', async () => {
+    const { host, guest } = await hostAndGuest()
+    const closed = vi.fn()
+    guest.onClose = closed
+    host.kick(guest.state.me)
+    host.kick(host.state.me) // 不能踢自己
+    await flush()
+    expect(closed).toHaveBeenCalledWith('kicked')
+    await wait(1100)
+    expect(host.state.players).toHaveLength(1)
+    await expect(Room.join(host.state.code)).rejects.toBe('kicked')
+  })
+
+  it('同一個 peer 不斷重開通道：超過上限就整個斷開，不會在房主端累積連線', async () => {
+    const host = await Room.create()
+    open.push(host)
+    const bad = new FakePeer('attacker')
+    await flush()
+    const opened: FakeConn[] = []
+    for (let i = 0; i < 10; i++) opened.push(bad.connect(host.peer.id, { label: 'reliable' }))
+    await flush()
+    expect(conns(host).size).toBe(0)
+    // 被取代的舊通道都已關閉
+    expect(opened.filter((c) => c.open).length).toBe(0)
+  })
+
+  it('被取代的舊通道送來的訊息不處理（不會變成沒有連線的幽靈玩家）', async () => {
+    const host = await Room.create()
+    open.push(host)
+    const bad = new FakePeer('ghost')
+    await flush()
+    const old = bad.connect(host.peer.id, { label: 'reliable' })
+    await flush()
+    const fresh = bad.connect(host.peer.id, { label: 'reliable' })
+    await flush()
+    expect(old.open).toBe(false)
+    expect(fresh.open).toBe(true)
+  })
+
+  it('加入者不接受陌生人直接連進來', async () => {
+    const { guest } = await hostAndGuest()
+    const stranger = new FakePeer('stranger')
+    await flush()
+    const c = stranger.connect(guest.state.me, { label: 'reliable' })
+    await flush()
+    expect(c.open).toBe(false)
   })
 })

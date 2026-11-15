@@ -174,10 +174,10 @@ const zh = {
 
   mpOpen: '👥 多人連線',
   mpTitle: '多人連線',
-  mpLead: '建立房間並把 4 碼房號告訴朋友，或輸入朋友的房號加入。關閉此視窗即為單機模式。',
+  mpLead: '建立房間並把 6 碼房號告訴朋友，或輸入朋友的房號加入。關閉此視窗即為單機模式。',
   mpCreate: '建立房間',
   mpJoin: '加入',
-  mpCodePh: '輸入 4 碼房號',
+  mpCodePh: '輸入 6 碼房號',
   mpOr: '或',
   mpSolo: '單機遊玩',
   mpConnecting: '連線中…',
@@ -203,7 +203,9 @@ const zh = {
   mpErrNetFail: '連線失敗，請檢查網路後再試一次',
   mpErrHostLeft: '房主已離開，房間已關閉',
   mpErrVersion: '遊戲版本不同，請重新整理頁面',
-  mpErrCode: '請輸入 4 碼數字房號',
+  mpErrKicked: '你已被房主移出房間',
+  mpKick: '將 {name} 移出房間',
+  mpErrCode: '請輸入 6 碼數字房號',
   mpNick: '暱稱',
   mpNickPh: '輸入暱稱（選填）',
   mpPickHint: '關閉此視窗後，點選卡片選擇你的角色',
@@ -432,10 +434,10 @@ const en: Dict = {
 
   mpOpen: '👥 Multiplayer',
   mpTitle: 'Multiplayer',
-  mpLead: 'Create a room and share the 4-digit code, or enter a friend\'s code to join. Close this panel to play solo.',
+  mpLead: 'Create a room and share the 6-digit code, or enter a friend\'s code to join. Close this panel to play solo.',
   mpCreate: 'Create room',
   mpJoin: 'Join',
-  mpCodePh: '4-digit code',
+  mpCodePh: '6-digit code',
   mpOr: 'or',
   mpSolo: 'Play solo',
   mpConnecting: 'Connecting…',
@@ -461,7 +463,9 @@ const en: Dict = {
   mpErrNetFail: 'Connection failed — check your network and try again',
   mpErrHostLeft: 'The host left and the room was closed',
   mpErrVersion: 'Different game version — please refresh the page',
-  mpErrCode: 'Enter a 4-digit room code',
+  mpErrKicked: 'The host removed you from the room',
+  mpKick: 'Remove {name} from the room',
+  mpErrCode: 'Enter a 6-digit room code',
   mpNick: 'Nickname',
   mpNickPh: 'Nickname (optional)',
   mpPickHint: 'Close this panel and tap a card to pick your role',
@@ -554,7 +558,8 @@ export function setLocale(l: Locale) {
 
 export function t(key: TKey, params?: Record<string, string | number>): string {
   let s = dicts[locale.value][key]
-  if (params) for (const k in params) s = s.replaceAll(`{${k}}`, String(params[k]))
+  // 取代值用函式傳入：玩家暱稱裡的 $& / $` 等字樣不會被當成取代樣式
+  if (params) for (const k in params) s = s.replaceAll(`{${k}}`, () => String(params[k]))
   // {min}：一局的分鐘數（CrazyGames 短局 4 分鐘、網站版 10 分鐘）
   return s.replaceAll('{min}', String(CONFIG.matchDuration / 60))
 }

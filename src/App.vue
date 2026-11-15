@@ -32,7 +32,7 @@ let busy = false
 const invite = crazygames.startupInvite()
 const instant = !invite && crazygames.isInstantMultiplayer()
 const screen = shallowRef<screens.Screen>(
-  screens.initialScreen({ role: qRole, invite, instant, newPlayer: isCrazyGames && !qRole && isNewPlayer() }),
+  screens.initialScreen({ role: qRole, invite, instant, newPlayer: isCrazyGames && !qRole && isNewPlayer(), sheetOnStart: !isCrazyGames }),
 )
 // 多人房間的連線：在大廳（選角畫面）與多人對局之間都存在
 const room = shallowRef<Room | null>(null)
@@ -53,8 +53,12 @@ if (screen.value.kind === 'solo' && screen.value.role === 'goblin' && !isElfKind
 onMounted(() => {
   crazygames.loadingFinished()
   crazygames.onInvite(joinInvite)
-  // 在選角畫面時就於背景下載精靈模型（預設的豎琴精靈先），開局時不必等下載
-  void preloadElves(elfKind.value === 'violin' ? ['violin', 'harp'] : ['harp', 'violin'])
+  // 在選角畫面時就於背景下載精靈模型（這局會用到的先），開局時不必等下載。
+  // 另一位精靈等第一次進入遊玩後才下載（CrazyGames 的初始下載量算到第一次 gameplayStart；網站版立即放行）
+  const [first, second] = elfKind.value === 'violin' ? (['violin', 'harp'] as const) : (['harp', 'violin'] as const)
+  void preloadElves([first])
+    .then(() => crazygames.afterFirstGameplay())
+    .then(() => preloadElves([second]))
 })
 
 // 回報房間狀態給 CrazyGames，好友才能加入：只有大廳還有空位時可加入

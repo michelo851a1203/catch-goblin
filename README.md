@@ -243,7 +243,10 @@ Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wra
 
 1. 部署 TURN Worker
 2. 跑測試、建置，並把 `dist` 上傳為 `crazygames-build` artifact（重新壓成 zip 即可上傳到 CrazyGames）
-3. 設定 `SITE_URL` 再建置一次網站版，部署到 Cloudflare Pages：`https://elf-and-goblins.pages.dev`
+3. 設定 `SITE_URL` 再建置一次網站版，上傳為 `website-build` artifact
+4. 另一個 job 只下載 `website-build` 並用 wrangler 部署到 Cloudflare Pages：`https://elf-and-goblins.pages.dev`（`CLOUDFLARE_API_TOKEN` 不會出現在跑 `bun install` / 測試 / 建置的 job）
+
+所有第三方 action 都釘選在完整的 commit SHA（後面註解版本號），Bun 版本也固定；升級時請一併更新 SHA 與註解。
 
 #### 🔎 網站版的 SEO 與社群卡片
 
@@ -252,6 +255,7 @@ Worker 允許呼叫的網域寫在 [`worker/turn/wrangler.toml`](worker/turn/wra
 - 在 `index.html` 注入 `description`、`canonical`、Open Graph、X（`summary_large_image`）與 `VideoGame` JSON-LD，貼到 X / Bluesky / Threads / Facebook / LINE / Discord 都會顯示卡片
 - 在 `#app` 放入 [`site/content.html`](site/content.html)（遊戲介紹、玩法、FAQ），兼作載入畫面；不跑 JS 的爬蟲與 AI 也讀得到，Vue 掛載後會被取代
 - 拿掉 CrazyGames SDK，並輸出 `robots.txt`、`sitemap.xml`、`llms.txt` 與卡片圖 [`site/public/og-image.jpg`](site/public/og-image.jpg)（1200×630）
+- 輸出 Cloudflare Pages 的 `_headers`（CSP、`X-Content-Type-Options`、`Referrer-Policy`、`Permissions-Policy`、`X-Frame-Options: SAMEORIGIN` / `frame-ancestors 'self'`），並在 `index.html` 放同一份 CSP 的 `<meta>`（不含 `frame-ancestors`）。`connect-src` 依建置時的 `VITE_TURN_URL`、`VITE_PEER_HOST` / `VITE_PEER_PORT` 產生（預設 PeerJS 公用伺服器 `0.peerjs.com`）；新增外部連線或資源時要同步修改 `contentSecurityPolicy()`
 
 `bun run package`（CrazyGames zip）不設定 `SITE_URL`，輸出完全不變。本機預覽網站版：
 

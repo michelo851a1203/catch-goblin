@@ -337,6 +337,90 @@ footer {
   }
 }
 
+/* 桌機的矮視窗（CrazyGames 非全螢幕的 iframe 最小約 821×462）：縮小間距與圖示，技能列表放不下時可捲動，
+   不會蓋到下方的操作說明與開始按鈕 */
+.detail:not(.touch) .skills {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(230, 200, 120, 0.35) transparent;
+}
+@media (max-height: 640px) {
+  .detail:not(.touch) .info {
+    padding-top: 52px;
+  }
+  .detail:not(.touch) header {
+    padding-bottom: 8px;
+  }
+  .detail:not(.touch) h2 {
+    font-size: 26px;
+    margin: 0 0 2px;
+  }
+  .detail:not(.touch) .goal {
+    font-size: 13px;
+  }
+  .detail:not(.touch) .skills {
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 10px 6px 4px 8px;
+  }
+  .detail:not(.touch) li {
+    gap: 14px;
+  }
+  .detail:not(.touch) .ring {
+    width: 42px;
+    height: 42px;
+  }
+  .detail:not(.touch) .text b {
+    font-size: 14px;
+  }
+  .detail:not(.touch) .text p {
+    margin-top: 1px;
+    font-size: 12.5px;
+    line-height: 1.35;
+  }
+  .detail:not(.touch) .controls {
+    margin-top: 6px;
+    font-size: 11.5px;
+  }
+  .detail:not(.touch) footer {
+    padding-top: 6px;
+    padding-bottom: 14px;
+  }
+  .detail:not(.touch) .go {
+    padding: 9px 32px;
+    font-size: 17px;
+  }
+}
+
+/* 更矮的視窗（約 821×462）：再收緊，四項技能不必捲動也放得下 */
+@media (max-height: 500px) {
+  .detail:not(.touch) .info {
+    padding-top: 44px;
+  }
+  .detail:not(.touch) h2 {
+    font-size: 22px;
+  }
+  .detail:not(.touch) .skills {
+    gap: 4px;
+    padding-top: 6px;
+  }
+  .detail:not(.touch) .ring {
+    width: 34px;
+    height: 34px;
+  }
+  .detail:not(.touch) .text b {
+    font-size: 13px;
+  }
+  .detail:not(.touch) .text p {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+  .detail:not(.touch) footer {
+    padding-bottom: 10px;
+  }
+}
+
 /* 紫晶精靈：模型背後帶一點紫色光暈 */
 .detail.violin {
   background:

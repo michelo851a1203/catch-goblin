@@ -131,6 +131,10 @@ function staffGeometry() {
 }
 
 const powCache = new Map<string, THREE.CanvasTexture>()
+// 釋放共用貼圖的 GPU 資源（理由見 toon.ts 的 releaseToonGpu）
+export function releasePowGpu() {
+  for (const t of powCache.values()) t.dispose()
+}
 function powTexture(text: string, fill: string) {
   const key = text + fill
   const hit = powCache.get(key)

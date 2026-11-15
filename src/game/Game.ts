@@ -8,11 +8,12 @@ import { CONFIG, type ElfKind, type Role } from './config'
 import { Actor, Elf, Goblin, setBarProgress, type ChargePhase, type ElfAction } from './entities'
 import { behindSpot, fearTargets, nearestTarget, sweepHit } from './violin'
 import { GAP_HALF, World } from './world'
-import { makeSprite, noOutline } from './toon'
+import { makeSprite, noOutline, releaseToonGpu } from './toon'
 import { updateElfAI, updateGoblinAI } from './ai'
 import { sfx } from './audio'
-import { FxSystem } from './fx/Effects'
-import { CELL } from './fx/atlas'
+import { FxSystem, releasePowGpu } from './fx/Effects'
+import { CELL, releaseAtlasGpu } from './fx/atlas'
+import { disposeObject } from './elf/dispose'
 import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 import { t, type TKey } from '../i18n'
 import type { IconName } from '../icons'
@@ -65,6 +66,8 @@ interface Snapshot {
   e: number[]
   g: number[][]
 }
+// 加入者回報位置的位移額度上限（公尺）
+const IN_BUDGET_CAP = 4
 const PHASES: HudState['phase'][] = ['countdown', 'play', 'over']
 // 瀏覽器收得到的媒體鍵（系統層級的靜音 / 音量鍵由 macOS 直接處理，網頁攔不到）
 const MEDIA_KEYS = new Set(['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'AudioVolumeMute'])
@@ -226,10 +229,13 @@ export class Game {
   private disposed = false
   // 暫停原因（廣告、分頁隱藏）；任一存在就停止更新與繪製
   private pauses = new Set<string>()
+  // 房主：每位加入者的位移額度（見 applyInput）
+  private inBudget = new Map<Actor, { budget: number; at: number }>()
   private listeners: [EventTarget, string, EventListener][] = []
   // 多人連線（單機時為 null）；me＝本機操控的角色
   net: NetLink | null
   me: Slot
+  // 離開時要解除的訂閱（網路連線、廣告狀態）
   private netOff: (() => void)[] = []
   private evQueue: GameEvent[] = []
   private netT = 0
@@ -355,6 +361,8 @@ export class Game {
 
     this.bindInput()
     this.resize()
+    // 插頁廣告播放中暫停（廣告晚於等待時間才開始時，對局可能已經在進行）
+    this.netOff.push(crazygames.onAdPlaying((on) => (on ? this.pause('ad') : this.resume('ad'))))
     ;(window as unknown as { __game: Game }).__game = this
     this.syncHud()
 
@@ -413,8 +421,18 @@ export class Game {
     this.elf.character.dispose()
     this.envTarget?.dispose()
     this.staff.dispose()
+    // 釋放場景裡所有幾何 / 材質 / 貼圖（含與下一局共用的卡通材質，下一局會重新上傳），以及陰影貼圖。
+    // 共用資源若不 dispose，three 掛在上面的監聽會一直參照這個 renderer，整個 WebGL context 每局殘留一份
+    disposeObject(this.scene)
+    this.sun.dispose()
+    releaseToonGpu()
+    releaseAtlasGpu()
+    releasePowGpu()
     this.renderer.dispose()
+    this.renderer.forceContextLoss()
     this.renderer.domElement.remove()
+    const w = window as unknown as { __game?: Game }
+    if (w.__game === this) delete w.__game
   }
 
   pause(reason: string) {
@@ -1303,10 +1321,39 @@ export class Game {
     // 被控制住、或房主剛強制移動過但對方還沒收到時，忽略回報
     const locked = a === this.elf ? this.elf.busy : (a as Goblin).disabled
     if (locked || m.c !== a.corr || this.hud.phase !== 'play') return
-    a.pos.set(p[0], 0, p[1])
+    // 防瞬移：位移額度每秒累積「最高速度 × 1.25」公尺（上限 IN_BUDGET_CAP，吸收網路延遲造成的封包堆積），
+    // 每次回報的位移扣額度，超過的部分截掉。正常玩家用不完額度；改過的客戶端最多只能以 1.25 倍速移動。
+    // 每位玩家開局（或重新連線）後的第一筆回報直接採用：加入者的出生點是在自己那端決定的，和房主這邊不同
+    const max = this.maxSpeedOf(a)
+    const b = this.inBudget.get(a)
+    if (!b) {
+      this.inBudget.set(a, { budget: IN_BUDGET_CAP, at: this.elapsed })
+      a.pos.set(p[0], 0, p[1])
+    } else {
+      b.budget = Math.min(IN_BUDGET_CAP, b.budget + (this.elapsed - b.at) * max * 1.25)
+      b.at = this.elapsed
+      v1.set(p[0] - a.pos.x, 0, p[1] - a.pos.z)
+      const d = v1.length()
+      if (d <= b.budget) {
+        b.budget -= d
+        a.pos.set(p[0], 0, p[1])
+      } else {
+        a.pos.addScaledVector(v1, b.budget / d)
+        b.budget = 0
+      }
+    }
     this.world.resolve(a.pos, a.radius)
     a.yaw = p[2]
+    // 速度只用來預測與內插；限制在合法的最高速度內（精靈以衝鋒計），避免灌入極大值讓其他玩家畫面上的角色亂飛
+    const vmax = (a === this.elf ? Math.max(CONFIG.elf.speed, CONFIG.violin.charge.speed) : this.maxSpeedOf(a)) * 1.3
     a.vel.set(p[3], 0, p[4])
+    // 只在超過時才縮放（clampLength 即使沒超過也會除再乘，產生浮點誤差）
+    if (a.vel.lengthSq() > vmax * vmax) a.vel.setLength(vmax)
+  }
+
+  // 該角色可能的最高移動速度（哥布林以衝刺計；精靈的衝鋒期間不採用回報的位置，見 applyInput 的 locked）
+  private maxSpeedOf(a: Actor) {
+    return a === this.elf ? CONFIG.elf.speed : CONFIG.goblin.speed * CONFIG.goblin.dashMultiplier
   }
 
   // 房主：玩家離線後改由 AI 接手
@@ -1316,6 +1363,7 @@ export class Game {
     if (slot === undefined) return
     net.peers.delete(peer)
     const a = this.actorOf(slot)
+    this.inBudget.delete(a)
     a.netDriven = false
     a.net = null
     this.emit({ e: 'left', name: this.playerName(slot) })

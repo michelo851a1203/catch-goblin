@@ -51,7 +51,16 @@ export function loadKeybinds(): Keybinds {
     const raw = store.getItem(KEY)
     if (raw) {
       const saved = JSON.parse(raw) as Partial<Keybinds>
-      for (const g of ['move', 'elf', 'goblin'] as const) Object.assign(k[g], saved[g])
+      // 只接受預設就有的動作名稱、且值是字串（存檔被竄改或格式不對時忽略該項，也不會碰到 __proto__）
+      for (const g of ['move', 'elf', 'goblin'] as const) {
+        const from = saved?.[g] as Record<string, unknown> | undefined
+        if (!from || typeof from !== 'object') continue
+        const to = k[g] as Record<string, string>
+        for (const action of Object.keys(to)) {
+          const v = Object.prototype.hasOwnProperty.call(from, action) ? from[action] : undefined
+          if (typeof v === 'string' && v.length <= 32) to[action] = v
+        }
+      }
     }
   } catch {
     /* 無痕模式等情況忽略 */

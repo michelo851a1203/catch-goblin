@@ -7,6 +7,7 @@ import { ElfCharacter } from './elf/ElfCharacter'
 import { disposeObject } from './elf/dispose'
 import { rigOf } from './elf/rigs'
 import { createGoblin, type CharacterModel } from './models'
+import { releaseToonGpu } from './toon'
 
 // 選角詳情頁左側的角色展示（只在桌機版顯示）：
 // 一律以最高品質呈現——LOD0、高解析貼圖、滿解析度、柔和陰影與描邊，可拖曳旋轉角色
@@ -191,6 +192,8 @@ export class CharacterShowcase {
     this.ground.geometry.dispose()
     this.ground.material.dispose()
     this.env.dispose()
+    // 共用的卡通材質也要讓這個 renderer 放手，否則舊 renderer 會一直被參照（見 toon.ts）
+    releaseToonGpu()
     this.renderer.dispose()
     this.renderer.forceContextLoss()
     this.renderer.domElement.remove()

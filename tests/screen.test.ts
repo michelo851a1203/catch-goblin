@@ -3,11 +3,17 @@ import * as s from '../src/screen'
 import type { NetLink } from '../src/net/room'
 
 const link = { me: 'elf' } as unknown as NetLink
-const start = (o: Partial<s.Startup> = {}) => s.initialScreen({ role: null, invite: null, instant: false, newPlayer: false, ...o })
+const start = (o: Partial<s.Startup> = {}) => s.initialScreen({ role: null, invite: null, instant: false, newPlayer: false, sheetOnStart: true, ...o })
 
 describe('開啟遊戲時的畫面', () => {
   it('一般：選角畫面並打開多人連線 sheet', () => {
     expect(start()).toEqual({ kind: 'menu', sheet: { auto: null, error: null } })
+  })
+  it('CrazyGames 版一般開啟：選角畫面，不先打開多人 sheet（單機與多人一樣顯眼）', () => {
+    expect(start({ sheetOnStart: false })).toEqual({ kind: 'menu', sheet: null })
+    // 邀請與即時多人仍然直接打開
+    expect(start({ sheetOnStart: false, invite: '123456' }).kind).toBe('menu')
+    expect((start({ sheetOnStart: false, instant: true }) as { sheet: unknown }).sheet).not.toBeNull()
   })
   it('?role=：直接進入單機對局，不開 sheet', () => {
     expect(start({ role: 'elf' })).toEqual({ kind: 'solo', role: 'elf' })
@@ -16,9 +22,9 @@ describe('開啟遊戲時的畫面', () => {
     expect(start({ newPlayer: true })).toEqual({ kind: 'solo', role: 'goblin' })
   })
   it('好友邀請優先於一切：自動加入房間', () => {
-    expect(start({ invite: '1234', role: 'elf', newPlayer: true, instant: true })).toEqual({
+    expect(start({ invite: '123456', role: 'elf', newPlayer: true, instant: true })).toEqual({
       kind: 'menu',
-      sheet: { auto: { kind: 'join', code: '1234' }, error: null },
+      sheet: { auto: { kind: 'join', code: '123456' }, error: null },
     })
   })
   it('即時多人優先於 ?role= 與新玩家：自動建立房間', () => {

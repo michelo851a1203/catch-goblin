@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAME_MAX, Room, cleanName, displayName, loadName, saveName, type RoomError } from '../net/room'
+import { CODE_LEN, CODE_RE, NAME_MAX, Room, cleanName, displayName, loadName, nameLocked, saveName, type RoomError } from '../net/room'
 import { MAX_PLAYERS, type Pick } from '../net/assign'
 import { sfx } from '../game/audio'
 import { t, type TKey } from '../i18n'
@@ -18,6 +18,8 @@ const emit = defineEmits<{ close: []; leave: []; room: [room: Room] }>()
 
 const code = ref('')
 const nick = ref(props.room?.myName ?? loadName())
+// CrazyGames 登入的玩家：暱稱固定為平台使用者名稱，不能修改
+const locked = nameLocked()
 let nickTimer = 0
 // entry：選擇建立 / 加入；nick：輸入暱稱後確定才連線
 const step = ref<'entry' | 'nick'>('entry')
@@ -36,6 +38,7 @@ const ERR: Record<RoomError, TKey> = {
   netFail: 'mpErrNetFail',
   hostLeft: 'mpErrHostLeft',
   version: 'mpErrVersion',
+  kicked: 'mpErrKicked',
 }
 watch(
   () => props.error,
@@ -55,7 +58,7 @@ function pickIcon(p: { pick: Pick; elf?: string }): IconName {
 function next(k: 'create' | 'join') {
   sfx.unlock()
   err.value = ''
-  if (k === 'join' && !/^\d{4}$/.test(code.value)) {
+  if (k === 'join' && !CODE_RE.test(code.value)) {
     err.value = t('mpErrCode')
     return
   }
@@ -88,7 +91,7 @@ async function connect() {
 
 function onCode(e: Event) {
   const el = e.target as HTMLInputElement
-  code.value = el.value.replace(/\D/g, '').slice(0, 4)
+  code.value = el.value.replace(/\D/g, '').slice(0, CODE_LEN)
   el.value = code.value
   err.value = ''
 }
@@ -104,7 +107,11 @@ function flushNick() {
   if (props.room) props.room.setName(nick.value)
   else saveName(cleanName(nick.value))
 }
-onBeforeUnmount(flushNick)
+onBeforeUnmount(() => {
+  flushNick()
+  // 連線途中被卸載（例如收到好友邀請換成另一個 sheet）：讓還在建立的房間連上後自己離開，不留下沒人管的房間
+  token++
+})
 
 onMounted(() => {
   const a = props.auto
@@ -145,6 +152,12 @@ function dismiss() {
   else close()
 }
 
+// 房主：踢出玩家
+function kick(id: string) {
+  sfx.flip()
+  props.room?.kick(id)
+}
+
 function leave() {
   sfx.flip()
   emit('leave')
@@ -167,7 +180,7 @@ function leave() {
           <button class="go" @click="next('create')">{{ t('mpCreate') }}</button>
           <span class="or">{{ t('mpOr') }}</span>
           <form class="join" @submit.prevent="next('join')">
-            <input :value="code" inputmode="numeric" autocomplete="off" maxlength="4" pattern="[0-9]*" :placeholder="t('mpCodePh')" @input="onCode" />
+            <input :value="code" inputmode="numeric" autocomplete="off" :maxlength="CODE_LEN" pattern="[0-9]*" :placeholder="t('mpCodePh')" @input="onCode" />
             <button class="ghost" type="submit">{{ t('mpJoin') }}</button>
           </form>
         </div>
@@ -187,6 +200,7 @@ function leave() {
             enterkeyhint="go"
             :placeholder="t('mpNickPh')"
             :disabled="busy"
+            :readonly="locked"
             @input="onNick"
           />
           <button class="go" type="submit" :disabled="busy">{{ busy ? t('mpConnecting') : t('mpOk') }}</button>
@@ -204,7 +218,7 @@ function leave() {
         <p class="lead">{{ t('mpShare') }}</p>
         <label class="nick">
           <span>{{ t('mpNick') }}</span>
-          <input :value="nick" :maxlength="NAME_MAX" autocomplete="nickname" :placeholder="t('mpNickPh')" @input="onNick" @change="flushNick" />
+          <input :value="nick" :maxlength="NAME_MAX" autocomplete="nickname" :placeholder="t('mpNickPh')" :readonly="locked" @input="onNick" @change="flushNick" />
         </label>
 
         <h3>{{ t('mpPlayers', { n: s.players.length, max: MAX_PLAYERS }) }}</h3>
@@ -213,6 +227,9 @@ function leave() {
             <img class="ico" :src="icon(pickIcon(p))" alt="" />
             <span class="name">{{ displayName(p) }}<template v-if="p.id === s.me"> ({{ t('you') }})</template></span>
             <span v-if="p.n === 1" class="tag">{{ t('mpHost') }}</span>
+            <button v-if="s.host && p.id !== s.me" class="kick" :aria-label="t('mpKick', { name: displayName(p) })" :title="t('mpKick', { name: displayName(p) })" @click="kick(p.id)">
+              <img class="xi" :src="icon('ui-close')" alt="" />
+            </button>
           </li>
         </ul>
 
@@ -453,6 +470,27 @@ button:disabled {
   border-radius: 4px;
   background: #e6c878;
   color: #2a1d08;
+}
+/* 房主踢人鈕：在名字列最右邊 */
+.kick {
+  margin-left: auto;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(230, 200, 120, 0.45);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+.kick:hover {
+  background: rgba(230, 120, 100, 0.25);
+}
+.kick .xi {
+  width: 12px;
+  height: 12px;
 }
 .nick {
   display: flex;

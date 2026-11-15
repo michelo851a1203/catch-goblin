@@ -519,3 +519,41 @@ describe('豎琴精靈的身形與布料', () => {
     elf.dispose()
   })
 })
+
+describe('4K 貼圖的下載時機', () => {
+  it('閘門（CrazyGames：第一次進入遊玩）打開前不下載，打開後才下載並替換', async () => {
+    const { setHiResGate } = await import('../src/game/elf/ElfCharacter')
+    let open!: () => void
+    setHiResGate(() => new Promise<void>((r) => (open = r)))
+    try {
+      const loadTexture = vi.fn(async () => new THREE.Texture())
+      const elf = new ElfCharacter({ load: fileLoad, fallback: fakeFallback(), lowEnd: false, loadTexture })
+      await elf.ready
+      await new Promise((r) => setTimeout(r, 0))
+      expect(loadTexture).not.toHaveBeenCalled()
+      open()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(loadTexture).toHaveBeenCalledTimes(2)
+      elf.dispose()
+    } finally {
+      setHiResGate(() => Promise.resolve())
+    }
+  })
+
+  it('閘門打開前角色已釋放：不下載', async () => {
+    const { setHiResGate } = await import('../src/game/elf/ElfCharacter')
+    let open!: () => void
+    setHiResGate(() => new Promise<void>((r) => (open = r)))
+    try {
+      const loadTexture = vi.fn(async () => new THREE.Texture())
+      const elf = new ElfCharacter({ load: fileLoad, fallback: fakeFallback(), lowEnd: false, loadTexture })
+      await elf.ready
+      elf.dispose()
+      open()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(loadTexture).not.toHaveBeenCalled()
+    } finally {
+      setHiResGate(() => Promise.resolve())
+    }
+  })
+})

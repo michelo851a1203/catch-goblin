@@ -34,10 +34,16 @@ document.addEventListener(
 // 語言、鍵位、戰績都從 SDK 的存檔讀取，所以要等 SDK 初始化完成才載入遊戲
 async function boot() {
   await crazygames.init()
-  const [{ createApp }, { default: App }, { saveName }] = await Promise.all([import('vue'), import('./App.vue'), import('./net/room')])
-  // 多人連線必須顯示 CrazyGames 使用者名稱，好友才認得出來
+  const [{ createApp }, { default: App }, { lockName }, { setHiResGate }] = await Promise.all([
+    import('vue'),
+    import('./App.vue'),
+    import('./net/room'),
+    import('./game/elf/ElfCharacter'),
+  ])
+  setHiResGate(crazygames.afterFirstGameplay)
+  // 多人連線必須顯示 CrazyGames 使用者名稱（好友才認得出來，也不會出現自訂的不雅暱稱）：登入的玩家暱稱固定為平台名稱
   const name = await crazygames.username()
-  if (name) saveName(name)
+  if (name) lockName(name)
   createApp(App).mount('#app')
 }
 void boot()

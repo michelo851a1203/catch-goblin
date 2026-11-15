@@ -3,6 +3,7 @@ import Peer, { type DataConnection, type PeerOptions } from 'peerjs'
 import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assign'
 import { store } from '../crazygames'
 import { iceServers } from './ice'
+import { NAME_MAX, cleanName } from './names'
 import { isCrazyGames } from '../platform'
 import { t } from '../i18n'
 import { isElfKind, type ElfKind } from '../game/config'
@@ -10,7 +11,7 @@ import { isElfKind, type ElfKind } from '../game/config'
 // 多人連線：使用 PeerJS（WebRTC P2P）。預設使用 PeerJS 的公用信令伺服器，可用 VITE_PEER_* 改成自架的 PeerServer。
 // PeerJS 內建的 TURN 網域已無法解析，TURN 改由 Cloudflare 提供（見 ./ice.ts 與 worker/turn）。
 // 建立房間的玩家是房主，負責整場模擬；其他玩家只傳送自己的操作，接收房主廣播的狀態。
-// 房主以固定前綴 + 4 碼房號註冊 peer id，加入者直接用房號連線，所以不需要大廳列表。
+// 房主以固定前綴 + 6 碼房號註冊 peer id，加入者直接用房號連線，所以不需要大廳列表。
 // CrazyGames 版與網站版的對局設定不同（時間、哥布林數量），房號互不相通
 const ID_PREFIX = isCrazyGames ? 'elf-and-goblins-cg-' : 'elf-and-goblins-'
 const env = import.meta.env
@@ -44,8 +45,10 @@ const MAX_MSG_BYTES = 4096
 // 每條連線的訊息速率（token bucket）：加入者正常約 20 則/秒（位置）+ 零星技能，超過的訊息直接丟掉
 const MSG_RATE = 40
 const MSG_BURST = 80
+// 同一個 peer 重開同名通道的次數上限（正常網路重連只會有幾次）
+const MAX_SWAPS = 4
 // CrazyGames 使用者名稱最長 20 字元
-export const NAME_MAX = 20
+export { NAME_MAX }
 const NAME_KEY = 'goblin-game.nickname'
 const REJOIN_KEY = 'goblin-game.rejoin'
 
@@ -66,15 +69,23 @@ function rejoinToken(code: string) {
   return token
 }
 
-// 暱稱：去掉控制字元、限制長度
-export function cleanName(v: unknown) {
-  return typeof v === 'string' ? [...v.replace(/[\u0000-\u001f\u007f]/g, '').trim()].slice(0, NAME_MAX).join('') : ''
+// 暱稱的清理與不雅字詞過濾見 names.ts
+export { cleanName }
+// 平台（CrazyGames）登入的使用者名稱：有的話一律使用，不能改（CrazyGames 規定多人遊戲顯示平台使用者名稱）
+let lockedName = ''
+export function lockName(name: string) {
+  lockedName = cleanName(name)
+  if (lockedName) saveName(lockedName)
+}
+export function nameLocked() {
+  return !!lockedName
 }
 // 大廳顯示用：沒填暱稱時顯示「玩家N」
 export function displayName(p: { n: number; name: string }) {
   return p.name || t('playerN', { n: p.n })
 }
 export function loadName() {
+  if (lockedName) return lockedName
   try {
     return cleanName(store.getItem(NAME_KEY))
   } catch {
@@ -89,7 +100,14 @@ export function saveName(name: string) {
   }
 }
 
-export type RoomError = 'full' | 'notFound' | 'started' | 'netFail' | 'hostLeft' | 'version'
+export type RoomError = 'full' | 'notFound' | 'started' | 'netFail' | 'hostLeft' | 'version' | 'kicked'
+// 房號長度：6 碼（100 萬種）讓陌生人難以逐一嘗試、闖進別人的私人房間
+export const CODE_LEN = 6
+export const CODE_RE = new RegExp(`^\\d{${CODE_LEN}}$`)
+function randomCode() {
+  const n = crypto.getRandomValues(new Uint32Array(1))[0] % 10 ** CODE_LEN
+  return String(n).padStart(CODE_LEN, '0')
+}
 // 房間的生命週期：連線中 → 大廳 ⇄ 遊戲中；任何時候都可能 → 已關閉（離開、被拒絕、房主離開、斷線，不會再回來）
 export type RoomPhase = 'connecting' | 'lobby' | 'playing' | 'closed'
 
@@ -139,6 +157,8 @@ interface Conn {
   helloTimer: number
   // 房主：已送出 reject，等待斷線中（不再處理對方的訊息）
   rejected: boolean
+  // 同名通道被重開的次數
+  swaps: number
   // 房主：訊息速率限制
   tokens: number
   lastRefill: number
@@ -183,10 +203,13 @@ export class Room {
   // 房主：peer id → 重新連線識別碼；遊戲中斷線的玩家（識別碼 → 原本的資料）
   private tokens = new Map<string, string>()
   private dropped = new Map<string, LobbyPlayer & { slot: Slot }>()
+  // 房主：被踢出的 peer id 與重新連線識別碼（這個房間不再接受）
+  private banned = new Set<string>()
 
   private constructor(opts: PeerOptions, id?: string) {
     this.peer = id ? new Peer(id, opts) : new Peer(opts)
-    this.peer.on('connection', (c) => this.attachConn(c))
+    // 只有房主接受別人連進來；加入者只連房主，陌生人直接連加入者（例如從大廳名單拿到 peer id、想取得對方 IP 或塞訊息）一律關閉
+    this.peer.on('connection', (c) => (this.state.host ? this.attachConn(c) : c.close()))
     this.peer.on('error', (e) => {
       const why = e.type === 'peer-unavailable' ? 'notFound' : 'netFail'
       const fail = new RoomFail(why)
@@ -204,11 +227,11 @@ export class Room {
     window.addEventListener('pagehide', this.unload)
   }
 
-  // 建立房間：隨機產生沒人用的 4 碼數字房號（已被使用的 id 伺服器會拒絕）
+  // 建立房間：隨機產生沒人用的 6 碼數字房號（已被使用的 id 伺服器會拒絕）
   static async create(): Promise<Room> {
     const opts = await peerOptions()
     for (let i = 0; i < 10; i++) {
-      const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0')
+      const code = randomCode()
       const room = new Room(opts, ID_PREFIX + code)
       try {
         await room.ready()
@@ -223,7 +246,7 @@ export class Room {
     throw 'netFail'
   }
 
-  // 依 4 碼房號加入；失敗時丟出 RoomError（人數已滿、已開局等由房主回覆）
+  // 依 6 碼房號加入；失敗時丟出 RoomError（人數已滿、已開局等由房主回覆）
   static async join(code: string): Promise<Room> {
     const room = new Room(await peerOptions())
     try {
@@ -270,7 +293,7 @@ export class Room {
   }
 
   setName(v: string) {
-    const name = cleanName(v)
+    const name = lockedName || cleanName(v)
     saveName(name)
     if (name === this.name) return
     this.name = name
@@ -309,6 +332,16 @@ export class Room {
     this.close(null)
   }
 
+  // 房主：在大廳把玩家踢出房間（陌生人闖進私人房間、亂取名字等）。之後同一個 peer / 識別碼不能再加入這個房間
+  kick(id: string) {
+    const s = this.state
+    if (!s.host || s.phase !== 'lobby' || id === s.me || !this.isPlayer(id)) return
+    this.banned.add(id)
+    const token = this.tokens.get(id)
+    if (token) this.banned.add(token)
+    this.reject(id, 'kicked')
+  }
+
   // ───────────── 內部 ─────────────
   private ready() {
     return new Promise<void>((resolve, reject) => {
@@ -333,7 +366,8 @@ export class Room {
     if (!entry) {
       // 房主：連線數已達上限，告知「人數已滿」後斷開，不佔用名額
       if (this.state.host && this.conns.size >= MAX_CONNS) return this.refuse(c)
-      entry = { connected: false, iceTimer: 0, helloTimer: 0, rejected: false, tokens: MSG_BURST, lastRefill: performance.now() }
+      if (this.state.host && this.banned.has(id)) return c.close()
+      entry = { connected: false, iceTimer: 0, helloTimer: 0, rejected: false, tokens: MSG_BURST, lastRefill: performance.now(), swaps: 0 }
       this.conns.set(id, entry)
       if (this.state.host) {
         const e = entry
@@ -343,16 +377,32 @@ export class Room {
       }
     }
     const e = entry
-    if (c.label === 'reliable') e.reliable = c
+    // 同一個 peer 又開了同名的通道（正常情況是網路重連）：關掉舊的，只認最新的一條。
+    // 惡意客戶端若不斷重開（每條都會在房主端建立一個 WebRTC 連線），超過次數就整個斷開
+    const prev = c.label === 'reliable' ? e.reliable : e.unreliable
+    if (prev && prev !== c) {
+      if (++e.swaps > MAX_SWAPS) {
+        // 這個房間不再接受這個 peer（否則斷開後又能馬上重來一輪）
+        if (this.state.host) this.banned.add(id)
+        c.close()
+        return this.dropConn(id, e)
+      }
+      if (c.label === 'reliable') e.reliable = c
+      else e.unreliable = c
+      prev.close()
+    } else if (c.label === 'reliable') e.reliable = c
     else e.unreliable = c
+    // 這條通道是否仍是這個 peer 目前使用中的那一條（被取代或已移除的通道，事件一律忽略）
+    const current = () => this.conns.get(id) === e && (c.label === 'reliable' ? e.reliable : e.unreliable) === c
     c.on('open', () => {
-      if (e.connected || !e.reliable?.open || !e.unreliable?.open) return
+      if (!current() || e.connected || !e.reliable?.open || !e.unreliable?.open) return
       e.connected = true
       // 加入者連上房主後打招呼，由房主決定是否接受
       if (!this.state.host && id === this.hostId) this.sendTo(id, { t: 'hello', v: PROTO, name: this.name, token: this.token })
     })
     c.on('data', (data) => {
-      if (typeof data !== 'string') return
+      if (typeof data !== 'string' || !current()) return
+      // 房主：限制大小與速率（加入者只會收到房主的訊息，快照可能超過這個大小）
       if (this.state.host && (e.rejected || data.length > MAX_MSG_BYTES || !this.takeToken(e))) return
       try {
         this.onMessage(id, JSON.parse(data))
@@ -360,9 +410,12 @@ export class Room {
         /* 格式錯誤的訊息直接忽略 */
       }
     })
-    c.on('close', () => this.dropConn(id, e))
+    c.on('close', () => {
+      if (current()) this.dropConn(id, e)
+    })
     c.on('error', () => {})
     c.on('iceStateChanged', (state) => {
+      if (!current()) return
       clearTimeout(e.iceTimer)
       if (state === 'disconnected') e.iceTimer = window.setTimeout(() => this.dropConn(id, e), ICE_GRACE)
       else if (state === 'failed' || state === 'closed') this.dropConn(id, e)
@@ -461,6 +514,7 @@ export class Room {
         const v = (m as { v: number }).v
         if (v !== PROTO) return this.reject(from, 'version')
         const token = String((m as { token?: unknown }).token ?? '').slice(0, 20)
+        if (this.banned.has(from) || (token && this.banned.has(token))) return this.reject(from, 'kicked')
         if (s.phase === 'playing') return this.rejoin(from, token, cleanName((m as { name?: unknown }).name))
         const known = this.isPlayer(from)
         if (!known && s.players.length >= MAX_PLAYERS) return this.reject(from, 'full')
@@ -501,13 +555,19 @@ export class Room {
   private applyPick(id: string, pick: Pick, elf?: unknown) {
     const s = this.state
     const p = s.players.find((x) => x.id === id)
-    if (p && (pick === 'elf' || pick === 'goblin' || pick === 'random') && canPick(s.players, id, pick)) {
+    if (!p) return
+    if ((pick === 'elf' || pick === 'goblin' || pick === 'random') && canPick(s.players, id, pick)) {
+      const kind = pick === 'elf' ? (isElfKind(elf) ? elf : 'harp') : undefined
+      if (p.pick === pick && p.elf === kind) return
       p.pick = pick
-      if (pick === 'elf') p.elf = isElfKind(elf) ? elf : 'harp'
+      if (kind) p.elf = kind
       else delete p.elf
+      this.broadcast({ t: 'lobby', players: s.players })
+      return
     }
-    // 不合法的選擇也廣播一次，讓對方畫面回到正確狀態
-    this.broadcast({ t: 'lobby', players: s.players })
+    // 不合法的選擇：只回給送出的人，讓對方畫面回到正確狀態（不必每次都廣播給所有人）
+    if (id === s.me) this.broadcast({ t: 'lobby', players: s.players })
+    else this.sendTo(id, { t: 'lobby', players: s.players })
   }
 
   // 房主：遊戲中有人用房號連回來。只接受這一局中途斷線的玩家，由 Game 決定接手哪個角色

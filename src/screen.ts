@@ -31,15 +31,17 @@ export interface Startup {
   instant: boolean
   // CrazyGames 版的新玩家：直接進入遊戲當哥布林
   newPlayer: boolean
+  // 一般開啟時是否先打開多人連線的 sheet。CrazyGames 版不打開：單機要和多人一樣顯眼（品質準則），選角卡片直接可點
+  sheetOnStart: boolean
 }
 
-// 開啟遊戲時的畫面：邀請 > 即時多人 > ?role= > 新玩家 > 選角畫面（先打開多人連線的 sheet）
+// 開啟遊戲時的畫面：邀請 > 即時多人 > ?role= > 新玩家 > 選角畫面（網站版先打開多人連線的 sheet）
 export function initialScreen(s: Startup): Screen {
   if (s.invite) return invited(s.invite)
   if (s.instant) return menu({ auto: { kind: 'create' }, error: null })
   if (s.role) return { kind: 'solo', role: s.role }
   if (s.newPlayer) return { kind: 'solo', role: 'goblin' }
-  return menu(emptySheet())
+  return menu(s.sheetOnStart ? emptySheet() : null)
 }
 
 // 選角畫面按「多人連線」

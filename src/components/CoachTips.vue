@@ -7,6 +7,7 @@ import { icon } from '../icons'
 import { keyLabel, loadKeybinds } from '../keybinds'
 import { t } from '../i18n'
 import { touchMode } from '../input/touch'
+import { isCrazyGames } from '../platform'
 import { markStep, skipTutorial, stepDone, type CoachStep } from '../tutorial'
 
 // 新手教學卡：依遊戲中發生的事情，在畫面左側顯示一次性的圖示＋短句提示（看過就不再出現，可略過）。
@@ -162,7 +163,7 @@ function endTutorial() {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.code !== 'Escape' || e.repeat) return
+  if (isCrazyGames || e.code !== 'Escape' || e.repeat) return
   if (confirming.value) closeConfirm()
   else openConfirm()
 }
@@ -215,7 +216,8 @@ const card = computed((): { icon: IconName; text: string } | null => {
         <p>{{ card.text }}</p>
         <!-- 手機：明顯的按鈕；電腦：提示 Esc（也可以直接點） -->
         <button class="skip" :class="{ big: touchMode }" @pointerdown.stop @click="openConfirm">
-          <template v-if="touchMode">✕ {{ t('coachSkip') }}</template>
+          <!-- CrazyGames 版不用 Esc（Esc 會關掉平台的全螢幕），只用按鈕 -->
+          <template v-if="touchMode || isCrazyGames">✕ {{ t('coachSkip') }}</template>
           <template v-else><kbd>Esc</kbd>{{ t('coachSkip') }}</template>
         </button>
       </div>

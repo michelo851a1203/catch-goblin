@@ -8,7 +8,16 @@ const KEY = 'goblin-game:tutorial'
 export type CoachStep = 'move' | 'goal' | 'dash' | 'rescue' | 'ult' | 'combo'
 export const ALL_STEPS: readonly CoachStep[] = ['move', 'goal', 'dash', 'rescue', 'ult', 'combo']
 
+// 記憶體快取：教學卡每 0.2 秒檢查一次觸發條件，不要每次都讀存檔、解析 JSON（CrazyGames 的存檔還會印 log）
+let cache: Set<string> | null = null
+
 function load(): Set<string> {
+  if (cache) return cache
+  cache = read()
+  return cache
+}
+
+function read(): Set<string> {
   try {
     const raw = store.getItem(KEY)
     const arr: unknown = raw ? JSON.parse(raw) : []
@@ -19,6 +28,7 @@ function load(): Set<string> {
 }
 
 function save(done: Set<string>) {
+  cache = new Set(done)
   try {
     store.setItem(KEY, JSON.stringify([...done]))
   } catch {

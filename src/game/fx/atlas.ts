@@ -143,6 +143,12 @@ function drawStar(g: CanvasRenderingContext2D, s: number) {
   g.fill()
 }
 
+// 釋放共用貼圖的 GPU 資源（理由見 toon.ts 的 releaseToonGpu）
+export function releaseAtlasGpu() {
+  atlas?.dispose()
+  glowTex?.dispose()
+}
+
 export function particleAtlas(): THREE.CanvasTexture {
   if (atlas) return atlas
   const S = 128

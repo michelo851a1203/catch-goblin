@@ -230,7 +230,8 @@ function confirm() {
     </header>
 
     <!-- 精靈卡飛出時的紫色星塵 -->
-    <Shader v-if="elfMenu && !detailId" key="elf-menu" class="fairy-dust violet">
+    <!-- disable-telemetry：shaders 套件預設會在 5% 的連線把網域 / 瀏覽器 / 裝置 / 效能資料送到 shaders.com -->
+    <Shader v-if="elfMenu && !detailId" key="elf-menu" class="fairy-dust violet" disable-telemetry>
       <FloatingParticles shape="glow" particle-color="#c9a0ff" :count="160" :particle-size="2.4" :softness="0.9" :speed="0.14" :angle="270" :angle-variance="50" :speed-variance="0.5" :randomness="0.6" :twinkle="0.9" />
       <FloatingParticles particle-color="#f0e4ff" :count="500" :particle-size="0.9" :softness="0.3" :speed="0.2" :angle="270" :angle-variance="30" :speed-variance="0.6" :randomness="0.45" :twinkle="1" />
       <Sparkle :size="60" :intensity="7" :threshold="0.5" :ray-length="6" :colorize="0.8" :speed="1.2" />

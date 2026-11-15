@@ -75,10 +75,18 @@ function defaultLoadTexture(url: string) {
   return new THREE.TextureLoader().loadAsync(url)
 }
 
+// deviceMemory 為了隱私只回報約略的值，Chrome 在高階電腦上也可能回報 4（實測 64GB 的 M4 Max 回報 4），
+// 所以只有明確低於 4 GB 才算低階；否則高階桌機會被誤判而拿不到 4K 貼圖與高模
 export function isLowEndDevice() {
   if (typeof navigator === 'undefined') return false
   const nav = navigator as Navigator & { deviceMemory?: number }
-  return isTouchDevice() || (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
+  return isTouchDevice() || (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) < 4
+}
+
+// 4K 貼圖的下載時機：CrazyGames 版等第一次進入遊玩後才下載（初始下載量限制），網站版立即下載（見 main.ts）
+let hiResGate: () => Promise<void> = () => Promise.resolve()
+export function setHiResGate(gate: () => Promise<void>) {
+  hiResGate = gate
 }
 
 // 精靈角色：載入綁骨 GLB，以 AnimationMixer 播放骨架動畫，疊加頭髮 / 裙擺 / 袖子的彈簧次級動畫，
@@ -255,6 +263,8 @@ export class ElfCharacter implements CharacterModel {
   private async loadHiRes(scene: THREE.Object3D) {
     const loader = this.opts.loadTexture === undefined ? defaultLoadTexture : this.opts.loadTexture
     if (!loader) return
+    await hiResGate()
+    if (this.status === 'disposed' || this.model !== scene) return
     const mats = new Set<THREE.MeshStandardMaterial>()
     scene.traverse((o) => {
       const m = o as THREE.Mesh

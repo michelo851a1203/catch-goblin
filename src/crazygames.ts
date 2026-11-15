@@ -62,6 +62,18 @@ let sdk: CrazyGamesSDK | null = null
 let loaded = false
 let playing = false
 let adMuted = false
+// 廣告是否正在播放：遊戲要在播放期間暫停（廣告晚於 AD_START_TIMEOUT 才開始時，遊戲可能已經在進行中）
+const adListeners = new Set<(playing: boolean) => void>()
+export function onAdPlaying(fn: (playing: boolean) => void) {
+  adListeners.add(fn)
+  return () => void adListeners.delete(fn)
+}
+function setAdPlaying(on: boolean) {
+  if (adMuted === on) return
+  adMuted = on
+  syncMute()
+  for (const fn of adListeners) fn(on)
+}
 let settingsMuted = false
 let initP: Promise<void> | null = null
 
@@ -120,7 +132,17 @@ export function loadingFinished() {
   call((s) => s.game.loadingStop())
 }
 
+// 第一次進入遊玩：CrazyGames 以「開始載入 → 第一次 gameplayStart」之間的下載量計算初始大小（行動版首頁要 ≤ 20MB），
+// 開局用不到的資源（另一位精靈、4K 貼圖）等這之後才下載。不在 CrazyGames 上（網站版）時立即放行，照舊積極預載
+let firstGameplay!: () => void
+const firstGameplayP = new Promise<void>((r) => (firstGameplay = r))
+if (typeof location === 'undefined' || !onCrazyGames(location.hostname ?? '')) firstGameplay()
+export function afterFirstGameplay(): Promise<void> {
+  return firstGameplayP
+}
+
 export function gameplayStart() {
+  firstGameplay()
   if (!sdk || playing) return
   playing = true
   call((s) => s.game.gameplayStart())
@@ -142,17 +164,16 @@ export async function commercialBreak() {
     let timer = 0
     const done = () => {
       clearTimeout(timer)
-      adMuted = false
-      syncMute()
+      setAdPlaying(false)
       resolve()
     }
     timer = window.setTimeout(done, AD_START_TIMEOUT)
     try {
       s.ad.requestAd('midgame', {
+        // 逾時放行後廣告才開始也一樣：通知遊戲暫停並靜音，播完（adFinished / adError）再恢復
         adStarted() {
           clearTimeout(timer)
-          adMuted = true
-          syncMute()
+          setAdPlaying(true)
         },
         adFinished: done,
         adError: done, // 沒有廣告、冷卻中、被阻擋：直接繼續
@@ -209,7 +230,8 @@ export async function username() {
 }
 
 // ───────────── 多人連線：好友邀請 / 加入 ─────────────
-const inviteCode = (params: InviteParams) => (params?.room && /^\d{4}$/.test(params.room) ? params.room : null)
+// 房號格式與 net/room.ts 的 CODE_LEN 一致（6 碼數字）；這裡不 import room.ts，避免 SDK 包裝拉進 PeerJS
+const inviteCode = (params: InviteParams) => (params?.room && /^\d{6}$/.test(params.room) ? params.room : null)
 
 // 遊戲是從邀請連結開啟時回傳房號
 export function startupInvite() {

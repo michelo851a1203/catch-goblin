@@ -144,3 +144,33 @@ describe('crazygames', () => {
     expect(touch.touchMode.value).toBe(false)
   })
 })
+
+describe('廣告播放期間通知遊戲暫停', () => {
+  it('逾時放行後廣告才開始：仍通知暫停與靜音，播完再恢復', async () => {
+    vi.useFakeTimers()
+    try {
+      const sdk = fakeSdk()
+      let cb!: Callbacks
+      sdk.ad.requestAd.mockImplementation((_: string, c: Callbacks) => (cb = c))
+      const cg = await load(sdk)
+      const states: boolean[] = []
+      const off = cg.onAdPlaying((on) => states.push(on))
+      setMuted.mockClear()
+      const p = cg.commercialBreak()
+      await vi.advanceTimersByTimeAsync(9000) // 超過 AD_START_TIMEOUT：放行
+      await p
+      expect(states).toEqual([])
+      cb.adStarted() // 廣告這時才開始
+      expect(states).toEqual([true])
+      expect(setMuted).toHaveBeenLastCalledWith(true)
+      cb.adFinished()
+      expect(states).toEqual([true, false])
+      expect(setMuted).toHaveBeenLastCalledWith(false)
+      off()
+      cb.adStarted()
+      expect(states).toEqual([true, false])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

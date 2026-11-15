@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { manifest, normalizeSiteUrl, robots, sitePlugin, sitemap, transformHtml } from '../site/plugin.ts'
+import { contentSecurityPolicy, headersFile, manifest, normalizeSiteUrl, robots, sitePlugin, sitemap, transformHtml } from '../site/plugin.ts'
 
 const indexHtml = readFileSync(resolve(import.meta.dirname, '../index.html'), 'utf8')
 const URL_ = 'https://elf-and-goblins.pages.dev/'
@@ -55,5 +55,57 @@ describe('網站版 SEO 外掛', () => {
   it('robots.txt 與 sitemap.xml 指向網站網址', () => {
     expect(robots(URL_)).toContain(`Sitemap: ${URL_}sitemap.xml`)
     expect(sitemap(URL_, '2026-11-10')).toContain(`<loc>${URL_}</loc><lastmod>2026-11-10</lastmod>`)
+  })
+
+  it('網站版注入 CSP <meta>（不含 frame-ancestors），CrazyGames 版的 index.html 沒有', () => {
+    expect(indexHtml).not.toContain('Content-Security-Policy')
+    const html = transformHtml(indexHtml, URL_)
+    const m = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)" \/>/)
+    expect(m).not.toBeNull()
+    const csp = m![1]
+    expect(csp).toBe(contentSecurityPolicy({}, { frameAncestors: false }))
+    expect(csp).not.toContain('frame-ancestors')
+    expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'")
+    expect(csp).not.toContain("'unsafe-eval'")
+    expect(csp).toContain("object-src 'none'")
+    // 預設 PeerJS 公用信令伺服器
+    expect(csp).toMatch(/connect-src [^;]*https:\/\/0\.peerjs\.com [^;]*wss:\/\/0\.peerjs\.com/)
+    // CSP 必須在任何 <script> / <link> 之前
+    expect(html.indexOf('Content-Security-Policy')).toBeLessThan(html.indexOf('<link'))
+    expect(html.indexOf('Content-Security-Policy')).toBeLessThan(html.indexOf('<script'))
+  })
+
+  it('connect-src 依建置時的 TURN Worker 與自架 PeerServer 設定', () => {
+    const csp = contentSecurityPolicy({ VITE_TURN_URL: 'https://turn.example.workers.dev/ice', VITE_PEER_HOST: 'peer.example.com', VITE_PEER_PORT: '9000' })
+    const connect = csp.split('; ').find((d) => d.startsWith('connect-src '))!
+    expect(connect.split(' ')).toEqual(expect.arrayContaining(['https://turn.example.workers.dev', 'https://peer.example.com:9000', 'wss://peer.example.com:9000']))
+    expect(connect).not.toContain('0.peerjs.com')
+    expect(contentSecurityPolicy({ VITE_PEER_HOST: 'peer.example.com', VITE_PEER_PORT: '443' })).toContain('wss://peer.example.com;')
+    expect(() => contentSecurityPolicy({ VITE_TURN_URL: 'http://turn.example.com/ice' })).toThrow()
+    expect(() => contentSecurityPolicy({ VITE_PEER_HOST: 'evil.com; script-src *' })).toThrow()
+  })
+
+  it('_headers（Cloudflare Pages）含 CSP 與安全標頭，並禁止被其他網站嵌入', () => {
+    const h = headersFile({ VITE_TURN_URL: 'https://turn.example.workers.dev/ice' })
+    const lines = h.trimEnd().split('\n')
+    expect(lines[0]).toBe('/*')
+    for (const l of lines.slice(1)) expect(l).toMatch(/^ {2}[A-Za-z-]+: \S/)
+    expect(h).toContain(`  Content-Security-Policy: ${contentSecurityPolicy({ VITE_TURN_URL: 'https://turn.example.workers.dev/ice' })}\n`)
+    expect(h).toContain("frame-ancestors 'self'")
+    expect(h).toContain('https://turn.example.workers.dev')
+    expect(h).toContain('  X-Content-Type-Options: nosniff\n')
+    expect(h).toContain('  Referrer-Policy: strict-origin-when-cross-origin\n')
+    expect(h).toContain('  X-Frame-Options: SAMEORIGIN\n')
+    const pp = h.match(/Permissions-Policy: (.*)/)![1]
+    expect(pp).toContain('camera=()')
+    // 遊戲會用到全螢幕與自動播放音樂，不能關掉
+    expect(pp).not.toMatch(/fullscreen|autoplay/)
+  })
+
+  it('CrazyGames 版（沒設定 SITE_URL）不輸出 _headers', () => {
+    // 外掛不啟用 ⇒ 不會注入 CSP、不會寫 _headers；site/public 也沒有靜態 _headers 會被複製
+    expect(sitePlugin(undefined)).toBeNull()
+    expect(existsSync(resolve(import.meta.dirname, '../public/_headers'))).toBe(false)
+    expect(existsSync(resolve(import.meta.dirname, '../site/public/_headers'))).toBe(false)
   })
 })

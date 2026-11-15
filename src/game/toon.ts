@@ -29,6 +29,14 @@ export function toon(color: number, opts: THREE.MeshToonMaterialParameters & { o
   return m
 }
 
+// 釋放共用材質 / 貼圖在 GPU 上的資源（物件本身保留，下一個 renderer 使用時會重新上傳）。
+// three 會在每個用過它們的 renderer 掛一個 dispose 監聽；不呼叫 dispose 的話，
+// 這些監聽會一直參照舊的 renderer，每一局的 WebGL context 都無法被回收
+export function releaseToonGpu() {
+  for (const m of cache.values()) m.dispose()
+  gradient?.dispose()
+}
+
 export function noOutline<T extends THREE.Material>(m: T): T {
   m.userData.outlineParameters = { visible: false }
   return m

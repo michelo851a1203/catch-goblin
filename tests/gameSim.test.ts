@@ -19,6 +19,7 @@ vi.mock('three', async (importOriginal) => {
     setSize() {}
     render() {}
     dispose() {}
+    forceContextLoss() {}
   }
   class FakePMREM {
     fromScene() {
@@ -349,6 +350,24 @@ describe('開局前的載入', () => {
   })
 })
 
+describe('對局結束釋放 GPU 資源', () => {
+  it('共用的卡通材質 / 貼圖會 dispose（讓舊 renderer 不再被參照），並釋放 WebGL context', async () => {
+    const { toon, toonGradient } = await import('../src/game/toon')
+    const { particleAtlas } = await import('../src/game/fx/atlas')
+    const game = makeGame('elf', 'harp')
+    const shared = [toon(0x7bbf3a), toonGradient(), particleAtlas()]
+    const fired = shared.map(() => false)
+    shared.forEach((o, i) => o.addEventListener('dispose', () => (fired[i] = true)))
+    const r = (game as unknown as { renderer: { forceContextLoss(): void } }).renderer
+    const lost = vi.spyOn(r, 'forceContextLoss')
+    ;(window as unknown as { __game?: unknown }).__game = game
+    game.dispose()
+    expect(fired).toEqual([true, true, true])
+    expect(lost).toHaveBeenCalledOnce()
+    expect((window as unknown as { __game?: unknown }).__game).toBeUndefined()
+  })
+})
+
 describe('哥布林生命週期', async () => {
   const { Goblin, Elf } = await import('../src/game/entities')
   it('逃竄 → 打包 → 放開 → 打包 → 捕獲；held 與 captured 不會同時成立', () => {
@@ -407,5 +426,64 @@ describe('頭上的進度條', async () => {
     }
     setBarProgress(bar, 0)
     expect(bar.fg.visible).toBe(false)
+  })
+})
+
+describe('房主驗證加入者回報的位置（防瞬移）', () => {
+  const run = (game: ReturnType<typeof makeGame>, sec: number) => {
+    for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)
+  }
+  function hostWithGuestGoblin() {
+    const link = {
+      host: true, me: 'elf' as const, elfKind: 'harp' as const, peers: new Map([['peer-x', 0 as const]]), numbers: new Map(), names: new Map(),
+      send() {}, listen: () => () => {}, onLeave: () => () => {}, onRejoin: () => () => {},
+    }
+    const game = makeGame('elf', 'harp', link as never)
+    run(game, 4)
+    const g = game.goblins[0]
+    const apply = (x: number, z: number, vx = 0, vz = 0) =>
+      (game as unknown as { applyInput(a: unknown, m: object): void }).applyInput(g, { p: [x, z, 0, vx, vz], c: g.corr })
+    return { game, g, apply }
+  }
+
+  it('第一筆回報直接採用（加入者的出生點在自己那端決定）', () => {
+    const { game, g, apply } = hostWithGuestGoblin()
+    expect(g.netDriven).toBe(true)
+    const to = { x: g.pos.x + 6, z: g.pos.z }
+    apply(to.x, to.z)
+    expect(g.pos.x).toBeCloseTo(to.x, 1)
+    game.dispose()
+  })
+
+  it('之後瞬移 50 公尺：只會移動額度內的距離', () => {
+    const { game, g, apply } = hostWithGuestGoblin()
+    apply(g.pos.x, g.pos.z)
+    const from = g.pos.clone()
+    apply(from.x + 50, from.z)
+    expect(g.pos.distanceTo(from)).toBeLessThanOrEqual(4.5) // 額度 4 公尺 + 碰撞推擠
+    // 額度用完後立刻再瞬移：幾乎不能動
+    const mid = g.pos.clone()
+    apply(mid.x + 50, mid.z)
+    expect(g.pos.distanceTo(mid)).toBeLessThan(1)
+    game.dispose()
+  })
+
+  it('正常速度移動不受影響', () => {
+    const { game, g, apply } = hostWithGuestGoblin()
+    apply(g.pos.x, g.pos.z)
+    for (let i = 0; i < 20; i++) {
+      run(game, 0.05)
+      const target = { x: g.pos.x + 6 * 0.05, z: g.pos.z }
+      apply(target.x, target.z)
+      expect(g.pos.x).toBeCloseTo(target.x, 3)
+    }
+    game.dispose()
+  })
+
+  it('灌入極大的速度：限制在合法的最高速度內', () => {
+    const { game, g, apply } = hostWithGuestGoblin()
+    apply(g.pos.x, g.pos.z, 1e9, 0)
+    expect(g.vel.length()).toBeLessThan(20)
+    game.dispose()
   })
 })
