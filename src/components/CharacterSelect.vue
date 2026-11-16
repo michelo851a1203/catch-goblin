@@ -99,7 +99,7 @@ const cards = computed<Card[]>(() => {
       },
     ]
   return [
-    { ...harp, id: 'elf', kind: undefined, sub: 'Sylvan Huntress', tagline: t('elfTagline') },
+    { ...harp, id: 'elf', kind: undefined, sub: 'Sylvan Harpist', tagline: t('elfTagline') },
     {
       id: 'goblin',
       role: 'goblin',

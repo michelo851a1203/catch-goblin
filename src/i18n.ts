@@ -267,7 +267,7 @@ const zh = {
 type Dict = Record<keyof typeof zh, string>
 
 const en: Dict = {
-  title: 'Elf & Goblins',
+  title: 'Run, Goblins!',
   logoAlt: 'Run, Goblins! The Elf Maiden Has Entered the Cave',
   eyebrow: '— Hide and Seek on the Grassland —',
   chooseSide: 'Choose your side',

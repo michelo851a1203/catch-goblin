@@ -26,7 +26,7 @@ describe('網站版 SEO 外掛', () => {
     expect(html).toContain('<meta name="twitter:card" content="summary_large_image" />')
     expect(html).toContain(`<link rel="canonical" href="${URL_}" />`)
     expect(html).toContain('<meta name="description"')
-    expect(html).toMatch(/<title>Elf &amp; Goblins — [^<]+<\/title>/)
+    expect(html).toMatch(/<title>Run, Goblins! — [^<]+<\/title>/)
     const ld = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1])
     expect(ld['@type']).toBe('VideoGame')
     expect(ld.url).toBe(URL_)
@@ -36,7 +36,7 @@ describe('網站版 SEO 外掛', () => {
     const html = transformHtml(indexHtml, URL_)
     expect(html).not.toContain('sdk.crazygames.com')
     expect(html).not.toContain('CrazyGames SDK')
-    expect(html).toMatch(/<div id="app">[\s\S]*<h1>Elf &amp; Goblins<\/h1>[\s\S]*FAQ[\s\S]*<\/div>/)
+    expect(html).toMatch(/<div id="app">[\s\S]*<h1>Run, Goblins!<\/h1>[\s\S]*FAQ[\s\S]*<\/div>/)
     // 遊戲入口仍然存在
     expect(html).toContain('src="/src/main.ts"')
   })

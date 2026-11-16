@@ -14,12 +14,12 @@ import type { Plugin } from 'vite'
 const dir = import.meta.dirname
 
 export const SITE = {
-  name: 'Elf & Goblins',
-  title: 'Elf & Goblins — Free 3D Hide & Seek Browser Game',
+  name: 'Run, Goblins!',
+  title: 'Run, Goblins! — Free 3D Hide & Seek Browser Game',
   description:
-    'Play Elf & Goblins free in your browser: an asymmetric 3D hide-and-seek game. Hunt 8 goblins as a harp-playing elf, or survive 10 minutes as a goblin with your friends. Solo vs AI or online multiplayer, no download.',
+    'Play Run, Goblins! free in your browser: an asymmetric 3D hide-and-seek game. Hunt 8 goblins as a harp-playing elf, or survive 10 minutes as a goblin with your friends. Solo vs AI or online multiplayer, no download.',
   image: 'og-image.jpg',
-  imageAlt: 'Elf & Goblins — a harp elf, an amethyst violinist elf and a cheeky goblin on fantasy cards. 1 Elf vs 8 Goblins.',
+  imageAlt: 'Run, Goblins! — a harp elf, an amethyst violinist elf and a cheeky goblin on fantasy cards. 1 Elf vs 8 Goblins.',
   themeColor: '#0b1411',
 }
 
