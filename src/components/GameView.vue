@@ -140,7 +140,7 @@ function toggleSpeed() {
         @pointerdown.prevent="press(s.code)"
       >
         <img class="ico" :src="icon(s.used ? 'skill-ult-used' : s.icon)" alt="" />
-        <span class="cd" v-if="s.cd > 0" :style="{ height: (s.cd / s.max) * 100 + '%' }"></span>
+        <span class="cd" v-if="s.cd > 0" :style="{ '--p': (s.cd / s.max) * 100 + '%' }"></span>
         <span class="num" v-if="s.cd > 0">{{ Math.ceil(s.cd) }}</span>
         <kbd>{{ s.key }}</kbd>
         <small>{{ s.name }}</small>
@@ -417,7 +417,8 @@ function toggleSpeed() {
 }
 .skills {
   position: absolute;
-  bottom: 22px;
+  /* 技能名稱在按鈕下方，底部多留一行字的高度 */
+  bottom: 30px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -434,7 +435,8 @@ function toggleSpeed() {
   background: #121a14;
   color: #fff;
   cursor: pointer;
-  overflow: hidden;
+  /* 不裁切：技能名稱放在按鈕外側下方，長名稱（Assassin's Eye）才不會被圓形切掉 */
+  overflow: visible;
   font-family: inherit;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
@@ -446,13 +448,13 @@ function toggleSpeed() {
   z-index: 1;
   pointer-events: none;
 }
+/* 冷卻遮罩：圓形內由下往上填滿 --p（按鈕不再 overflow: hidden，改由遮罩自己畫成圓形） */
 .skill .cd {
   z-index: 1;
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.65);
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.65) var(--p), transparent var(--p));
 }
 .skill .num {
   position: absolute;
@@ -477,12 +479,14 @@ function toggleSpeed() {
 }
 .skill small {
   position: absolute;
-  bottom: 6px;
-  left: 0;
-  right: 0;
-  font-size: 10px;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.2;
   z-index: 3;
-  text-shadow: 0 1px 2px #000;
+  text-shadow: 0 1px 2px #000, 0 0 6px #000;
 }
 .skill.active {
   box-shadow: 0 0 18px #ffd34d;
@@ -516,6 +520,8 @@ function toggleSpeed() {
   position: absolute;
   left: 16px;
   bottom: 14px;
+  /* 不可伸進畫面中央的技能列（4 顆技能約 330px 寬）：窄視窗時自動換行、往上長 */
+  max-width: calc(50% - 200px);
   font-size: 12px;
   opacity: 0.7;
   text-shadow: 0 1px 2px #000;
@@ -607,11 +613,11 @@ function toggleSpeed() {
 .touch .skills {
   left: auto;
   right: calc(18px + env(safe-area-inset-right));
-  bottom: calc(18px + env(safe-area-inset-bottom));
+  bottom: calc(28px + env(safe-area-inset-bottom));
   transform: none;
   display: grid;
   grid-template-columns: repeat(2, 80px);
-  gap: 12px;
+  gap: 18px 12px; /* 列距留給按鈕下方的技能名稱 */
   direction: rtl; /* 第一個技能在最右邊，最靠近大拇指 */
 }
 .touch .skill {
@@ -722,7 +728,7 @@ function toggleSpeed() {
   }
   .touch .skills {
     grid-template-columns: repeat(2, 66px);
-    gap: 10px;
+    gap: 16px 10px;
   }
   .touch .skill {
     width: 66px;

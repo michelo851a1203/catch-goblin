@@ -346,8 +346,13 @@ footer {
   scrollbar-color: rgba(230, 200, 120, 0.35) transparent;
 }
 @media (max-height: 640px) {
+  /* 矮視窗：模型欄縮窄、技能欄加寬，說明文字行數變少，四項技能才放得下 */
+  .detail:not(.touch) {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  }
   .detail:not(.touch) .info {
     padding-top: 52px;
+    padding-right: 28px;
   }
   .detail:not(.touch) header {
     padding-bottom: 8px;
