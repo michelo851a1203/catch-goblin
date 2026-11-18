@@ -967,7 +967,15 @@ export class Game {
   private interruptPacking(reason: 'ult' | 'interfere', by?: Goblin) {
     const elf = this.elf
     if (!elf.packing) return
+    const C = CONFIG.elf.capture
+    const p = elf.packing
     const g = elf.endPacking()
+    // 攪局：保留這次新增進度的一部分；大招掙脫：進度歸零
+    if (reason === 'interfere') {
+      const done = Math.min(1, p.t / p.total)
+      g.packSaved = Math.min(C.keepMax, g.packSaved + Math.max(0, done - g.packSaved) * C.keep)
+      g.packSavedT = C.keepTime
+    } else g.packSaved = g.packSavedT = 0
     elf.stagger = reason === 'ult' ? CONFIG.elf.staggerOnInterrupt + 0.4 : CONFIG.elf.staggerOnInterrupt
     g.stun = 0
     g.rooted = 0
@@ -1008,6 +1016,10 @@ export class Game {
   goblinInterfere(g: Goblin) {
     const elf = this.elf
     if (!this.authority || g.captured || g.disabled || g.interfereCd > 0) return false
+    if (g.attract > 0) {
+      this.say(g, g.id, 'fLured')
+      return false
+    }
     if (!elf.packing || elf.packing.g === g) {
       this.say(g, g.id, 'fNoTarget')
       return false
@@ -1733,6 +1745,7 @@ export class Game {
       g.dashT = Math.max(0, g.dashT - dt)
       g.dashCd = Math.max(0, g.dashCd - dt)
       g.interfereCd = Math.max(0, g.interfereCd - dt)
+      if (g.packSavedT > 0 && !g.held && (g.packSavedT -= dt) <= 0) g.packSaved = g.packSavedT = 0
       if (!g.captured) g.zone = this.world.zoneOf(g.pos)
     }
     elf.zone = this.world.zoneOf(elf.pos)
@@ -1832,7 +1845,7 @@ export class Game {
     }
 
     // 移動
-    const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : CONFIG.elf.aiSpeed
+    const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : elf.kind === 'violin' ? CONFIG.violin.aiSpeed : CONFIG.elf.aiSpeed
     if (elf.charge && (auth || elf.isPlayer)) {
       // 衝鋒的位移在 updateCharge 處理
       elf.wish.set(0, 0, 0)
@@ -2154,7 +2167,7 @@ export class Game {
       const b = this.binds.goblin
       h.skills = [
         { key: keyLabel(b.dash), code: b.dash, name: t('skillDash'), icon: 'skill-dash', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
-        { key: keyLabel(b.interfere), code: b.interfere, name: t('skillInterfere'), icon: 'skill-interfere', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && !g.disabled },
+        { key: keyLabel(b.interfere), code: b.interfere, name: t('skillInterfere'), icon: 'skill-interfere', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && g.canInterfere },
         { key: keyLabel(b.ult), code: b.ult, name: t('skillUlt'), icon: 'skill-ult', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
       ]
       h.radar = !g.captured && !elf.stealthed && g.zone >= 0 && g.zone === elf.zone

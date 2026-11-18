@@ -95,4 +95,22 @@ describe('SecondaryMotion：薄紗用的選用參數', () => {
     r.run(60, () => 0, () => rest.push(r.height()))
     expect(Math.max(...rest) - Math.min(...rest)).toBeLessThan(0.002)
   })
+
+  it('chainMax：每一節與整條鏈 rest 方向的夾角有上限，長骨鏈不會一節一節疊成水平', () => {
+    // 尖端與鉛直方向的夾角（度）：rig 的骨鏈 rest 時筆直朝下
+    const angle = (r: ReturnType<typeof rig>) => {
+      const b = r.bones
+      const end = b[2].localToWorld(new THREE.Vector3(0, 0.25, 0))
+      const v = end.sub(b[2].getWorldPosition(new THREE.Vector3())).normalize()
+      return (Math.acos(-v.y) * 180) / Math.PI
+    }
+    const P = { ...BASE, air: 0.16, airMax: 0.06, maxAngle: 0.9 }
+    const free = rig(P)
+    const capped = rig({ ...P, chainMax: 0.4 })
+    free.run(240, () => 7.4)
+    capped.run(240, () => 7.4)
+    expect(angle(free)).toBeGreaterThan(60) // 每節各自限制 0.9 rad 時，最後一節疊到接近水平
+    expect(angle(capped)).toBeLessThan((0.4 * 180) / Math.PI + 1)
+    expect(capped.trail()).toBeGreaterThan(0.1) // 仍然往後飄
+  })
 })

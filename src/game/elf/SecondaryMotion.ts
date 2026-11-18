@@ -28,6 +28,10 @@ export interface SpringParams {
   flutterSync?: boolean
   // 抖動幅度隨速度增加的上限（每步位移，預設 0.07 ≈ 4.2 m/s）：設成走路的速度時，奔跑不會抖得比走路更大
   flutterMax?: number
+  // 相對「整條骨鏈都在 rest」時方向的最大夾角（rad）。maxAngle 只限制每一節相對父骨的角度，
+  // 長骨鏈每節都偏一點，往下疊加後尾端就被吹成水平（4 節 × 20° ≈ 80°）；設定後每一節與骨鏈根部的姿勢比較，
+  // 整條鏈維持往後拖的鐘形。碰撞（腿推開裙擺）不受這個限制
+  chainMax?: number
 }
 
 export const COLLIDE = { body: 1, legs: 2, arms: 4, head: 8, skirt: 16 } as const
@@ -66,6 +70,9 @@ interface Joint {
   p: SpringParams
   phase: number
   ripple: number // 沿骨鏈遞增的相位（波紋）
+  // chainMax 用：骨鏈根部的父節點，與「整條鏈在 rest 時」這一節相對該父節點的旋轉
+  chainParent: THREE.Object3D | null
+  chainQ: THREE.Quaternion
 }
 
 const STEP = 1 / 60
@@ -86,6 +93,9 @@ const _gravity = new THREE.Vector3(0, -1, 0)
 const _root = new THREE.Vector3()
 const _air = new THREE.Vector3()
 const _side = new THREE.Vector3()
+const _dA = new THREE.Vector3()
+const _cpQ = new THREE.Quaternion()
+let _cpObj: THREE.Object3D | null = null
 
 export class SecondaryMotion {
   // 抖動 / 微風的相位來源（測試時換成固定值，量測才可重現）
@@ -102,7 +112,12 @@ export class SecondaryMotion {
 
   addChain(bones: THREE.Bone[], p: SpringParams) {
     const base = p.flutterSync ? 0 : this.random() * Math.PI * 2
+    // 骨鏈必須是連續的父子關係，chainMax 才算得出整條鏈在 rest 時的方向
+    const contiguous = bones.every((b, i) => i === 0 || b.parent === bones[i - 1])
+    const chainParent = p.chainMax !== undefined && contiguous ? (bones[0].parent ?? null) : null
+    const acc = new THREE.Quaternion()
     bones.forEach((bone, i) => {
+      acc.multiply(bone.quaternion)
       const child = bones[i + 1] ?? (bone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined)
       let axis: THREE.Vector3
       let len: number
@@ -125,6 +140,8 @@ export class SecondaryMotion {
         p,
         phase: p.flutterSync ? 0 : this.random() * Math.PI * 2,
         ripple: base - i * 1.1,
+        chainParent,
+        chainQ: acc.clone(),
       })
     })
   }
@@ -187,6 +204,7 @@ export class SecondaryMotion {
   }
 
   private step() {
+    _cpObj = null
     for (const c of this.colliders) {
       c.a.updateWorldMatrix(true, false)
       if (c.b) {
@@ -255,6 +273,22 @@ export class SecondaryMotion {
       if (cos < Math.cos(p.maxAngle)) {
         _v.copy(_d1).addScaledVector(_d0, -cos).normalize()
         _d1.copy(_d0).multiplyScalar(Math.cos(p.maxAngle)).addScaledVector(_v, Math.sin(p.maxAngle))
+      }
+      if (j.chainParent && p.chainMax !== undefined) {
+        // 整條鏈在 rest 時這一節的方向（跟著骨鏈根部的父骨目前的姿勢）
+        if (j.chainParent !== _cpObj) {
+          _cpObj = j.chainParent
+          j.chainParent.getWorldQuaternion(_cpQ)
+        }
+        _dA.copy(j.axis).applyQuaternion(_q.copy(_cpQ).multiply(j.chainQ))
+        const ca = _dA.dot(_d1)
+        if (ca < Math.cos(p.chainMax)) {
+          _v.copy(_d1).addScaledVector(_dA, -ca)
+          if (_v.lengthSq() > 1e-12) {
+            _v.normalize()
+            _d1.copy(_dA).multiplyScalar(Math.cos(p.chainMax)).addScaledVector(_v, Math.sin(p.chainMax))
+          }
+        }
       }
       _next.copy(_head).addScaledVector(_d1, lenW)
       // 碰撞
@@ -348,7 +382,9 @@ export const SPRINGS = {
   // 奔跑時不再加大（airMax / maxAngle 收小），裙子維持蓋住腿、往後拖的鐘形。
   // flutterSync：各骨鏈的抖動相位一致（各抖各的時，疊在一起的幾層布互相剪穿，綠色外裙上冒出白色襯裙的碎片）；
   // hitRadius 較大：奔跑時腿擺得快，裙擺節點要離腿遠一點才不會被追上
-  gown: { stiffness: 0.04, gravity: 0.022, drag: 0.12, air: 0.15, airMax: 0.026, flutter: 0.07, flutterSync: true, flutterMax: 0.04, inertia: 0.35, hitRadius: 0.05, maxAngle: 0.55, wind: 0.002, colliders: COLLIDE.legs | COLLIDE.body },
+  // chainMax：每節只偏 20° 左右，4 節疊起來最下面那節就被吹到接近水平（實測 55～84°、前片打開露出雙腿），
+  // 限制每一節相對整條鏈 rest 方向最多 0.5 rad；再收小時走路的擺動會低於紫晶精靈的七成五、看起來僵硬
+  gown: { stiffness: 0.04, gravity: 0.022, drag: 0.12, air: 0.15, airMax: 0.026, flutter: 0.07, flutterSync: true, flutterMax: 0.04, inertia: 0.35, hitRadius: 0.05, maxAngle: 0.55, chainMax: 0.5, wind: 0.002, colliders: COLLIDE.legs | COLLIDE.body },
   // 豎琴精靈的寬袖：重力為主（手舉高時仍往下垂）、回彈很弱，走動時往後飄；披在裙子的圓錐外面
   veil: { stiffness: 0.02, gravity: 0.05, drag: 0.12, air: 0.16, airMax: 0.03, flutter: 0.07, flutterSync: true, flutterMax: 0.035, inertia: 0.3, hitRadius: 0.03, maxAngle: 2.6, wind: 0.002, colliders: COLLIDE.body | COLLIDE.skirt },
   // 紫晶精靈背後的長髮：比薄紗重，飄得少、落得快

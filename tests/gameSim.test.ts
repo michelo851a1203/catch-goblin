@@ -310,6 +310,75 @@ describe('時間到結算時精靈正在打包', () => {
   })
 })
 
+describe('打包被攪局：保留進度、琴聲吸引中不能攪局', () => {
+  const run = (game: ReturnType<typeof makeGame>, sec: number) => {
+    for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)
+  }
+  // 精靈打包 goblins[0]，goblins[1] 站在旁邊（AI 全部停住，只測規則）
+  const setup = () => {
+    const game = makeGame('elf', 'harp')
+    run(game, 4)
+    for (const x of game.goblins) x.isPlayer = true
+    game.setTouchMove(0, 0)
+    const [g, h] = game.goblins
+    g.pos.copy(game.elf.pos).add({ x: 1, y: 0, z: 0 } as never)
+    h.pos.copy(game.elf.pos).add({ x: -1.5, y: 0, z: 0 } as never)
+    g.stun = 3
+    return { game, g, h }
+  }
+  const total = 4 // 測試環境不是 CrazyGames：網站版打包 4 秒
+
+  it('攪局打斷後保留這次進度的一半，再次打包從保留處繼續', () => {
+    const { game, g, h } = setup()
+    expect(game.elfStartCapture()).toBe(true)
+    run(game, 2) // 50%
+    expect(game.goblinInterfere(h)).toBe(true)
+    expect(g.held).toBe(false)
+    expect(g.packSaved).toBeCloseTo(0.25, 1)
+    run(game, 2)
+    g.stun = 3
+    g.grace = 0
+    expect(game.elfStartCapture()).toBe(true)
+    expect(game.elf.packing!.t / total).toBeCloseTo(g.packSaved, 5)
+    game.dispose()
+  })
+
+  it('保留的進度最多 50%，而且 10 秒內沒有再被打包就歸零', () => {
+    const { game, g, h } = setup()
+    g.packSaved = 0.45
+    expect(game.elfStartCapture()).toBe(true)
+    run(game, 1.5) // 45% + 37.5% ≈ 83%
+    expect(game.goblinInterfere(h)).toBe(true)
+    expect(g.packSaved).toBe(0.5)
+    run(game, 10.2)
+    expect(g.packSaved).toBe(0)
+    game.dispose()
+  })
+
+  it('用大招掙脫：保留的進度歸零', () => {
+    const { game, g } = setup()
+    g.packSaved = 0.3
+    expect(game.elfStartCapture()).toBe(true)
+    run(game, 1)
+    expect(game.goblinUlt(g)).toBe(true)
+    expect(g.packSaved).toBe(0)
+    game.dispose()
+  })
+
+  it('被琴聲吸引中不能攪局，吸引結束後就可以', () => {
+    const { game, g, h } = setup()
+    h.attract = 1
+    expect(game.elfStartCapture()).toBe(true)
+    expect(game.goblinInterfere(h)).toBe(false)
+    expect(g.held).toBe(true)
+    run(game, 1.1)
+    expect(h.attract).toBe(0)
+    expect(game.goblinInterfere(h)).toBe(true)
+    expect(g.held).toBe(false)
+    game.dispose()
+  })
+})
+
 describe('開局前的載入', () => {
   const settled = async (p: Promise<unknown>) => {
     let done = false

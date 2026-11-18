@@ -496,6 +496,39 @@ describe('豎琴精靈的身形與布料', () => {
     elf.dispose()
   })
 
+  // 使用者回饋（2026-11-18）：遊戲中走動時裙子仍整片往後甩、前面打開露出雙腿。
+  // 每一節裙擺骨只比父骨多偏 20° 左右，但 4 節往下疊加，最下面那節就接近水平（實測 55～84°）。
+  // 改用 chainMax 限制每一節相對整條骨鏈 rest 方向的角度：一圈 8 片下襬在走路、奔跑、轉彎時都維持鐘形
+  it('走動時裙擺維持鐘形：8 片下襬最下面那節都不會被吹到接近水平（含轉彎）', async () => {
+    const { elf } = await loaded()
+    const D = ['F', 'FL', 'L', 'BL', 'B', 'BR', 'R', 'FR']
+    const segs = D.map((d) => [3, 4].map((i) => elf.root.getObjectByName(`skirt_${d}${i}`)!))
+    const a = new THREE.Vector3(), b = new THREE.Vector3()
+    // 最下面那節（第 3 → 第 4 節骨頭）與正下方的夾角（度）
+    const worst = () => Math.max(...segs.map(([s3, s4]) => {
+      const v = s4.getWorldPosition(b).sub(s3.getWorldPosition(a)).normalize()
+      return (Math.acos(-v.y) * 180) / Math.PI
+    }))
+    for (let i = 0; i < 180; i++) elf.animate(1 / 60, 0, 'normal')
+    const result: Record<string, number> = {}
+    for (const [name, move, speed, turn] of [['walk', 0.27, 2, 0], ['run', 1, 7.4, 0], ['turn', 1, 7.4, 1.5]] as const) {
+      let m = 0
+      for (let i = 0; i < 300; i++) {
+        // turn：持續轉彎（每秒 1.5 rad，跟著朝向前進）
+        elf.root.rotation.y += turn / 60
+        const yaw = elf.root.rotation.y
+        elf.root.position.x += (Math.sin(yaw) * speed) / 60
+        elf.root.position.z += (Math.cos(yaw) * speed) / 60
+        elf.animate(1 / 60, move, 'normal')
+        if (i >= 120) m = Math.max(m, worst())
+      }
+      result[name] = Math.round(m)
+    }
+    // 修正前：走路 75°、奔跑 / 轉彎 85°；修正後約 50°（含骨盆前傾與腿推開裙擺）
+    for (const k of ['walk', 'run', 'turn']) expect(result[k], k).toBeLessThan(60)
+    elf.dispose()
+  })
+
   it('膝蓋的彎曲集中在關節：膝上 / 膝下 7 cm 以外的腿只跟大腿 / 小腿其中一根骨頭', async () => {
     const { elf } = await loaded()
     const { pos, bind, weight, count } = bindData(elf)

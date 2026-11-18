@@ -7,7 +7,7 @@ import goblinArt from '../assets/art/goblin-card.webp'
 import violinArt from '../assets/art/violin-card.webp'
 import logoZh from '../assets/brand/logo-zh.webp'
 import logoEn from '../assets/brand/logo-en.webp'
-import type { ElfKind, Role } from '../game/config'
+import { CONFIG, type ElfKind, type Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
@@ -75,7 +75,7 @@ const cards = computed<Card[]>(() => {
       { icon: 'skill-gaze', key: keyLabel(b.elf.gaze), name: t('skillGaze'), desc: t('skillGazeDesc') },
       { icon: 'skill-music', key: keyLabel(b.elf.music), name: t('skillMusic'), desc: t('skillMusicDesc') },
       { icon: 'skill-stun', key: keyLabel(b.elf.stun), name: t('skillStun'), desc: t('skillStunDesc') },
-      { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+      { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc', { s: CONFIG.elf.capture.packTime }) },
     ],
   }
   if (elfMenu.value)
@@ -94,7 +94,7 @@ const cards = computed<Card[]>(() => {
           { icon: 'skill-stealth', key: keyLabel(b.elf.gaze), name: t('skillStealth'), desc: t('skillStealthDesc') },
           { icon: 'skill-eye', key: keyLabel(b.elf.music), name: t('skillEye'), desc: t('skillEyeDesc') },
           { icon: 'skill-charge', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc') },
-          { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc') },
+          { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc', { s: CONFIG.elf.capture.packTime }) },
         ],
       },
     ]

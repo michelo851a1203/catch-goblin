@@ -90,6 +90,9 @@ export class Goblin extends Actor {
   attract = 0
   charm = 0
   grace = 0
+  // 被攪局打斷後保留的打包進度（0～1）與剩餘保留秒數（只在房主 / 單機判定）
+  packSaved = 0
+  packSavedT = 0
   dashT = 0
   dashCd = 0
   ultUsed = false
@@ -169,6 +172,11 @@ export class Goblin extends Actor {
 
   get disabled() {
     return this.stun > 0 || this.rooted > 0 || this.terror > 0 || this.held || this.captured
+  }
+
+  // 能不能攪局：除了失能之外，被琴聲吸引中也不行（移動仍照常同步，所以不併進 disabled）
+  get canInterfere() {
+    return !this.disabled && this.attract <= 0
   }
 }
 
@@ -254,9 +262,10 @@ export class Elf extends Actor {
   }
 
   // 打包：精靈的 packing 與哥布林的 held 必須一起變動
+  // 被攪局過的哥布林從保留的進度（g.packSaved）繼續
   startPacking(g: Goblin, total: number) {
     g.grab()
-    this.packing = { g, t: 0, total }
+    this.packing = { g, t: g.packSaved * total, total }
   }
   // 結束打包（完成或被打斷），回傳被打包的哥布林
   endPacking(): Goblin {
