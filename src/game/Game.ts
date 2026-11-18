@@ -84,6 +84,8 @@ const CLICK_SLOP = 6
 const CLICK_MS = 350
 // 加入者：房主已經結束衝鋒、本機卻還停在突刺 / 收招超過這個秒數時（漏掉事件），以快照為準清掉
 const STALE_CHARGE = 0.6
+// 小地圖：精靈視線內看到的哥布林
+const MAP_SEEN = '#9effa0'
 const r2 = (v: number) => Math.round(v * 100) / 100
 
 export interface SkillView {
@@ -1095,6 +1097,8 @@ export class Game {
         this.fx.sparkles(elf.pos, 20, 0xffe6a0, 0.6, 2.5, 1.2)
         this.elfFx.musicStart(elf.pos)
         if (this.role === 'goblin') this.toast(t('tMusicStart'), 'warn')
+        // 彈奏期間精靈的小地圖顯示所有哥布林（剩一兩隻躲在視野外時找得到）
+        else if (this.role === 'elf') this.toast(t('tMusicScan'), 'good')
         return
       case 'miss': {
         elf.castT = 0.3
@@ -2222,6 +2226,18 @@ export class Game {
     h.spectating = ''
   }
 
+  // 精靈玩家的小地圖上這隻哥布林的顏色（null = 不顯示）
+  // 刺客之眼：全部（紫色）；豎琴彈奏中：全部（金色，只給精靈玩家，AI 的感知不變）；最終狩獵：全部（橘色）；平常：視線內 28 m
+  elfMapColor(gb: Goblin): string | null {
+    const elf = this.elf
+    if (gb.captured) return null
+    if (elf.eye > 0) return '#d0a0ff'
+    if (elf.channel >= 0) return '#ffe066'
+    if (this.finalHunt) return '#ffb347'
+    if (d2(gb.pos, elf.pos) < 28 && this.world.lineOfSight(elf.pos, gb.pos)) return MAP_SEEN
+    return null
+  }
+
   private drawMinimap() {
     const c = this.minimap
     const g = c.getContext('2d')
@@ -2266,11 +2282,8 @@ export class Game {
     }
     if (this.role === 'elf') {
       for (const gb of this.goblins) {
-        if (gb.captured) continue
-        // 刺客之眼：所有哥布林都顯示（紫色）；最終狩獵：橘色
-        if (elf.eye > 0) dot(gb.pos, '#d0a0ff', 3.2)
-        else if (this.finalHunt) dot(gb.pos, '#ffb347', 3.2)
-        else if (d2(gb.pos, elf.pos) < 28 && this.world.lineOfSight(elf.pos, gb.pos)) dot(gb.pos, '#9effa0', 3)
+        const color = this.elfMapColor(gb)
+        if (color) dot(gb.pos, color, color === MAP_SEEN ? 3 : 3.2)
       }
     } else {
       const me = this.playerGoblin!

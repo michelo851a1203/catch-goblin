@@ -379,6 +379,38 @@ describe('打包被攪局：保留進度、琴聲吸引中不能攪局', () => {
   })
 })
 
+describe('豎琴彈奏中：精靈的小地圖顯示所有哥布林', () => {
+  const run = (game: ReturnType<typeof makeGame>, sec: number) => {
+    for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)
+  }
+
+  it('彈奏時遠處、視線外的哥布林也顯示；停止彈奏後恢復只顯示視線內', () => {
+    const game = makeGame('elf', 'harp')
+    run(game, 4)
+    for (const x of game.goblins) x.isPlayer = true
+    const far = game.goblins[0]
+    far.pos.copy(game.elf.pos).add({ x: 60, y: 0, z: 0 } as never)
+    expect(game.elfMapColor(far)).toBeNull()
+    expect(game.elfStartMusic()).toBe(true)
+    expect(game.elfMapColor(far)).toBe('#ffe066')
+    run(game, 1)
+    expect(game.elfMapColor(far)).toBe('#ffe066')
+    game.elfStopMusic()
+    expect(game.elfMapColor(far)).toBeNull()
+    game.dispose()
+  })
+
+  it('已捕獲的哥布林不顯示', () => {
+    const game = makeGame('elf', 'harp')
+    run(game, 4)
+    const g = game.goblins[0]
+    g.capture()
+    expect(game.elfStartMusic()).toBe(true)
+    expect(game.elfMapColor(g)).toBeNull()
+    game.dispose()
+  })
+})
+
 describe('開局前的載入', () => {
   const settled = async (p: Promise<unknown>) => {
     let done = false
