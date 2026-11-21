@@ -37,7 +37,7 @@ export function stateOf(game: Game) {
     elf: {
       p: v(e.pos), v: v(e.vel), y: e.yaw, w: v(e.wish), m: e.moveAmt, pose: e.pose, z: e.zone,
       cd: { ...e.cd }, sc: e.stealthCast, st: e.stealth, eye: e.eye, ch: e.channel, sg: e.stagger, ct: e.castT, cp: e.castPose,
-      chg: e.charge ? [e.charge.phase, e.charge.t, v(e.charge.dir), e.charge.done, e.charge.hit] : null,
+      chg: e.charge ? [e.charge.phase, e.charge.t, v(e.charge.dir), e.charge.done, e.charge.hit, e.charge.target] : null, bl: e.kind === 'violin' ? e.blinkLock : undefined,
       pack: e.packing ? [e.packing.g.id, e.packing.t, e.packing.total] : null,
       busy: e.busy, stealthed: e.stealthed, corr: e.corr, nd: e.netDriven, net: e.net && { ...e.net },
       ma: [...e.musicAffected].map((g) => g.id), op: e.character.currentOpacity,

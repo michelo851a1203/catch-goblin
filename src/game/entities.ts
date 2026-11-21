@@ -187,6 +187,7 @@ export interface ChargeState {
   dir: THREE.Vector3
   done: number // 已衝刺的距離
   hit: number // 命中的哥布林編號，-1 = 落空
+  target: number // 鎖定衝鋒追蹤的哥布林編號，-1 = 一般衝鋒（朝固定方向）
 }
 
 export class Elf extends Actor {
@@ -196,6 +197,8 @@ export class Elf extends Actor {
   stealthCast = -1
   stealth = 0
   eye = 0
+  // 瞬移後的鎖定衝鋒時限（秒）：> 0 時按衝鋒會自動鎖定最近的哥布林
+  blinkLock = 0
   charge: ChargeState | null = null
   channel = -1
   musicAffected = new Set<Goblin>()
@@ -299,8 +302,9 @@ export class Elf extends Actor {
   }
 
   // 衝鋒：前搖 → 突刺 → 收招 → 結束
-  startCharge(dir: THREE.Vector3) {
-    this.charge = { phase: 'windup', t: 0, dir, done: 0, hit: -1 }
+  startCharge(dir: THREE.Vector3, target = -1) {
+    this.blinkLock = 0
+    this.charge = { phase: 'windup', t: 0, dir, done: 0, hit: -1, target }
   }
   recoverCharge(hit: number) {
     const c = this.charge!
@@ -319,6 +323,7 @@ export class Elf extends Actor {
     this.stealth = 0
     this.stealthCast = -1
     this.eye = 0
+    this.blinkLock = 0
     this.charge = null
     this.channel = -1
     if (this.packing) {

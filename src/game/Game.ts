@@ -6,7 +6,7 @@ import { ViolinFx } from './elf/ViolinFx'
 import { GHOST_OPACITY } from './elf/rigs'
 import { CONFIG, type ElfKind, type Role } from './config'
 import { Actor, Elf, Goblin, setBarProgress, type ChargePhase, type ElfAction } from './entities'
-import { behindSpot, fearTargets, nearestTarget, sweepHit } from './violin'
+import { behindSpot, fearTargets, nearestTarget, sweepHit, targetable } from './violin'
 import { GAP_HALF, World } from './world'
 import { makeSprite, noOutline, releaseToonGpu } from './toon'
 import { updateElfAI, updateGoblinAI } from './ai'
@@ -45,7 +45,7 @@ export type GameEvent =
   | { e: 'stealth'; on: boolean; p: V2; fear: number[] }
   | { e: 'eye'; on: boolean }
   | { e: 'blink'; from: V2; to: V2; yaw: number }
-  | { e: 'charge'; o: V2; d: V2 }
+  | { e: 'charge'; o: V2; d: V2; g?: number }
   | { e: 'chargeEnd'; p: V2; g: number }
   | { e: 'left'; name: string }
   | { e: 'end'; w: Role; c: number; time: number }
@@ -850,20 +850,33 @@ export class Game {
     elf.yaw = Math.atan2(g.pos.x - to.x, g.pos.z - to.z)
     elf.corr++
     elf.closeEye()
+    // 瞬移後短時間內的衝鋒會自動鎖定最近的哥布林（見 violinCharge）
+    elf.blinkLock = E.lockTime
     this.emit({ e: 'blink', from: [r2(from.x), r2(from.z)], to: [r2(to.x), r2(to.z)], yaw: r2(elf.yaw) })
     this.emit({ e: 'eye', on: false })
     return true
   }
 
-  // 衝鋒擊暈：0.5 秒前搖 → 朝 dir（角色面向）衝刺中距離，撞到的第一隻哥布林暈 1.5 秒
+  // 衝鋒擊暈：前搖 → 朝 dir（角色面向）衝刺中距離，撞到的第一隻哥布林暈眩。
+  // 刺客之眼瞬移後 lockTime 秒內施放＝鎖定衝鋒：不看 dir，直接朝衝鋒距離內最近的哥布林突刺，前搖與突刺途中持續追蹤
   violinCharge(dir: THREE.Vector3) {
     const elf = this.elf
     if (!this.elfCanAct() || elf.cd.charge > 0) return false
+    dir = dir.clone()
+    let target = -1
+    if (elf.blinkLock > 0) {
+      const g = nearestTarget(elf.pos, this.goblins.filter(targetable), CONFIG.violin.charge.distance)
+      if (g) {
+        target = g.id
+        v2.copy(g.pos).sub(elf.pos).setY(0)
+        if (v2.lengthSq() > 1e-4) dir.copy(v2).normalize()
+      }
+    }
     // 隱身中前搖仍保持隱身，突刺發動時才現身（見 updateCharge）
     elf.yaw = Math.atan2(dir.x, dir.z)
-    elf.startCharge(dir.clone())
+    elf.startCharge(dir, target)
     elf.vel.set(0, 0, 0)
-    this.emit({ e: 'charge', o: [r2(elf.pos.x), r2(elf.pos.z)], d: [r2(dir.x), r2(dir.z)] })
+    this.emit({ e: 'charge', o: [r2(elf.pos.x), r2(elf.pos.z)], d: [r2(dir.x), r2(dir.z)], g: target })
     return true
   }
 
@@ -874,6 +887,12 @@ export class Game {
     if (!c) return
     const C = CONFIG.violin.charge
     c.t += dt
+    // 鎖定衝鋒：前搖與突刺途中持續對準目標（目標被抓 / 打包 / 掙脫無敵後就維持最後的方向）
+    const tg = c.target >= 0 && c.phase !== 'recover' ? this.goblins[c.target] : undefined
+    if (tg && targetable(tg)) {
+      v2.copy(tg.pos).sub(elf.pos).setY(0)
+      if (v2.lengthSq() > 1e-4) c.dir.copy(v2).normalize()
+    }
     elf.yaw = Math.atan2(c.dir.x, c.dir.z)
     if (c.phase === 'windup') {
       // 隱身中的前搖：哥布林看不到聚集的星塵
@@ -1240,6 +1259,7 @@ export class Game {
             if (elf.net) Object.assign(elf.net, { x: to.x, z: to.z, yaw: ev.yaw, t: 0 })
           }
           elf.yaw = ev.yaw
+          elf.blinkLock = CONFIG.violin.eye.lockTime
         }
         this.violinFx.blink(from, to)
         sfx.blink()
@@ -1252,7 +1272,7 @@ export class Game {
       case 'charge': {
         const dir = new THREE.Vector3(ev.d[0], 0, ev.d[1]).normalize()
         if (!this.authority) {
-          elf.startCharge(dir)
+          elf.startCharge(dir, Number.isInteger(ev.g) && this.goblins[ev.g!] ? ev.g! : -1)
           if (elf.isPlayer) elf.pos.set(ev.o[0], 0, ev.o[1])
         }
         elf.yaw = Math.atan2(dir.x, dir.z)
@@ -1739,6 +1759,7 @@ export class Game {
     for (const k of ['gaze', 'music', 'stun', 'capture', 'stealth', 'eye', 'charge'] as const) elf.cd[k] = Math.max(0, elf.cd[k] - dt)
     elf.stagger = Math.max(0, elf.stagger - dt)
     elf.castT = Math.max(0, elf.castT - dt)
+    elf.blinkLock = Math.max(0, elf.blinkLock - dt)
     for (const g of this.goblins) {
       if (!g.held) g.stun = Math.max(0, g.stun - dt)
       g.rooted = Math.max(0, g.rooted - dt)
@@ -2199,6 +2220,8 @@ export class Game {
     const free = elf.stagger <= 0 && !elf.packing && !elf.charge
     const pack = this.packReady()
     const packUsable = (free || elf.charge?.phase === 'recover') && elf.stealthCast < 0
+    // 瞬移後的鎖定衝鋒時限內（衝鋒已冷卻好）
+    const lock = elf.blinkLock > 0 && elf.cd.charge <= 0 && !elf.charge
     h.skills = [
       {
         key: keyLabel(b.gaze), code: b.gaze, name: elf.stealthed ? t('skillUnstealth') : t('skillStealth'), icon: elf.stealthed ? 'skill-reveal' : 'skill-stealth',
@@ -2210,7 +2233,7 @@ export class Game {
       },
       pack
         ? { key: keyLabel(b.stun), code: b.stun, name: t('skillCapture'), icon: 'skill-capture', cd: 0, max: CONFIG.elf.capture.cooldown, active: false, usable: packUsable }
-        : { key: keyLabel(b.stun), code: b.stun, name: t('skillCharge'), icon: 'skill-charge', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge, usable: free && elf.stealthCast < 0 },
+        : { key: keyLabel(b.stun), code: b.stun, name: lock ? t('skillChargeLock') : t('skillCharge'), icon: 'skill-charge', cd: elf.cd.charge, max: V.charge.cooldown, active: !!elf.charge || lock, usable: free && elf.stealthCast < 0 },
       { key: keyLabel(b.capture), code: b.capture, name: t('skillCapture'), icon: 'skill-capture', cd: elf.cd.capture, max: CONFIG.elf.capture.cooldown, active: !!elf.packing, usable: packUsable },
     ]
     h.radar = false
@@ -2218,6 +2241,7 @@ export class Game {
     else if (elf.packing) h.hint = ''
     else if (elf.stealthCast >= 0) h.hint = t('hStealthCast')
     else if (pack) h.hint = touch ? t('hCaptureTouch') : t('hCapture', { key: keyLabel(b.stun) })
+    else if (lock && free) h.hint = touch ? t('hChargeLockTouch') : t('hChargeLock', { key: keyLabel(b.stun) })
     else if (elf.eye > 0) h.hint = touch ? t('hEyeTouch', { s: Math.ceil(elf.eye) }) : t('hEye', { key: keyLabel(b.music), s: Math.ceil(elf.eye) })
     else if (elf.stealthed) h.hint = touch ? t('hStealthTouch', { s: Math.ceil(elf.stealth) }) : t('hStealth', { key: keyLabel(b.gaze), s: Math.ceil(elf.stealth) })
     else h.hint = ''

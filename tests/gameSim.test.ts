@@ -267,6 +267,109 @@ describe('紫晶精靈隱身的狀態轉移', () => {
   })
 })
 
+describe('紫晶精靈：瞬移後的鎖定衝鋒', async () => {
+  const THREE = await import('three')
+  const { CONFIG } = await import('../src/game/config')
+  type Ev = { e: string; g?: number }
+  const run = (game: ReturnType<typeof makeGame>, sec: number) => {
+    for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)
+  }
+  // 開局後開刺客之眼並瞬移到最近的哥布林身後；回傳事件紀錄
+  function blinked() {
+    const game = makeGame('elf', 'violin')
+    const G = game as unknown as { present(ev: Ev): void }
+    const events: Ev[] = []
+    const orig = G.present.bind(game)
+    G.present = (ev) => (events.push(ev), orig(ev))
+    run(game, 4)
+    expect(game.hud.phase).toBe('play')
+    expect(game.violinEye()).toBe(true)
+    run(game, 0.2)
+    expect(game.violinEye()).toBe(true) // 瞬移
+    expect(events.some((e) => e.e === 'blink')).toBe(true)
+    return { game, events }
+  }
+  const nearest = (game: ReturnType<typeof makeGame>) =>
+    [...game.goblins].sort((a, b) => a.pos.distanceTo(game.elf.pos) - b.pos.distanceTo(game.elf.pos))[0]
+  // 背對最近哥布林的方向（一般衝鋒朝這個方向一定落空）
+  const away = (game: ReturnType<typeof makeGame>) => game.elf.pos.clone().sub(nearest(game).pos).setY(0).normalize()
+
+  it('前搖 0.3 秒', () => {
+    expect(CONFIG.violin.charge.windup).toBe(0.3)
+    const game = makeGame('elf', 'violin')
+    run(game, 4)
+    expect(game.violinCharge(new THREE.Vector3(1, 0, 0))).toBe(true)
+    run(game, 0.2)
+    expect(game.elf.charge?.phase).toBe('windup')
+    run(game, 0.15)
+    expect(game.elf.charge?.phase).not.toBe('windup')
+    game.dispose()
+  })
+
+  it('瞬移後直接按衝鋒：不用瞄準（即使背對），自動衝向最近的哥布林並擊暈', () => {
+    const { game, events } = blinked()
+    expect(game.elf.blinkLock).toBe(CONFIG.violin.eye.lockTime)
+    const g = nearest(game)
+    expect(game.violinCharge(away(game))).toBe(true)
+    expect(game.elf.charge?.target).toBe(g.id)
+    expect(game.elf.blinkLock).toBe(0) // 鎖定只用一次
+    expect(events.at(-1)).toMatchObject({ e: 'charge', g: g.id })
+    run(game, 1)
+    expect(events.find((e) => e.e === 'chargeEnd')?.g).toBe(g.id)
+    expect(g.stun).toBeGreaterThan(0)
+    game.dispose()
+  })
+
+  it('鎖定衝鋒會追蹤前搖中跑開的哥布林', () => {
+    const { game, events } = blinked()
+    const g = nearest(game)
+    expect(game.violinCharge(away(game))).toBe(true)
+    // 前搖期間把哥布林往側邊挪 3 公尺：固定方向的衝鋒會落空
+    run(game, 0.2)
+    const side = new THREE.Vector3(-game.elf.charge!.dir.z, 0, game.elf.charge!.dir.x)
+    g.pos.addScaledVector(side, 3)
+    ;(game as unknown as { world: { resolve(p: unknown, r: number): void } }).world.resolve(g.pos, g.radius)
+    run(game, 1)
+    expect(events.find((e) => e.e === 'chargeEnd')?.g).toBe(g.id)
+    game.dispose()
+  })
+
+  it('沒有瞬移的一般衝鋒維持指向性：背對哥布林會落空', () => {
+    const game = makeGame('elf', 'violin')
+    const G = game as unknown as { present(ev: Ev): void }
+    const events: Ev[] = []
+    const orig = G.present.bind(game)
+    G.present = (ev) => (events.push(ev), orig(ev))
+    run(game, 4)
+    const g = nearest(game)
+    g.pos.copy(game.elf.pos).add(new THREE.Vector3(0, 0, 2))
+    expect(game.violinCharge(new THREE.Vector3(0, 0, -1))).toBe(true)
+    expect(game.elf.charge?.target).toBe(-1)
+    run(game, 1.2)
+    expect(events.find((e) => e.e === 'chargeEnd')?.g).toBe(-1)
+    game.dispose()
+  })
+
+  it('鎖定時限過後恢復成一般衝鋒', () => {
+    const { game } = blinked()
+    run(game, CONFIG.violin.eye.lockTime + 0.1)
+    expect(game.elf.blinkLock).toBe(0)
+    expect(game.violinCharge(away(game))).toBe(true)
+    expect(game.elf.charge?.target).toBe(-1)
+    game.dispose()
+  })
+
+  it('HUD：鎖定期間衝鋒鍵顯示為鎖定衝鋒', () => {
+    const { game } = blinked()
+    ;(game as unknown as { syncHud(): void }).syncHud()
+    expect(game.hud.skills[2].active).toBe(true)
+    run(game, CONFIG.violin.eye.lockTime + 0.1)
+    ;(game as unknown as { syncHud(): void }).syncHud()
+    expect(game.hud.skills[2].active).toBe(false)
+    game.dispose()
+  })
+})
+
 describe('時間到結算時精靈正在打包', () => {
   const run = (game: ReturnType<typeof makeGame>, sec: number) => {
     for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)

@@ -66,10 +66,11 @@ export const CONFIG = {
   violin: {
     // 隱身：拉琴 castTime 秒後隱身 duration 秒；手動取消或施放其他技能時，身邊的哥布林恐懼
     stealth: { castTime: 0.8, duration: 15, cooldown: SHORT ? 8 : 12, fearRadius: SHORT ? 12 : 8, fearTime: SHORT ? 4.5 : 3, fearSpeed: 0.42, revealRadius: 1.6 },
-    // 刺客之眼：開圖 duration 秒（沒有瞬移就在時間到後進入冷卻）；期間再按一次瞬移到最近的哥布林身後（blinkRange＝全地圖）
-    eye: { duration: 20, cooldown: SHORT ? 10 : 20, blinkRange: 240, behind: 1.25 },
+    // 刺客之眼：開圖 duration 秒（沒有瞬移就在時間到後進入冷卻）；期間再按一次瞬移到最近的哥布林身後（blinkRange＝全地圖）。
+    // 瞬移後 lockTime 秒內按衝鋒＝鎖定衝鋒：自動朝最近的哥布林（衝鋒距離內）突刺並追蹤，不需要瞄準
+    eye: { duration: 20, cooldown: SHORT ? 10 : 20, blinkRange: 240, behind: 1.25, lockTime: 3 },
     // 衝鋒擊暈：前搖 windup 秒後以 speed 衝刺 distance 公尺，撞到的第一隻暈 stun 秒；結束後 recover 秒收招
-    charge: { windup: 0.5, distance: 9, speed: 24, hitRadius: 0.5, stun: SHORT ? 2 : 1.5, cooldown: SHORT ? 3.5 : 7, recover: 0.4 },
+    charge: { windup: 0.3, distance: 9, speed: 24, hitRadius: 0.5, stun: SHORT ? 2 : 1.5, cooldown: SHORT ? 3.5 : 7, recover: 0.4 },
     // AI 紫晶精靈的移動速度（豎琴精靈用 elf.aiSpeed）
     aiSpeed: SHORT ? 7.0 : 6.2,
     // AI 開場多久之後才會開刺客之眼找人（秒）

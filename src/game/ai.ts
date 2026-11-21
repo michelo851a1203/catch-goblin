@@ -291,8 +291,8 @@ function updateVioletAI(game: Game, dt: number) {
       elf.cd.charge <= 0 && t.grace <= 0 && d < V.charge.distance - 1 && (visibleFor > E.aiReaction * 0.6 || elf.stealthed || d < 3) &&
       game.world.lineOfSight(elf.pos, t.pos)
     ) {
-      // 預判：衝鋒前搖 0.5 秒，瞄準哥布林屆時的位置（恐懼中的哥布林走得很慢）
-      const lead = t.terror > 0 ? 0.3 : 0.45
+      // 預判：衝鋒前搖 0.3 秒，瞄準哥布林屆時的位置（恐懼中的哥布林走得很慢）；瞬移後的鎖定衝鋒會自動追蹤，不靠這個預判
+      const lead = t.terror > 0 ? 0.2 : 0.28
       tmp.copy(t.pos).addScaledVector(t.vel, lead).sub(elf.pos).setY(0)
       if (tmp.lengthSq() > 0.01) {
         game.violinCharge(tmp.normalize())

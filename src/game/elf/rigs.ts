@@ -98,8 +98,8 @@ export const VIOLINIST_ANIM: AnimSpec = {
   // build_violinist.py 的程序化步態（WALK_REF / RUN_REF）：timeScale=1 時腳底相對地面的速度
   gaitRef: { Walk: 1.6, Run: 6.0 },
   gaitRange: { Walk: [0.5, 2.0], Run: [0.6, 1.5] },
-  // 前搖動作 0.5 s（12 格 @24fps）；突刺循環加快；收招配合 0.4 s
-  timeScale: { Cast: 1.4, ChargeDash: 1.6, ChargeRecover: 1.25 },
+  // 前搖動作原長 0.5 s（12 格 @24fps），加快到 0.3 s 播完（配合 CONFIG.violin.charge.windup）；突刺循環加快；收招配合 0.4 s
+  timeScale: { Cast: 1.4, ChargeWindup: 0.5 / 0.3, ChargeDash: 1.6, ChargeRecover: 1.25 },
 }
 
 const vchain = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
