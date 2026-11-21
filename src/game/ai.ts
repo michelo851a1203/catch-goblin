@@ -7,6 +7,8 @@ const tmp = new THREE.Vector3()
 // 哥布林被打包時的大招決策：還沒決定 / 決定不放（倒數不會歸零）
 const ULT_UNDECIDED = -1
 const ULT_NEVER = 999
+// AI 豎琴精靈：目標這個距離內有隊友，就先彈琴再擊暈（避免被抱團輪流攪局）
+const AI_GUARD_RADIUS = 6
 const tmp2 = new THREE.Vector3()
 
 function dist2d(a: THREE.Vector3, b: THREE.Vector3) {
@@ -172,6 +174,15 @@ export function updateElfAI(game: Game, dt: number) {
     const d = dist2d(t.pos, elf.pos)
     const visibleFor = rec ? now - rec.since : 0
     faceTo(elf, t.pos)
+    // 目標身邊有隊友（打包時會被攪局）：先短彈琴聲讓整團不能攪局，彈完再擊暈＋打包
+    const guarded =
+      t.stun <= 0 && !t.held && t.attract <= 0 && elf.cd.music <= 0 && d < E.music.radius * 0.6 &&
+      game.goblins.some((o) => o !== t && !o.captured && !o.held && dist2d(o.pos, t.pos) < AI_GUARD_RADIUS)
+    if (guarded) {
+      ai.plannedChannel = 1 + Math.random() * 0.5
+      game.elfStartMusic()
+      return
+    }
     if (t.stun > 0 && !t.held) {
       if (d < E.capture.range - 0.3 && elf.cd.capture <= 0) {
         game.elfStartCapture()

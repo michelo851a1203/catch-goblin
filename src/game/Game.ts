@@ -1786,7 +1786,13 @@ export class Game {
       const M = CONFIG.elf.music
       if (auth)
         for (const g of this.goblins) {
-          if (g.captured || g.held || elf.musicAffected.has(g)) continue
+          if (g.captured || g.held) continue
+          // 已被吸引、仍在範圍內：彈奏中持續刷新，「不能攪局」的 attractTime 秒從彈奏結束才開始算
+          // （否則彈奏本身就把時間耗掉，彈完擊暈＋打包時早已能攪局，琴聲對抱團無效）
+          if (elf.musicAffected.has(g)) {
+            if (g.attract > 0 && d2(g.pos, elf.pos) < M.radius) g.attract = M.attractTime
+            continue
+          }
           if (d2(g.pos, elf.pos) < M.radius) {
             elf.musicAffected.add(g)
             g.attract = M.attractTime

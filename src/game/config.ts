@@ -50,8 +50,10 @@ export const CONFIG = {
     radius: 0.6,
     // 依射線上由近到遠的命中順序定身：第一個 2 秒、第二個 1.4 秒、其餘 1 秒（讓後面的哥布林有時間救人）
     gaze: { range: 24, width: 1.3, root: [2, 1.4, 1], cooldown: 7, beamTime: 0.5 },
-    // 被琴聲吸引（attract）的哥布林不能攪局：豎琴精靈對付抱團的手段
-    music: { radius: 17, maxChannel: 5, attractTime: 3, charmTime: 10, cooldown: 18 },
+    // 被琴聲吸引（attract）的哥布林不能攪局：豎琴精靈對付抱團的手段。
+    // 彈奏中持續刷新，attractTime 秒從彈奏結束才開始算；AI 在目標身邊有隊友時會先彈琴再擊暈。
+    // 2026-11-22 改成這樣後琴聲每次出手都很有效，冷卻 18 → 28 秒，避免沒抱團時也每次都先彈琴
+    music: { radius: 17, maxChannel: 5, attractTime: 3, charmTime: 10, cooldown: 28 },
     stun: { range: 2.7, duration: 2, cooldown: 3.5 },
     // 打包：短局版縮短（4→3 秒、魅惑 2→1.5 秒），貼身的隊友仍有 1 秒以上能反應攪局。
     // 被攪局打斷時保留這次新增進度的 keep 比例（最多保留到 keepMax，至少還要再打包 50%，救人仍來得及），
