@@ -101,7 +101,6 @@ export class Goblin extends Actor {
   capturedAt = 0
   ai: GoblinAIState
   fx: {
-    radar: THREE.Sprite
     // 刺客之眼的警告（只在操控這隻哥布林的玩家畫面顯示）
     eyeWarn: THREE.Sprite
     bar: ReturnType<typeof barSprites>
@@ -131,16 +130,13 @@ export class Goblin extends Actor {
       rescuing: false,
       walk: 0.45,
     }
-    const radar = makeSprite(t('elfInCave'), 0.42, { w: 512, h: 128, font: 58, bg: 'rgba(200,40,40,0.92)' })
     const bar = barSprites()
-    radar.visible = false
-    radar.position.y = 2.15
     const eyeWarn = makeSprite(t('eyeWarn'), 0.42, { w: 640, h: 128, font: 54, bg: 'rgba(110,40,190,0.92)' })
     eyeWarn.visible = false
     eyeWarn.position.y = 2.55
     bar.group.position.y = 1.95
-    this.root.add(radar, eyeWarn, bar.group)
-    this.fx = { radar, eyeWarn, bar }
+    this.root.add(eyeWarn, bar.group)
+    this.fx = { eyeWarn, bar }
   }
 
   get life(): GoblinLife {

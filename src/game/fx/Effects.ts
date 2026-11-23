@@ -413,13 +413,14 @@ export class FxSystem {
     })
   }
 
-  floatText(text: string, pos: THREE.Vector3, color: string, scale = 0.75) {
+  // rise：每秒上升的高度。玩家自己的提示（例如「沒有可以攪局的目標」）上升少一點，鏡頭拉近時才不會飄進上方的提示列
+  floatText(text: string, pos: THREE.Vector3, color: string, scale = 0.75, rise = 0.9) {
     const s = makeSprite(text, scale, { fg: color, font: 60, w: 512, h: 128 })
     s.position.set(pos.x, 2.3, pos.z)
     const mat = s.material as THREE.SpriteMaterial
     const base = s.scale.clone()
     this.add(s, 1.2, (k, dt) => {
-      s.position.y += dt * 0.9
+      s.position.y += dt * rise
       const pop = k < 0.12 ? 0.6 + (k / 0.12) * 0.55 : 1.15 - Math.min(0.15, (k - 0.12) * 0.8)
       s.scale.copy(base).multiplyScalar(pop)
       mat.opacity = 1 - k * k

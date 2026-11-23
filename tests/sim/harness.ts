@@ -47,7 +47,7 @@ export function stateOf(game: Game) {
       p: v(g.pos), v: v(g.vel), y: g.yaw, m: g.moveAmt, pose: g.pose, z: g.zone, hc: g.homeCave,
       s: [g.captured, g.held, g.ultUsed, g.stun, g.rooted, g.terror, g.attract, g.charm, g.grace, g.dashT, g.dashCd, g.interfereCd],
       dis: g.disabled, corr: g.corr, nd: g.netDriven, net: g.net && { ...g.net }, name: g.name,
-      fl: g.flight && [g.flight.t, g.flight.dur], fx: [g.fx.radar.visible, g.fx.eyeWarn.visible, g.fx.bar.group.visible],
+      fl: g.flight && [g.flight.t, g.flight.dur], fx: [g.fx.eyeWarn.visible, g.fx.bar.group.visible],
       ai: { ...g.ai, lastElf: g.ai.lastElf && v(g.ai.lastElf), target: g.ai.target && v(g.ai.target) },
     })),
     xray: G.xrayOn,

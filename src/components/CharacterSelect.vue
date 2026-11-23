@@ -91,9 +91,9 @@ const cards = computed<Card[]>(() => {
         tagline: t('violinTagline'),
         goal: t('elfGoal'),
         skills: [
-          { icon: 'skill-stealth', key: keyLabel(b.elf.gaze), name: t('skillStealth'), desc: t('skillStealthDesc') },
+          { icon: 'skill-stealth', key: keyLabel(b.elf.gaze), name: t('skillStealth'), desc: t('skillStealthDesc', { fear: CONFIG.violin.stealth.fearTime }) },
           { icon: 'skill-eye', key: keyLabel(b.elf.music), name: t('skillEye'), desc: t('skillEyeDesc') },
-          { icon: 'skill-charge', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc') },
+          { icon: 'skill-charge', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc', { stun: CONFIG.violin.charge.stun, lock: CONFIG.violin.eye.lockTime }) },
           { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc', { s: CONFIG.elf.capture.packTime }) },
         ],
       },
@@ -569,7 +569,10 @@ h1.logo::after {
 }
 .elf-back {
   z-index: 2;
-  margin-top: -1vh;
+}
+/* 兩張精靈卡下方多了返回鈕：卡片再縮一點，矮視窗（CrazyGames 821×462）返回鈕才不會壓到卡片 */
+.select.elf-menu .card-wrap {
+  width: min(clamp(240px, 26vw, 400px), 40dvh);
 }
 .violin .art {
   /* 原畫是淺色背景：疊一層紫夜漸層（multiply），中央保持明亮、四周暗下來，和其他卡片的色調一致 */
@@ -831,6 +834,9 @@ footer {
     width: min(44vw, 45vh);
     width: min(44vw, 45dvh);
   }
+  .select.elf-menu .card-wrap {
+    width: min(44vw, 40dvh);
+  }
 }
 /* iOS Safari 的 vh 以工具列收起時的高度計算，網址列 / 分頁列展開時卡片會超出畫面、點不到開始按鈕，
    所以卡片尺寸改用 dvh（實際可見高度） */
@@ -859,13 +865,16 @@ footer {
     width: 42vh;
     width: 42dvh;
   }
+  .select.elf-menu .card-wrap {
+    width: 36dvh;
+  }
   .pickers span {
     font-size: 9px;
     padding: 1px 6px;
   }
   .small {
-    font-size: 10px;
-    padding: 3px 10px;
+    font-size: 12px;
+    padding: 4px 12px;
   }
   .plate {
     padding: 30px 10px 10px;

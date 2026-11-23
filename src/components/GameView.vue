@@ -13,6 +13,7 @@ import TouchControls from './TouchControls.vue'
 import FullscreenButton from './FullscreenButton.vue'
 import IconText from './IconText.vue'
 import CoachTips from './CoachTips.vue'
+import KeybindSettings from './KeybindSettings.vue'
 import { icon } from '../icons'
 import { locale } from '../i18n'
 import logoZh from '../assets/brand/logo-zh.webp'
@@ -65,6 +66,33 @@ function leave(to: 'restart' | 'menu') {
   if (to === 'restart') emit('restart')
   else emit('menu')
 }
+// 對局中的暫停選單：單機會停住時間；連線對戰無法暫停整個房間，只停止本機輸入
+const menuOpen = ref(false)
+const showBinds = ref(false)
+const binds = ref(loadKeybinds())
+function openMenu() {
+  if (menuOpen.value || hud.result) return
+  menuOpen.value = true
+  game?.pause('menu')
+}
+function closeMenu() {
+  menuOpen.value = false
+  showBinds.value = false
+  game?.resume('menu')
+}
+function closeBinds() {
+  showBinds.value = false
+  game?.reloadKeybinds()
+}
+function quitMatch() {
+  menuOpen.value = false
+  leave('menu')
+}
+// 對局結束時自動關掉選單，交給結算畫面
+watch(
+  () => hud.result,
+  (r) => r && menuOpen.value && closeMenu(),
+)
 function touchMove(x: number, y: number) {
   game?.setTouchMove(x, y)
 }
@@ -109,16 +137,21 @@ function toggleSpeed() {
 
     <canvas ref="minimap" class="minimap" width="180" height="180"></canvas>
 
-    <!-- 手機：左上角全螢幕鈕，隱藏瀏覽器導覽列 -->
-    <FullscreenButton class="game-fs" />
+    <!-- 左上角：暫停選單；手機另有全螢幕鈕（隱藏瀏覽器導覽列） -->
+    <div class="corner">
+      <button v-if="!loading && !hud.result" class="pause-btn" :aria-label="t('hudPause')" :title="t('hudPause')" @click="openMenu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
+      </button>
+      <FullscreenButton />
+    </div>
 
     <div class="toasts">
+      <!-- 哥布林雷達固定在提示列最上方，不蓋住畫面中央的角色 -->
+      <div v-if="hud.radar" class="radar"><IconText :text="t('hudRadar')" /></div>
       <TransitionGroup name="toast">
         <div v-for="t in hud.toasts" :key="t.id" class="toast" :class="t.kind"><IconText :text="t.text" /></div>
       </TransitionGroup>
     </div>
-
-    <div v-if="hud.radar" class="radar"><IconText :text="t('hudRadar')" /></div>
 
     <div v-if="hud.progress >= 0" class="progress">
       <span>{{ hud.progressLabel }}</span>
@@ -131,7 +164,7 @@ function toggleSpeed() {
     <CoachTips v-if="!loading" :game="() => game" :hud="hud" :role="role" :elf-kind="kind" :online="!!net" />
 
     <!-- 技能列 -->
-    <div v-if="!hud.spectating" class="skills">
+    <div v-if="!hud.spectating && !hud.result" class="skills">
       <button
         v-for="s in hud.skills"
         :key="s.key"
@@ -147,14 +180,14 @@ function toggleSpeed() {
       </button>
     </div>
 
-    <div v-if="hud.spectating" class="spectate">
+    <div v-if="hud.spectating && !hud.result" class="spectate">
       <IconText :text="touchMode ? t('hudSpectatingTouch', { name: hud.spectating }) : t('hudSpectating', { name: hud.spectating })" />
       <button @click="nextSpectate"><IconText :text="t('hudNext')" /></button>
       <!-- 多人連線不能快轉 -->
       <button v-if="!net" @click="toggleSpeed"><IconText :text="hud.speed === 1 ? t('hudFast') : t('hudNormal')" /></button>
     </div>
 
-    <div v-if="!touchMode" class="help">{{ t('hudHelp', { keys: moveKeys, lock: isCrazyGames ? '' : t('lockHint') }) }}</div>
+    <div v-if="!touchMode && !hud.spectating && !hud.result" class="help">{{ t('hudHelp', { keys: moveKeys, lock: isCrazyGames ? '' : t('lockHint') }) }}</div>
 
     <div v-if="hud.phase === 'countdown'" class="countdown" :key="hud.countdown">{{ hud.countdown }}</div>
 
@@ -164,6 +197,19 @@ function toggleSpeed() {
         <p>{{ t('loading') }}<span class="dots"><i>.</i><i>.</i><i>.</i></span></p>
       </div>
     </Transition>
+
+    <div v-if="menuOpen" class="result menu" @pointerdown.self="closeMenu">
+      <div class="panel">
+        <h2>{{ net ? t('hudMenuTitle') : t('hudPaused') }}</h2>
+        <p v-if="net">{{ t('hudPausedOnline') }}</p>
+        <div class="actions column">
+          <button class="go" @click="closeMenu">{{ t('hudResume') }}</button>
+          <button v-if="!touchMode" class="ghost" @click="showBinds = true">{{ t('settings') }}</button>
+          <button class="ghost" @click="quitMatch">{{ net ? t('mpLeave') : t('hudQuit') }}</button>
+        </div>
+      </div>
+    </div>
+    <KeybindSettings v-if="showBinds" v-model="binds" @close="closeBinds" />
 
     <div v-if="hud.result" class="result">
       <div class="panel" :class="{ win: won }">
@@ -327,11 +373,43 @@ function toggleSpeed() {
   height: 180px;
   pointer-events: none;
 }
-.game-fs {
+.corner {
   position: absolute;
   top: calc(14px + env(safe-area-inset-top));
   left: calc(14px + env(safe-area-inset-left));
   z-index: 5;
+  display: flex;
+  gap: 8px;
+}
+.pause-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(240, 210, 140, 0.6);
+  background: rgba(20, 16, 10, 0.62);
+  color: #e6c878;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.pause-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.result.menu {
+  z-index: 20;
+  animation: fade 0.2s;
+}
+.actions.column {
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 200px;
 }
 .toasts {
   position: absolute;
@@ -371,10 +449,6 @@ function toggleSpeed() {
   transition: all 0.3s;
 }
 .radar {
-  position: absolute;
-  bottom: 200px;
-  left: 50%;
-  transform: translateX(-50%);
   background: rgba(190, 30, 30, 0.85);
   border: 2px solid #ffd0c0;
   padding: 8px 18px;
@@ -667,7 +741,7 @@ function toggleSpeed() {
     font-size: 11px;
     margin: 0;
   }
-  .game-fs {
+  .corner {
     top: calc(8px + env(safe-area-inset-top));
     left: calc(10px + env(safe-area-inset-left));
     transform: scale(0.85);
@@ -690,8 +764,6 @@ function toggleSpeed() {
     text-align: center;
   }
   .radar {
-    bottom: auto;
-    top: 42%;
     font-size: 13px;
     padding: 5px 12px;
   }

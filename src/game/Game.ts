@@ -449,6 +449,11 @@ export class Game {
     this.syncGameplay()
   }
 
+  // 暫停選單裡改了按鍵設定：立刻套用到這一局
+  reloadKeybinds() {
+    this.binds = loadKeybinds()
+  }
+
   resume(reason: string) {
     if (!this.pauses.delete(reason) || this.pauses.size) return
     this.clock.getDelta() // 丟棄暫停期間累積的時間
@@ -910,7 +915,9 @@ export class Game {
     }
     if (c.phase === 'dash') {
       const moves = this.authority || elf.isPlayer
-      const left = C.distance - c.done
+      // 鎖定衝鋒：目標在前搖中衝刺逃開時，最多多追到 1.5 倍距離，「自動鎖定」才不會常常落空
+      const limit = tg && targetable(tg) ? Math.min(C.distance * 1.5, Math.max(C.distance, c.done + d2(elf.pos, tg.pos))) : C.distance
+      const left = limit - c.done
       if (moves && left > 0) {
         const step = Math.min(C.speed * dt, left)
         const from = v1.copy(elf.pos)
@@ -928,7 +935,7 @@ export class Game {
             g.stun = C.stun
             g.rooted = g.attract = g.dashT = g.terror = 0
             this.endCharge(g.id)
-          } else if (moved < step * 0.4 || c.done >= C.distance - 1e-4) this.endCharge(-1)
+          } else if (moved < step * 0.4 || c.done >= limit - 1e-4) this.endCharge(-1)
         }
       } else elf.vel.set(0, 0, 0)
       this.violinFx.dashTick(dt, elf.pos, c.dir)
@@ -1305,7 +1312,7 @@ export class Game {
         return
       }
       case 'say':
-        if (ev.s === this.me) this.floatText(t(ev.k), this.actorOf(this.me).pos, '#dddddd')
+        if (ev.s === this.me) this.floatText(t(ev.k), this.actorOf(this.me).pos, '#dddddd', 0.6, 0.25)
         return
       case 'left':
         this.toast(t('tPlayerLeft', { name: ev.name }), 'warn')
@@ -1994,19 +2001,14 @@ export class Game {
       // 刺客之眼：操控這隻哥布林的玩家頭上跳警告
       g.fx.eyeWarn.visible = g.isPlayer && !g.captured && elf.eye > 0
       if (g.fx.eyeWarn.visible) g.fx.eyeWarn.position.y = 2.55 + Math.abs(Math.sin(this.elapsed * 4)) * 0.1
-      // 哥布林雷達：隱身中的紫晶精靈偵測不到
-      const radar = g.isPlayer && !g.captured && !elf.stealthed && g.zone >= 0 && g.zone === elf.zone
-      g.fx.radar.visible = radar
-      g.fx.radar.position.y = 2.15 + Math.abs(Math.sin(this.elapsed * 5)) * 0.12
       g.fx.bar.group.visible = g.held && !!elf.packing
       if (elf.packing && elf.packing.g === g) setBarProgress(g.fx.bar, elf.packing.t / elf.packing.total)
     }
 
-    // 雷達提示音
+    // 雷達提示音（文字只用 HUD 上方的雷達橫幅，不再另跳 toast / 頭頂字牌，避免同一句話疊三次）
     const radarNow = !!this.playerGoblin && !this.playerGoblin.captured && !elf.stealthed && this.playerGoblin.zone >= 0 && this.playerGoblin.zone === elf.zone
     if (radarNow && !this.radarWas) {
       sfx.alarm()
-      this.toast(t('tRadar'), 'warn')
     }
     this.radarWas = radarNow
 
@@ -2109,8 +2111,8 @@ export class Game {
   }
 
   // ───────────────────────── 特效 ─────────────────────────
-  floatText(text: string, pos: THREE.Vector3, color: string, scale = 0.75) {
-    this.fx.floatText(text, pos, color, scale)
+  floatText(text: string, pos: THREE.Vector3, color: string, scale = 0.75, rise?: number) {
+    this.fx.floatText(text, pos, color, scale, rise)
   }
 
   toast(text: string, kind: Toast['kind'] = 'info') {
@@ -2152,7 +2154,7 @@ export class Game {
       detail:
         winner === 'elf'
           ? t('rElfDetail', { mm, ss: String(ss).padStart(2, '0'), n: captured })
-          : t('rGoblinDetail', { free: CONFIG.goblinCount - captured, n: captured }),
+          : t(CONFIG.goblinCount - captured === 1 ? 'rGoblinDetailOne' : 'rGoblinDetail', { free: CONFIG.goblinCount - captured, n: captured }),
     }
     this.syncHud()
     this.onEnd(winner, { captured, time: this.elapsed })
