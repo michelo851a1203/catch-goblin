@@ -29,9 +29,9 @@ export interface Startup {
   invite: string | null
   // CrazyGames 即時多人
   instant: boolean
-  // CrazyGames 版的新玩家：直接進入遊戲當哥布林
+  // 短局版（CrazyGames、itch.io）的新玩家：直接進入遊戲當哥布林
   newPlayer: boolean
-  // 一般開啟時是否先打開多人連線的 sheet。CrazyGames 版不打開：單機要和多人一樣顯眼（品質準則），選角卡片直接可點
+  // 一般開啟時是否先打開多人連線的 sheet。短局版不打開：單機要和多人一樣顯眼（品質準則），選角卡片直接可點
   sheetOnStart: boolean
 }
 

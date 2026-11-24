@@ -12,7 +12,7 @@ import { t } from './i18n'
 import { music } from './game/music'
 import { icon } from './icons'
 import { preloadElves } from './game/elf/preload'
-import { isCrazyGames } from './platform'
+import { isShortSession } from './platform'
 import { isNewPlayer } from './tutorial'
 import { canPrompt, installGuide, promptInstall } from './input/install'
 
@@ -26,13 +26,13 @@ const round = ref(0)
 let busy = false
 
 // 畫面狀態機（見 screen.ts）。CrazyGames 的邀請 / 即時多人在 SDK 載入 App 前就決定好，RoomSheet 掛載時才讀得到
-// 新手（CrazyGames 版）：直接進入遊戲（平台規定新玩家要落在遊戲中，最多點一下），
+// 新手（短局版：CrazyGames、itch.io）：直接進入遊戲（平台規定新玩家要落在遊戲中，最多點一下），
 // 當操作最簡單的哥布林、對手是招式最好懂的豎琴精靈，由遊戲中的教學卡帶著玩；第二局起才看到選角畫面。
 // 好友邀請 / 即時多人優先；開局前不播廣告
 const invite = crazygames.startupInvite()
 const instant = !invite && crazygames.isInstantMultiplayer()
 const screen = shallowRef<screens.Screen>(
-  screens.initialScreen({ role: qRole, invite, instant, newPlayer: isCrazyGames && !qRole && isNewPlayer(), sheetOnStart: !isCrazyGames }),
+  screens.initialScreen({ role: qRole, invite, instant, newPlayer: isShortSession && !qRole && isNewPlayer(), sheetOnStart: !isShortSession }),
 )
 // 多人房間的連線：在大廳（選角畫面）與多人對局之間都存在
 const room = shallowRef<Room | null>(null)

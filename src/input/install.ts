@@ -1,9 +1,9 @@
 import { ref } from 'vue'
-import { isCrazyGames } from '../platform'
+import { isEmbedded } from '../platform'
 
 // 網站版（Cloudflare Pages）：手機瀏覽器的網址列 / 工具列會吃掉畫面，iPhone 也不支援網頁全螢幕。
 // 引導玩家「加入主畫面」，之後從主畫面圖示開啟就是全螢幕（manifest 由 site/plugin.ts 產生）。
-// CrazyGames 版由平台提供全螢幕，不顯示。
+// 入口站版本（CrazyGames、itch.io）在 iframe 裡，加入主畫面的會是入口站頁面，不顯示。
 export type MobileOs = 'ios' | 'android'
 
 // iPadOS 13 起 Safari 預設回報桌機版 UA（Macintosh），以觸控點數區分
@@ -26,7 +26,7 @@ function standalone() {
 const os = typeof navigator !== 'undefined' ? mobileOs(navigator.userAgent ?? '', navigator.maxTouchPoints ?? 0) : null
 
 // 要顯示哪一種系統的步驟；null 表示不顯示
-export const installGuide: MobileOs | null = !isCrazyGames && os && !standalone() ? os : null
+export const installGuide: MobileOs | null = !isEmbedded && os && !standalone() ? os : null
 
 // Android Chrome 可以直接跳出安裝視窗（beforeinstallprompt），拿得到時多顯示一顆「安裝」按鈕
 type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }

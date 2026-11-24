@@ -18,7 +18,7 @@ import { keyLabel, loadKeybinds, sameKey } from '../keybinds'
 import { t, type TKey } from '../i18n'
 import type { IconName } from '../icons'
 import * as crazygames from '../crazygames'
-import { isCrazyGames } from '../platform'
+import { isEmbedded } from '../platform'
 import { lowPower, touchMode } from '../input/touch'
 import type { Pose } from './models'
 import type { NetLink } from '../net/room'
@@ -516,9 +516,9 @@ export class Game {
       this.lastMouse = { x: e.clientX, y: e.clientY }
       this.press = e.button === 0 ? { x: e.clientX, y: e.clientY, at: performance.now() } : null
     }))
-    // 雙擊鎖定滑鼠（像 FPS 一樣轉視角）。鎖定只能用 Esc 解除，而 CrazyGames 上 Esc 也會退出平台的全螢幕，
-    // 所以 CrazyGames 版不提供鎖定（滑鼠技能已經不需要鎖定）
-    if (!isCrazyGames)
+    // 雙擊鎖定滑鼠（像 FPS 一樣轉視角）。鎖定只能用 Esc 解除，而 CrazyGames／itch.io 上 Esc 也會退出平台的全螢幕，
+    // 所以入口站版本不提供鎖定（滑鼠技能已經不需要鎖定）
+    if (!isEmbedded)
       this.on(canvas, 'dblclick', () => {
         if (!touchMode.value) void canvas.requestPointerLock?.()
       })

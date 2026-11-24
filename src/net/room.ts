@@ -4,7 +4,7 @@ import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assig
 import { store } from '../crazygames'
 import { iceServers } from './ice'
 import { NAME_MAX, cleanName } from './names'
-import { isCrazyGames } from '../platform'
+import { isCrazyGames, isItch } from '../platform'
 import { t } from '../i18n'
 import { isElfKind, type ElfKind } from '../game/config'
 
@@ -12,8 +12,8 @@ import { isElfKind, type ElfKind } from '../game/config'
 // PeerJS 內建的 TURN 網域已無法解析，TURN 改由 Cloudflare 提供（見 ./ice.ts 與 worker/turn）。
 // 建立房間的玩家是房主，負責整場模擬；其他玩家只傳送自己的操作，接收房主廣播的狀態。
 // 房主以固定前綴 + 6 碼房號註冊 peer id，加入者直接用房號連線，所以不需要大廳列表。
-// CrazyGames 版與網站版的對局設定不同（時間、哥布林數量），房號互不相通
-const ID_PREFIX = isCrazyGames ? 'elf-and-goblins-cg-' : 'elf-and-goblins-'
+// 各平台的版本與設定不同（CrazyGames／itch.io 是短局、網站版是長局），房號互不相通
+const ID_PREFIX = isCrazyGames ? 'elf-and-goblins-cg-' : isItch ? 'elf-and-goblins-itch-' : 'elf-and-goblins-'
 const env = import.meta.env
 const SIGNALING: PeerOptions = env.VITE_PEER_HOST
   ? {

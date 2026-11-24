@@ -1,4 +1,4 @@
-// CrazyGames 版的短局設定（4 分鐘、6 隻哥布林、小地圖、最終狩獵）只在 CrazyGames 網域生效，網站版維持原本的長局
+// 短局設定（4 分鐘、7 隻哥布林、小地圖、最終狩獵）在 CrazyGames 與 itch.io 生效，網站版維持原本的長局
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 async function configOn(hostname: string) {
@@ -25,6 +25,13 @@ describe('平台對局設定', () => {
     expect(c.violin.charge).toMatchObject({ cooldown: 3.5, stun: 2 })
     expect(c.violin.aiEyeAfter).toBe(5)
     expect(c.elf.capture).toMatchObject({ packTime: 3, charmedPackTime: 1.5 })
+  })
+
+  it('itch.io 和 CrazyGames 用同一套短局設定', async () => {
+    const cg = await configOn('run-goblins.game-files.crazygames.com')
+    const itch = await configOn('html-classic.itch.zone')
+    expect(itch.matchDuration).toBe(240)
+    expect(itch).toEqual(cg)
   })
 
   it('網站版（Cloudflare Pages）維持 10 分鐘、8 隻、無最終狩獵', async () => {

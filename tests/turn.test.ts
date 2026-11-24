@@ -11,6 +11,8 @@ describe('TURN worker', () => {
     expect(originAllowed('https://elf-and-goblins.game-files.crazygames.com', ALLOWED)).toBe(true)
     expect(originAllowed('http://localhost:5173', ALLOWED)).toBe(true)
     expect(originAllowed('http://localhost:5174', ALLOWED)).toBe(false)
+    expect(originAllowed('https://html-classic.itch.zone', 'https://*.itch.zone')).toBe(true)
+    expect(originAllowed('https://itch.zone.evil.io', 'https://*.itch.zone')).toBe(false)
     expect(originAllowed('https://crazygames.com.evil.io', ALLOWED)).toBe(false)
     expect(originAllowed('https://evilcrazygames.com', ALLOWED)).toBe(false)
     expect(originAllowed('http://x.crazygames.com', ALLOWED)).toBe(false)

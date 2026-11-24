@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { isCrazyGames } from '../platform'
+import { isEmbedded } from '../platform'
 import { computed, onMounted, ref } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
@@ -182,7 +182,7 @@ function back() {
 }
 
 const detail = computed(() => cards.value.find((c) => c.id === detailId.value) ?? null)
-const controlsText = computed(() => (touchMode.value ? t('controlsTouch') : t('controls', { keys: moveKeys.value, lock: isCrazyGames ? '' : t('lockHint') })))
+const controlsText = computed(() => (touchMode.value ? t('controlsTouch') : t('controls', { keys: moveKeys.value, lock: isEmbedded ? '' : t('lockHint') })))
 // 詳情頁的主按鈕：單機直接開始；多人大廳為選角（已選則取消）
 const detailAction = computed(() => {
   const c = detail.value

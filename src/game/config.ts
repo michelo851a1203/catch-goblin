@@ -1,6 +1,6 @@
-import { isCrazyGames } from '../platform'
+import { isShortSession } from '../platform'
 
-// 短局版（CrazyGames）：網頁玩家單次遊玩時間短，改成 4 分鐘一局、較小的地圖、7 隻哥布林，
+// 短局版（CrazyGames、itch.io）：網頁玩家單次遊玩時間短，改成 4 分鐘一局、較小的地圖、7 隻哥布林，
 // 最後 70 秒進入「最終狩獵」（精靈小地圖顯示所有哥布林），避免最後幾隻找不到而拖到時間結束。
 // 數值以無頭 AI 對 AI 模擬調整（精靈勝率，種子 1000 起，短局版每格 96 場；網站版 64 場）。
 // 2026-11-18 加入「打包保留進度、琴聲吸引中不能攪局、短局打包 3 秒」後重新量測；
@@ -13,7 +13,7 @@ import { isCrazyGames } from '../platform'
 // 紫晶精靈在短局裡原本很弱（勝率約 0.1），主要靠加強「現身恐懼」並縮短冷卻補回來；首次捕獲約在開局 35～45 秒。
 // Cloudflare Pages 網站版維持原本的數值（SHORT 為 false 時每一項都和原本相同），
 // 唯一例外是打包保留進度與琴聲吸引中不能攪局（兩個版本共用），網站版 AI 豎琴精靈因此把凝視距離 15 → 12 補回勝率。
-const SHORT = isCrazyGames
+const SHORT = isShortSession
 
 // 遊戲平衡參數：整體對精靈有利，但哥布林靠團隊合作與技能仍有機會獲勝
 export const CONFIG = {

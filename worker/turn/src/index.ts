@@ -5,7 +5,7 @@
 export interface Env {
   TURN_KEY_ID: string
   TURN_KEY_API_TOKEN: string
-  // 允許呼叫的網頁來源，逗號分隔；支援 https://*.crazygames.com 這種子網域萬用字元
+  // 允許呼叫的網頁來源，逗號分隔；支援 https://*.itch.zone 這種子網域萬用字元
   ALLOWED_ORIGINS: string
   // 憑證有效秒數（預設 2 小時）。遊戲端（src/net/ice.ts）在到期前 1 小時換新，所以要大於 3600 才會快取
   TURN_TTL?: string

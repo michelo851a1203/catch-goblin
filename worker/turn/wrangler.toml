@@ -1,5 +1,7 @@
 # Cloudflare TURN 憑證 Worker（見 README「多人連線設定」）
-# 部署：GitHub Actions（.github/workflows/crazygames.yml）在 crazy-game 分支推送時自動部署
+# 部署：itchio 分支手動部署（cd worker/turn && bunx wrangler deploy）。
+#   注意：GitHub Actions（.github/workflows/crazygames.yml）在 crazy-game 分支推送時也會自動部署，
+#   會用 crazy-game 分支的設定覆蓋這裡（拿掉 itch.io），暫停 CrazyGames 期間不要推 crazy-game 分支
 # 金鑰用 secret 設定，不要寫在這裡：
 #   bunx wrangler secret put TURN_KEY_ID
 #   bunx wrangler secret put TURN_KEY_API_TOKEN
@@ -8,12 +10,12 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
 [vars]
-# CrazyGames 的遊戲檔案放在 <slug>.game-files.crazygames.com；pages.dev 是 GitHub Actions 部署的測試站
-# 拿到 CrazyGames 的 slug 後，建議把 https://*.crazygames.com 改成 https://<slug>.game-files.crazygames.com
+# itch.io 的 HTML5 遊戲在 iframe 裡執行，來源是 https://html-classic.itch.zone；pages.dev 是網站版
+# CrazyGames 暫停上架（2026-11-24），已移除 https://*.crazygames.com；之後回去再加回來
 # 正式環境不允許 localhost。本機用 `wrangler dev` 測 Worker 時，在 worker/turn/.dev.vars 覆寫：
 #   ALLOWED_ORIGINS="http://localhost:5173,http://localhost:4173"
 # （本機 `bun run dev` 連不到正式 Worker 時會自動退回 STUN，同一台電腦 / 同網段的多人連線不受影響）
-ALLOWED_ORIGINS = "https://*.crazygames.com,https://elf-and-goblins.pages.dev"
+ALLOWED_ORIGINS = "https://*.itch.zone,https://elf-and-goblins.pages.dev"
 # 憑證有效 2 小時（遊戲端到期前 1 小時換新，所以必須大於 3600）
 TURN_TTL = "7200"
 
