@@ -91,8 +91,7 @@ jobs:
           retention-days: 1
 
   # 網站：https://elf-and-goblins.pages.dev
-  # Cloudflare Pages 專案的正式（production）分支名稱仍是 crazy-game，所以 --branch 維持 crazy-game 才會更新正式網址；
-  # 若在 Cloudflare 後台把正式分支改成 itchio，這裡也要一起改
+  # --branch 必須等於 Cloudflare Pages 專案設定的正式（production）分支，否則只會部署成 Preview、正式網址不會更新
   # 只下載已建置好的網站檔案並執行 wrangler，不 checkout、不安裝相依套件
   deploy-website:
     if: github.ref == 'refs/heads/itchio'
@@ -109,6 +108,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # 固定 wrangler 版本：未指定時 wrangler-action 會裝最新版，4.168.0 用相同指令卻部署成 Preview（正式網址沒更新）
-          wranglerVersion: '4.166.0'
-          command: pages deploy dist --project-name=elf-and-goblins --branch=crazy-game
+          command: pages deploy dist --project-name=elf-and-goblins --branch=itchio
