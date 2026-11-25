@@ -1,6 +1,6 @@
-name: CrazyGames build & Cloudflare deploy
+name: itch.io build & Cloudflare deploy
 
-# 只監聽 crazy-game 分支；main 分支的 GitHub Pages 部署（deploy.yml）不受影響
+# 只監聽 itchio 分支（2026-11-25 起由 crazy-game 改為 itchio）；main 分支的 GitHub Pages 部署（deploy.yml）不受影響
 #
 # 需要在 repo 的 Settings → Secrets and variables → Actions 設定：
 #   Secrets
@@ -12,21 +12,21 @@ name: CrazyGames build & Cloudflare deploy
 # TURN 金鑰（TURN_KEY_ID / TURN_KEY_API_TOKEN）只設定在 Worker 上，不放在 GitHub
 on:
   push:
-    branches: [crazy-game]
+    branches: [itchio]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: crazygames
+  group: itchio
   cancel-in-progress: true
 
 jobs:
   # TURN 憑證 Worker：遊戲多人連線用
   turn:
     # 手動觸發時若選了其他分支就不執行
-    if: github.ref == 'refs/heads/crazy-game'
+    if: github.ref == 'refs/heads/itchio'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -42,7 +42,7 @@ jobs:
           command: deploy
 
   build:
-    if: github.ref == 'refs/heads/crazy-game'
+    if: github.ref == 'refs/heads/itchio'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -64,15 +64,19 @@ jobs:
         env:
           VITE_TURN_URL: ${{ vars.VITE_TURN_URL }}
 
-      # 下載後解壓得到的就是遊戲檔案，重新壓成 zip（index.html 在最上層）即可上傳到 CrazyGames Developer Portal
+      # 下載後解壓得到的就是遊戲檔案，重新壓成 zip（index.html 在最上層）即可上傳到 itch.io
+      # 排除項目與 package:itch 相同
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: crazygames-build
-          path: dist
+          name: itchio-build
+          path: |
+            dist
+            !dist/elf-preview.html
+            !dist/assets/elfPreview-*
           retention-days: 30
 
       # 網站版：同一份程式碼再建置一次，設定 SITE_URL 注入 SEO / 社群卡片 / robots / sitemap，並拿掉 CrazyGames SDK（見 site/plugin.ts）。
-      # 上面上傳的 crazygames-build artifact 已經建置完成，不受影響
+      # 上面上傳的 itchio-build artifact 已經建置完成，不受影響
       - name: Build website (SEO + social cards)
         run: bun run build
         env:
@@ -86,10 +90,12 @@ jobs:
           path: dist
           retention-days: 1
 
-  # 網站：https://elf-and-goblins.pages.dev（正式分支為 crazy-game）
+  # 網站：https://elf-and-goblins.pages.dev
+  # Cloudflare Pages 專案的正式（production）分支名稱仍是 crazy-game，所以 --branch 維持 crazy-game 才會更新正式網址；
+  # 若在 Cloudflare 後台把正式分支改成 itchio，這裡也要一起改
   # 只下載已建置好的網站檔案並執行 wrangler，不 checkout、不安裝相依套件
   deploy-website:
-    if: github.ref == 'refs/heads/crazy-game'
+    if: github.ref == 'refs/heads/itchio'
     needs: build
     runs-on: ubuntu-latest
     steps:

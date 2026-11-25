@@ -1,7 +1,7 @@
 # Cloudflare TURN 憑證 Worker（見 README「多人連線設定」）
-# 部署：itchio 分支手動部署（cd worker/turn && bunx wrangler deploy）。
-#   注意：GitHub Actions（.github/workflows/crazygames.yml）在 crazy-game 分支推送時也會自動部署，
-#   會用 crazy-game 分支的設定覆蓋這裡（拿掉 itch.io），暫停 CrazyGames 期間不要推 crazy-game 分支
+# 部署：GitHub Actions（.github/workflows/itchio.yml）在 itchio 分支推送時自動部署
+#   注意：crazy-game 分支上仍有舊的 crazygames.yml，推 crazy-game 會用那邊的設定覆蓋這裡（拿掉 itch.io），
+#   暫停 CrazyGames 期間不要推 crazy-game 分支
 # 金鑰用 secret 設定，不要寫在這裡：
 #   bunx wrangler secret put TURN_KEY_ID
 #   bunx wrangler secret put TURN_KEY_API_TOKEN
