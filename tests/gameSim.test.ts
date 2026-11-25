@@ -5,7 +5,7 @@
 import './sim/env'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('three', async (importOriginal) => {
   const THREE = await importOriginal<typeof import('three')>()
@@ -75,7 +75,7 @@ vi.setConfig({ testTimeout: 60000 })
 // 每個測試開始前讓出一次（setImmediate 會先處理 I/O），RPC 就能即時回應；不影響亂數與 golden
 beforeEach(() => new Promise<void>((r) => setImmediate(r)))
 
-const { makeGame, runMultiplayer, runSolo } = await import('./sim/harness')
+const { makeGame, runMultiplayer, runSolo, seeded } = await import('./sim/harness')
 const { sfxLog } = await import('./sim/sfxLog')
 type RunResult = ReturnType<typeof runSolo>
 
@@ -270,6 +270,14 @@ describe('紫晶精靈隱身的狀態轉移', () => {
 describe('紫晶精靈：瞬移後的鎖定衝鋒', async () => {
   const THREE = await import('three')
   const { CONFIG } = await import('../src/game/config')
+  // 開局位置與哥布林 AI 用到 Math.random：固定種子，結果才不受前面測試消耗的亂數影響（CI 曾因此偶發失敗）
+  const origRandom = Math.random
+  beforeEach(() => {
+    Math.random = seeded(1)
+  })
+  afterEach(() => {
+    Math.random = origRandom
+  })
   type Ev = { e: string; g?: number }
   const run = (game: ReturnType<typeof makeGame>, sec: number) => {
     for (let i = 0; i < Math.round(sec * 30); i++) (game as unknown as { tick(dt: number, r: boolean): void }).tick(1 / 30, false)
