@@ -109,4 +109,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # 固定 wrangler 版本：未指定時 wrangler-action 會裝最新版，4.168.0 用相同指令卻部署成 Preview（正式網址沒更新）
+          wranglerVersion: '4.166.0'
           command: pages deploy dist --project-name=elf-and-goblins --branch=crazy-game
