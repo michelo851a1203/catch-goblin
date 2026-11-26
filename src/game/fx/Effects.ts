@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { groundAt } from '../ground'
 import { Particles } from './Particles'
 import { CELL, glowSprite } from './atlas'
 import { makeSprite } from '../toon'
@@ -176,6 +177,8 @@ export class FxSystem {
   soft = new Particles(2500, false)
   fires: FireSource[] = []
   caves: { center: THREE.Vector3; radius: number }[] = []
+  // 環境特效：草原飄花瓣、蘑菇秘境飄發光孢子
+  ambientStyle: 'petals' | 'spores' = 'petals'
   private timed: Timed[] = []
   private acc = new Map<string, number>()
   private scene: THREE.Scene
@@ -273,8 +276,20 @@ export class FxSystem {
       }
     })
 
+    if (!inCave && this.ambientStyle === 'spores') {
+      // 蘑菇林裡緩緩上升的發光孢子
+      const spores = [0x8ff8ff, 0xb48cff, 0xffd27a, 0x9effc0]
+      for (let k = 0; k < this.rate('spore', 9, dt); k++) {
+        const a = Math.random() * Math.PI * 2, r = rnd(2, 20)
+        this.glow.spawn({
+          x: focus.x + Math.cos(a) * r, y: rnd(0.2, 4), z: focus.z + Math.sin(a) * r,
+          vx: rnd(-0.15, 0.15), vy: rnd(0.1, 0.4), vz: rnd(-0.15, 0.15),
+          color: spores[Math.floor(Math.random() * spores.length)], size: rnd(0.08, 0.17), life: rnd(3, 5.5), cell: CELL.glow, wobble: 0.6, fadeIn: 1, alpha: 0.85,
+        })
+      }
+    }
     // 草原上飄落的花瓣與光點
-    if (!inCave) {
+    else if (!inCave) {
       const petals = [0xffc8dc, 0xffffff, 0xfff1a8, 0xc8f0a0]
       for (let k = 0; k < this.rate('petal', 7, dt); k++) {
         const a = Math.random() * Math.PI * 2, r = rnd(5, 22)
@@ -362,6 +377,7 @@ export class FxSystem {
   flash(pos: THREE.Vector3, color: number, size: number, life: number) {
     const s = glowSprite(color, size, 1)
     s.position.copy(pos)
+    s.position.y += groundAt(pos.x, pos.z)
     s.renderOrder = 8
     const mat = s.material as THREE.SpriteMaterial
     this.add(s, life, (k) => {
@@ -375,7 +391,7 @@ export class FxSystem {
     mat.uniforms.uW.value = width
     const m = new THREE.Mesh(new THREE.PlaneGeometry(radius * 2, radius * 2), mat)
     m.rotation.x = -Math.PI / 2
-    m.position.set(pos.x, 0.12, pos.z)
+    m.position.set(pos.x, 0.12 + groundAt(pos.x, pos.z), pos.z)
     m.renderOrder = 4
     this.add(m, life, (k) => {
       mat.uniforms.uP.value = 1 - Math.pow(1 - k, 2.2)
@@ -403,7 +419,7 @@ export class FxSystem {
     const mat = new THREE.SpriteMaterial({ map: powTexture(text, fill), transparent: true, depthTest: false })
     mat.map!.userData.cached = true
     const s = new THREE.Sprite(mat)
-    s.position.set(pos.x, 2.3, pos.z)
+    s.position.set(pos.x, 2.3 + groundAt(pos.x, pos.z), pos.z)
     s.renderOrder = 12
     this.add(s, 0.9, (k) => {
       const pop = k < 0.2 ? (k / 0.2) * 1.35 : 1.35 - Math.min(0.25, (k - 0.2) * 1.2)
@@ -416,7 +432,7 @@ export class FxSystem {
   // rise：每秒上升的高度。玩家自己的提示（例如「沒有可以攪局的目標」）上升少一點，鏡頭拉近時才不會飄進上方的提示列
   floatText(text: string, pos: THREE.Vector3, color: string, scale = 0.75, rise = 0.9) {
     const s = makeSprite(text, scale, { fg: color, font: 60, w: 512, h: 128 })
-    s.position.set(pos.x, 2.3, pos.z)
+    s.position.set(pos.x, 2.3 + groundAt(pos.x, pos.z), pos.z)
     const mat = s.material as THREE.SpriteMaterial
     const base = s.scale.clone()
     this.add(s, 1.2, (k, dt) => {
@@ -439,7 +455,7 @@ export class FxSystem {
     outer.rotation.x = Math.PI / 2
     outer.position.z = len / 2
     g.add(outer)
-    g.position.set(origin.x, 1.55, origin.z)
+    g.position.set(origin.x, 1.55 + groundAt(origin.x, origin.z), origin.z)
     g.rotation.y = Math.atan2(dir.x, dir.z)
     this.add(g, 0.75, (k) => {
       const grow = Math.min(1, k * 8)
@@ -483,11 +499,13 @@ export class FxSystem {
         group.visible = alpha > 0.01
         if (!group.visible) return
         group.position.copy(at)
+        group.position.y += groundAt(at.x, at.z)
         group.rotation.y += dt * 1.4
         mat.uniforms.uT.value += dt
         mat.uniforms.uA.value = alpha
         if (active) {
           for (let k = 0; k < this.rate('staffnote', 9, dt); k++) {
+            // 粒子會自己加上地面高度，這裡用不含高度的 at
             helixPoint(Math.random(), p).applyAxisAngle(new THREE.Vector3(0, 1, 0), group.rotation.y).add(at)
             this.glow.spawn({
               x: p.x, y: p.y, z: p.z, vy: rnd(0.3, 0.8), vx: rnd(-0.3, 0.3), vz: rnd(-0.3, 0.3),

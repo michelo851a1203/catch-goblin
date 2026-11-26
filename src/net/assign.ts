@@ -1,4 +1,4 @@
-import { CONFIG } from '../game/config'
+import { CONFIG, MAP_IDS, isMapId, type MapId } from '../game/config'
 
 // 多人房間的角色分配（純函式，方便測試）
 export type Pick = 'elf' | 'goblin' | 'random'
@@ -33,4 +33,30 @@ export function assignSlots(players: { id: string; pick: Pick }[], rand = Math.r
   const order = players.map((p) => p.id).filter((id) => goblins.includes(id) || randoms.includes(id))
   order.forEach((id, i) => out.set(id, i))
   return out
+}
+
+// ───── 地形投票 ─────
+// 房主按下開始後先分配好角色，再讓大家投票選地形：精靈 1.5 票、每隻哥布林 1 票，倒數 VOTE_SECONDS 秒。
+// 票數最高的地形勝出；平手時從平手的地形中隨機，沒人投票時從所有地形中隨機
+export const VOTE_SECONDS = 20
+
+export function voteWeight(slot: Slot) {
+  return slot === 'elf' ? 1.5 : 1
+}
+
+// votes：玩家 id → 投的地形；slots：玩家 id → 角色（不在 slots 裡的票不算，例如投完票就離開的玩家）
+export function tallyVotes(votes: Record<string, MapId>, slots: Map<string, Slot>): Record<MapId, number> {
+  const out = Object.fromEntries(MAP_IDS.map((m) => [m, 0])) as Record<MapId, number>
+  for (const [id, map] of Object.entries(votes)) {
+    const slot = slots.get(id)
+    if (slot === undefined || !isMapId(map)) continue
+    out[map] += voteWeight(slot)
+  }
+  return out
+}
+
+export function pickMap(tally: Record<MapId, number>, rand = Math.random): MapId {
+  const top = Math.max(...MAP_IDS.map((m) => tally[m]))
+  const best = top > 0 ? MAP_IDS.filter((m) => tally[m] === top) : [...MAP_IDS]
+  return best[Math.floor(rand() * best.length)] ?? MAP_IDS[0]
 }

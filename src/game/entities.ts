@@ -24,6 +24,11 @@ export class Actor {
   net: { x: number; z: number; yaw: number; t: number } | null = null
   // 房主強制移動角色（掙脫推開、被捕獲）時遞增，操控者看到變化就以房主位置為準
   corr = 0
+  // 傳送後的冷卻（秒，房主 / 單機）；彈跳蘑菇的拋物線（純畫面效果）
+  warpCd = 0
+  // AI：目前導航路線上要走進的傳送點（AI 只會走進自己要去的傳送點，路過其他的不會被傳走）
+  routeWarp = -1
+  hop: { from: THREE.Vector3; t: number; dur: number; peak: number } | null = null
 
   constructor(model: CharacterModel, radius: number) {
     this.model = model

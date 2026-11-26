@@ -1,12 +1,12 @@
 import { reactive } from 'vue'
 import Peer, { type DataConnection, type PeerOptions } from 'peerjs'
-import { MAX_PLAYERS, assignSlots, canPick, type Pick, type Slot } from './assign'
+import { MAX_PLAYERS, VOTE_SECONDS, assignSlots, canPick, pickMap, tallyVotes, type Pick, type Slot } from './assign'
 import { store } from '../crazygames'
 import { iceServers } from './ice'
 import { NAME_MAX, cleanName } from './names'
 import { isCrazyGames, isItch } from '../platform'
 import { t } from '../i18n'
-import { isElfKind, type ElfKind } from '../game/config'
+import { isElfKind, isMapId, type ElfKind, type MapId } from '../game/config'
 
 // 多人連線：使用 PeerJS（WebRTC P2P）。預設使用 PeerJS 的公用信令伺服器，可用 VITE_PEER_* 改成自架的 PeerServer。
 // PeerJS 內建的 TURN 網域已無法解析，TURN 改由 Cloudflare 提供（見 ./ice.ts 與 worker/turn）。
@@ -28,7 +28,7 @@ async function peerOptions(): Promise<PeerOptions> {
   return { ...SIGNALING, config: { iceServers: await iceServers() } }
 }
 // 通訊格式版本：不同版本的遊戲不能同房
-const PROTO = 4
+const PROTO = 5
 const TIMEOUT = 15000
 // ICE 斷線後等待恢復的時間，超過就視為對方離線
 const ICE_GRACE = 8000
@@ -108,8 +108,18 @@ function randomCode() {
   const n = crypto.getRandomValues(new Uint32Array(1))[0] % 10 ** CODE_LEN
   return String(n).padStart(CODE_LEN, '0')
 }
-// 房間的生命週期：連線中 → 大廳 ⇄ 遊戲中；任何時候都可能 → 已關閉（離開、被拒絕、房主離開、斷線，不會再回來）
-export type RoomPhase = 'connecting' | 'lobby' | 'playing' | 'closed'
+// 房間的生命週期：連線中 → 大廳 → 投票選地形 → 遊戲中 → 大廳…；任何時候都可能 → 已關閉（離開、被拒絕、房主離開、斷線，不會再回來）
+export type RoomPhase = 'connecting' | 'lobby' | 'voting' | 'playing' | 'closed'
+
+// 投票選地形：房主按下開始時已分配好角色（決定每個人的票數），倒數結束（或全員投完）後開局
+export interface MapVote {
+  slots: [string, Slot][]
+  kind: ElfKind
+  // 玩家 id → 投的地形
+  votes: Record<string, MapId>
+  // 本機時鐘（Date.now()）的截止時間
+  endsAt: number
+}
 
 export interface LobbyPlayer {
   id: string
@@ -126,6 +136,8 @@ export interface NetLink {
   me: Slot
   // 這一局的精靈角色（選精靈的玩家決定；精靈由 AI 控制時由房主隨機）
   elfKind: ElfKind
+  // 這一局的地形（投票決定）
+  map: MapId
   // 其他真人玩家：peer id → 角色
   peers: Map<string, Slot>
   // 角色 → 玩家編號（含自己）
@@ -146,7 +158,9 @@ type LobbyMsg =
   | { t: 'name'; name: string }
   | { t: 'lobby'; players: LobbyPlayer[] }
   | { t: 'reject'; why: RoomError }
-  | { t: 'start'; slots: [string, Slot][]; kind?: ElfKind }
+  | { t: 'vote'; slots: [string, Slot][]; kind: ElfKind; votes: Record<string, MapId>; ms: number }
+  | { t: 'mapVote'; map: MapId }
+  | { t: 'start'; slots: [string, Slot][]; kind?: ElfKind; map?: MapId }
 
 interface Conn {
   reliable?: DataConnection
@@ -180,6 +194,7 @@ export class Room {
     host: false,
     me: '',
     players: [] as LobbyPlayer[],
+    vote: null as MapVote | null,
   })
   // 開局（房主按下開始、或收到房主的開局訊息）
   onStart: ((link: NetLink) => void) | null = null
@@ -205,6 +220,8 @@ export class Room {
   private dropped = new Map<string, LobbyPlayer & { slot: Slot }>()
   // 房主：被踢出的 peer id 與重新連線識別碼（這個房間不再接受）
   private banned = new Set<string>()
+  // 房主：投票倒數 / 全員投完後的開局計時器
+  private voteTimer = 0
 
   private constructor(opts: PeerOptions, id?: string) {
     this.peer = id ? new Peer(id, opts) : new Peer(opts)
@@ -305,22 +322,68 @@ export class Room {
     return canPick(this.state.players, this.state.me, pick)
   }
 
-  // 房主開局
+  // 房主按下開始：分配角色，進入投票選地形（倒數 VOTE_SECONDS 秒）
   start() {
     if (!this.state.host || this.state.phase !== 'lobby') return
     const slots = [...assignSlots(this.state.players)]
     const elfId = slots.find(([, slot]) => slot === 'elf')?.[0]
     const chosen = this.state.players.find((p) => p.id === elfId)?.elf
     const kind: ElfKind = chosen ?? (Math.random() < 0.5 ? 'harp' : 'violin')
-    this.broadcast({ t: 'start', slots, kind })
+    this.state.vote = { slots, kind, votes: {}, endsAt: Date.now() + VOTE_SECONDS * 1000 }
+    this.state.phase = 'voting'
+    this.broadcastVote()
+    clearTimeout(this.voteTimer)
+    this.voteTimer = window.setTimeout(() => this.finishVote(), VOTE_SECONDS * 1000)
+  }
+
+  // 投票（可以改票）
+  vote(map: MapId) {
+    if (this.state.phase !== 'voting') return
+    if (this.state.host) this.applyVote(this.state.me, map)
+    else this.sendTo(this.hostId, { t: 'mapVote', map })
+  }
+
+  // 這一局自己的角色（投票中才有）
+  get mySlot(): Slot | undefined {
+    return this.state.vote?.slots.find(([id]) => id === this.state.me)?.[1]
+  }
+
+  private broadcastVote() {
+    const v = this.state.vote
+    if (!v) return
+    this.broadcast({ t: 'vote', slots: v.slots, kind: v.kind, votes: v.votes, ms: Math.max(0, v.endsAt - Date.now()) })
+  }
+
+  // 房主：記下一票；還在房間裡的玩家都投完時，稍等一下（讓大家看到最後一票）就開局
+  private applyVote(id: string, map: unknown) {
+    const v = this.state.vote
+    if (this.state.phase !== 'voting' || !v || !isMapId(map) || !v.slots.some(([pid]) => pid === id)) return
+    v.votes[id] = map
+    this.broadcastVote()
+    if (this.state.players.every((p) => v.votes[p.id])) {
+      clearTimeout(this.voteTimer)
+      this.voteTimer = window.setTimeout(() => this.finishVote(), 1200)
+    }
+  }
+
+  // 房主：開票並開局。投票期間離開的玩家不算票，角色交給 AI
+  private finishVote() {
+    const s = this.state
+    const v = s.vote
+    clearTimeout(this.voteTimer)
+    if (!s.host || s.phase !== 'voting' || !v) return
+    const slots = v.slots.filter(([id]) => this.isPlayer(id))
+    const map = pickMap(tallyVotes(v.votes, new Map(slots)))
+    this.broadcast({ t: 'start', slots, kind: v.kind, map })
     // 遊戲中房間維持可被搜尋，斷線的玩家才能用房號連回來（新玩家仍會被拒絕）
-    this.begin(slots, kind)
+    this.begin(slots, v.kind, map)
   }
 
   // 一局結束後回到大廳
   backToLobby() {
     if (this.closed || this.state.phase !== 'playing') return
     this.state.phase = 'lobby'
+    this.state.vote = null
     this.link = null
     if (this.state.host) {
       this.dropped.clear()
@@ -516,6 +579,8 @@ export class Room {
         const token = String((m as { token?: unknown }).token ?? '').slice(0, 20)
         if (this.banned.has(from) || (token && this.banned.has(token))) return this.reject(from, 'kicked')
         if (s.phase === 'playing') return this.rejoin(from, token, cleanName((m as { name?: unknown }).name))
+        // 投票選地形中：角色已經分配好，新玩家等下一局
+        if (s.phase === 'voting') return this.reject(from, 'started')
         const known = this.isPlayer(from)
         if (!known && s.players.length >= MAX_PLAYERS) return this.reject(from, 'full')
         // 同一個識別碼已經在房間內（例如同一個瀏覽器開兩個分頁）時不記錄，避免互相頂替
@@ -530,7 +595,8 @@ export class Room {
       }
       // 還沒被接受為玩家的連線只能送 hello
       if (!this.isPlayer(from)) return
-      if (m.t === 'pick') return this.applyPick(from, (m as { pick: Pick }).pick, (m as { elf?: unknown }).elf)
+      if (m.t === 'pick') return s.phase === 'lobby' ? this.applyPick(from, (m as { pick: Pick }).pick, (m as { elf?: unknown }).elf) : undefined
+      if (m.t === 'mapVote') return this.applyVote(from, (m as { map?: unknown }).map)
       if (m.t === 'name') return this.applyName(from, cleanName((m as { name?: unknown }).name))
     } else if (from === this.hostId) {
       if (m.t === 'lobby') {
@@ -541,10 +607,22 @@ export class Room {
         return
       }
       if (m.t === 'reject') return this.close((m as { why: RoomError }).why)
+      if (m.t === 'vote') {
+        // 還在結算畫面的玩家也直接進入投票
+        const v = m as { slots?: unknown; kind?: unknown; votes?: unknown; ms?: unknown }
+        if (!Array.isArray(v.slots) || (s.phase !== 'lobby' && s.phase !== 'voting' && s.phase !== 'playing')) return
+        const votes: Record<string, MapId> = {}
+        if (v.votes && typeof v.votes === 'object') for (const [id, map] of Object.entries(v.votes)) if (isMapId(map)) votes[id] = map
+        const ms = Math.min(VOTE_SECONDS * 1000, Math.max(0, Number(v.ms) || 0))
+        s.vote = { slots: v.slots as [string, Slot][], kind: isElfKind(v.kind) ? v.kind : 'harp', votes, endsAt: Date.now() + ms }
+        if (s.phase === 'playing') this.link = null
+        s.phase = 'voting'
+        return
+      }
       if (m.t === 'start') {
         // 還在結算畫面的玩家也直接進入下一局
-        const kind = (m as { kind?: unknown }).kind
-        if (s.players.some((p) => p.id === s.me)) this.begin((m as { slots: [string, Slot][] }).slots, isElfKind(kind) ? kind : 'harp')
+        const { kind, map } = m as { kind?: unknown; map?: unknown }
+        if (s.players.some((p) => p.id === s.me)) this.begin((m as { slots: [string, Slot][] }).slots, isElfKind(kind) ? kind : 'harp', isMapId(map) ? map : 'meadow')
         return
       }
     }
@@ -587,7 +665,7 @@ export class Room {
     s.players.push(player)
     s.players.sort((a, b) => a.n - b.n)
     this.broadcast({ t: 'lobby', players: s.players })
-    this.sendTo(from, { t: 'start', slots: [[s.me, link.me], ...link.peers], kind: link.elfKind })
+    this.sendTo(from, { t: 'start', slots: [[s.me, link.me], ...link.peers], kind: link.elfKind, map: link.map })
   }
 
   private applyName(id: string, name: string) {
@@ -614,10 +692,20 @@ export class Room {
     const slot = this.link?.peers.get(peer)
     if (s.phase === 'playing' && token && slot !== undefined) this.dropped.set(token, { ...p, slot })
     this.broadcast({ t: 'lobby', players: s.players })
+    // 投票中離開：收回這一票；剩下的人都投完了就開局
+    const v = s.vote
+    if (s.phase === 'voting' && v) {
+      delete v.votes[peer]
+      this.broadcastVote()
+      if (s.players.every((x) => v.votes[x.id])) {
+        clearTimeout(this.voteTimer)
+        this.voteTimer = window.setTimeout(() => this.finishVote(), 1200)
+      }
+    }
     for (const fn of this.leaveListeners) fn(peer)
   }
 
-  private begin(slots: [string, Slot][], elfKind: ElfKind) {
+  private begin(slots: [string, Slot][], elfKind: ElfKind, map: MapId) {
     const s = this.state
     const all = new Map(slots)
     const numbers = new Map<Slot, number>()
@@ -632,6 +720,7 @@ export class Room {
     // 角色分配裡沒有自己（不合法的開局訊息）：留在大廳，不要進入沒有連線介面的 playing
     if (me === undefined) return
     s.phase = 'playing'
+    s.vote = null
     all.delete(s.me)
     // 加入者只跟房主通訊，其他加入者由房主的 AI 狀態一併廣播
     const peers = s.host ? all : new Map<string, Slot>()
@@ -643,6 +732,7 @@ export class Room {
       host: s.host,
       me,
       elfKind,
+      map,
       peers,
       numbers,
       names,
@@ -657,6 +747,7 @@ export class Room {
 
   private dispose() {
     this.state.phase = 'closed'
+    clearTimeout(this.voteTimer)
     for (const e of this.conns.values()) {
       clearTimeout(e.iceTimer)
       clearTimeout(e.helloTimer)

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { groundAt } from '../ground'
 import { CELL } from '../fx/atlas'
 import type { ParticleSpec } from '../fx/Particles'
 import { noOutline } from '../toon'
@@ -109,7 +110,7 @@ export class ElfMagicFx {
     r.mat.uniforms.uP.value = 0
     r.mat.uniforms.uA.value = 1
     r.mesh.scale.setScalar(radius)
-    r.mesh.position.set(pos.x, 0.08, pos.z)
+    r.mesh.position.set(pos.x, 0.08 + groundAt(pos.x, pos.z), pos.z)
     r.mesh.visible = true
     return r
   }
@@ -249,7 +250,7 @@ export class ElfMagicFx {
       r.mat.uniforms.uP.value = 1 - Math.pow(1 - k, 2.4)
       r.mat.uniforms.uA.value = (1 - k) * Math.min(1, k * 8)
       r.mat.uniforms.uT.value += dt
-      if (r.follow) r.mesh.position.set(r.follow.x, 0.08, r.follow.z)
+      if (r.follow) r.mesh.position.set(r.follow.x, 0.08 + groundAt(r.follow.x, r.follow.z), r.follow.z)
       if (r.life <= 0) {
         r.mesh.visible = false
         r.follow = null

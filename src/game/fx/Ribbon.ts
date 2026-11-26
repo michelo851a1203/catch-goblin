@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { groundAt } from '../ground'
 import { noOutline } from '../toon'
 
 // 星空風絲帶：沿著移動軌跡留下的發光緞帶。每條緞帶保存最近 N 個錨點，每幀重建三角帶；
@@ -112,9 +113,11 @@ export class Ribbon {
   // 新增錨點：p 為緞帶中心、side 為寬度方向
   push(p: THREE.Vector3, side: THREE.Vector3) {
     const last = this.anchors[this.anchors.length - 1]
-    if (last && last.p.distanceToSquared(p) < 0.0004) return
+    if (last && (last.p.x - p.x) ** 2 + (last.p.z - p.z) ** 2 + (last.p.y - p.y - groundAt(p.x, p.z)) ** 2 < 0.0004) return
     if (this.anchors.length >= this.max) this.anchors.shift()
-    this.anchors.push({ p: p.clone(), side: side.clone().normalize(), t: this.time })
+    const at = p.clone()
+    at.y += groundAt(p.x, p.z)
+    this.anchors.push({ p: at, side: side.clone().normalize(), t: this.time })
   }
 
   clear() {

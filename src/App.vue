@@ -3,7 +3,7 @@ import { onMounted, ref, shallowRef, watch } from 'vue'
 import CharacterSelect from './components/CharacterSelect.vue'
 import GameView from './components/GameView.vue'
 import RoomSheet from './components/RoomSheet.vue'
-import { isElfKind, type ElfKind, type Role } from './game/config'
+import { isElfKind, isMapId, type ElfKind, type MapId, type Role } from './game/config'
 import type { Room } from './net/room'
 import * as screens from './screen'
 import * as crazygames from './crazygames'
@@ -22,6 +22,9 @@ const qRole: Role | null = q === 'elf' || q === 'goblin' ? q : null
 // ?elf=violin / ?elf=harp 指定精靈角色（測試用）；單機當哥布林時，精靈（AI）沒指定就隨機
 const qElf = new URLSearchParams(location.search).get('elf')
 const elfKind = ref<ElfKind>(isElfKind(qElf) ? qElf : 'harp')
+// 單機的地形：選完角色後選擇（?map=mushroom 可直接指定，測試用）
+const qMap = new URLSearchParams(location.search).get('map')
+const mapId = ref<MapId>(isMapId(qMap) ? qMap : 'meadow')
 const round = ref(0)
 let busy = false
 
@@ -84,7 +87,7 @@ watch(
 
 // 每回合開始前播插頁廣告（是否真的播放由 CrazyGames 決定）。
 // 廣告期間畫面可能已經變了（例如收到好友邀請而回到選角畫面並自動加入房間），這時不再進入單機對局
-async function newRound(r: Role, kind?: ElfKind) {
+async function newRound(r: Role, kind?: ElfKind, map?: MapId) {
   if (busy) return
   busy = true
   const from = screen.value
@@ -92,6 +95,7 @@ async function newRound(r: Role, kind?: ElfKind) {
   busy = false
   if (screen.value !== from) return
   go(screens.startSolo(from, r))
+  if (map) mapId.value = map
   if (r === 'elf') elfKind.value = kind ?? elfKind.value
   else if (!isElfKind(qElf)) elfKind.value = Math.random() < 0.5 ? 'harp' : 'violin'
   round.value++
@@ -110,6 +114,16 @@ function attach(r: Room) {
   }
   if (r.current) r.onStart(r.current)
 }
+
+// 房主按下開始 → 投票選地形：多人對局的結算畫面、多人連線的 sheet 都收起來，回到選角畫面投票
+watch(
+  () => room.value?.state.phase === 'voting',
+  (voting) => {
+    if (!voting) return
+    if (screen.value.kind === 'online') go(screens.backToLobby(screen.value))
+    go(screens.closeSheet(screen.value))
+  },
+)
 
 function leaveLobby() {
   go(screens.closeSheet(screen.value))
@@ -142,6 +156,7 @@ function leaveRoom() {
     :key="round"
     :role="screen.role"
     :elf-kind="elfKind"
+    :map="mapId"
     @restart="newRound(screen.role, elfKind)"
     @menu="go(screens.toMenu(screen))"
   />

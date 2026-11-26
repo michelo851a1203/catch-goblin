@@ -1,8 +1,9 @@
 import * as THREE from 'three'
-import { CONFIG } from './config'
+import { CONFIG, type MapId } from './config'
 import { mesh, noOutline, toon } from './toon'
 import { glowSprite } from './fx/atlas'
 import type { FireSource } from './fx/Effects'
+import { buildMushroomWorld } from './mushroomWorld'
 
 export interface Collider {
   x: number
@@ -17,6 +18,8 @@ export interface CaveGap {
   outer: THREE.Vector3
 }
 
+// 哥布林的據點：山洞（有兩個洞口的圓頂）或上層台地（只能經由傳送門 / 彈跳蘑菇進出）。
+// AI 的群聚、搬家、逃跑、精靈巡邏與哥布林雷達都以據點為單位（zoneOf）
 export interface Cave {
   id: number
   name: string
@@ -24,16 +27,85 @@ export interface Cave {
   radius: number
   gaps: CaveGap[]
   dome: THREE.Mesh[]
+  kind: 'cave' | 'plateau'
+}
+
+// 上層台地：圓形的高台，邊緣是擋路也擋視線的崖壁。region＝區域編號（地面是 0）
+export interface Plateau {
+  region: number
+  center: THREE.Vector3
+  radius: number
+  height: number
+}
+
+// 傳送：站進 from 的範圍（radius）就被送到 to（落點在對面傳送門的範圍外，不會立刻又被傳回來）。
+// portal＝雙向傳送門的其中一端（pair＝另一端）；bounce＝彈跳蘑菇（單向，從台地彈到地面）
+export interface Warp {
+  id: number
+  kind: 'portal' | 'bounce'
+  from: THREE.Vector3
+  region: number
+  radius: number
+  to: THREE.Vector3
+  toRegion: number
+  pair: number
+  color: number
+}
+
+// 孢子噴泉：每 period 秒噴出一團孢子霧，持續 duration 秒，期間霧裡擋住視線（不擋路）
+export interface SporeVent {
+  pos: THREE.Vector3
+  radius: number
+  period: number
+  duration: number
+  phase: number
+}
+
+// 地圖的光線與霧（由 Game 套用）
+export interface Theme {
+  fog: number
+  fogNear: number
+  fogFar: number
+  hemiSky: number
+  hemiGround: number
+  hemi: number
+  hemiCave: number
+  sun: number
+  sunColor: number
+  sunCave: number
+  // 環境特效：草原飄花瓣 / 蘑菇林飄孢子
+  ambient: 'petals' | 'spores'
+}
+
+const MEADOW_THEME: Theme = {
+  fog: 0xd6eefa, fogNear: 90, fogFar: 300, hemiSky: 0xdff0ff, hemiGround: 0x5a7a32, hemi: 1.6, hemiCave: 1.0,
+  sun: 2.4, sunColor: 0xfff0d0, sunCave: 1.5, ambient: 'petals',
 }
 
 export const GAP_HALF = 0.22
+
+// 山洞的配色；extra：地圖額外的洞口裝飾（水晶、提燈等）
+export interface CaveStyle {
+  rock: number
+  moss: number
+  boulder: number
+  floor: number
+  pillar: number
+  shroom: number
+  shroomGlow: number
+  halo: number
+  extra?: (world: World, center: THREE.Vector3, radius: number, gapAngles: number[]) => void
+}
+const MEADOW_CAVE: CaveStyle = {
+  rock: 0x8c7f6e, moss: 0x6d8a3e, boulder: 0x7a6e60, floor: 0x4a3f36, pillar: 0x6b6053, shroom: 0x5fd6c8, shroomGlow: 0x1f8a80, halo: 0x5fe6d8,
+}
 
 // 簡易 3D value noise（以座標決定，讓接縫頂點位移一致）
 function hash(x: number, y: number, z: number) {
   const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453
   return s - Math.floor(s)
 }
-function noise3(x: number, y: number, z: number) {
+export function noise3(x: number, y: number, z: number) {
   const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z)
   const xf = x - xi, yf = y - yi, zf = z - zi
   const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf), w = zf * zf * (3 - 2 * zf)
@@ -48,24 +120,42 @@ function noise3(x: number, y: number, z: number) {
 }
 
 let seed = 1337
-function rand() {
+export function rand() {
   seed = (seed * 16807) % 2147483647
   return (seed - 1) / 2147483646
 }
 
 export class World {
+  readonly map: MapId
   colliders: Collider[] = []
   caves: Cave[] = []
+  plateaus: Plateau[] = []
+  warps: Warp[] = []
+  vents: SporeVent[] = []
+  // 撒樹木、石頭時要避開的範圍（傳送門、落點、機關）
+  keepOut: { x: number; z: number; r: number }[] = []
+  theme: Theme = MEADOW_THEME
   cagePos = new THREE.Vector3(0, 0, 0)
   occluders: THREE.Object3D[] = []
   fires: FireSource[] = []
-  private fireLights: THREE.PointLight[] = []
-  private time = { value: 0 }
+  fireLights: THREE.PointLight[] = []
+  // 對局時間（由 Game 每一步更新）：孢子霧依這個時間決定開關，房主與加入者、無頭模擬都一致
+  simTime = 0
+  // 每幀的畫面更新（傳送門漩渦、孢子霧等，由地圖註冊）
+  animators: ((dt: number, t: number) => void)[] = []
+  // 彈跳蘑菇被踩到時的畫面效果（由地圖註冊）
+  onBounce: ((warp: number) => void) | null = null
+  time = { value: 0 }
   scene: THREE.Scene
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, map: MapId = 'meadow') {
     this.scene = scene
+    this.map = map
     seed = 1337
+    if (map === 'mushroom') {
+      buildMushroomWorld(this)
+      return
+    }
     this.buildSky()
     this.buildGround()
     const caveDefs = [
@@ -89,6 +179,71 @@ export class World {
       if (dx * dx + dz * dz < (c.radius - 1.3) ** 2) return c.id
     }
     return -1
+  }
+
+  // 所在區域：0＝地面，其餘為台地（只能經由傳送門 / 彈跳蘑菇往來）
+  regionOf(p: { x: number; z: number }): number {
+    for (const pl of this.plateaus) {
+      const dx = p.x - pl.center.x, dz = p.z - pl.center.z
+      if (dx * dx + dz * dz < pl.radius * pl.radius) return pl.region
+    }
+    return 0
+  }
+
+  // 畫面上的地面高度（遊戲邏輯一律在 y = 0 計算，見 ground.ts）
+  heightAt = (x: number, z: number): number => {
+    for (const pl of this.plateaus) {
+      const dx = x - pl.center.x, dz = z - pl.center.z
+      if (dx * dx + dz * dz < pl.radius * pl.radius) return pl.height
+    }
+    return 0
+  }
+
+  // 從 pos（區域 from）前往 target（區域 to）要先走進哪個傳送點：在傳送點組成的圖上找最短路徑，回傳第一個。
+  // avoid：要避開的位置（逃離精靈時，離精靈近的傳送點代價較高）
+  route(pos: THREE.Vector3, from: number, target: THREE.Vector3, to: number, avoid?: THREE.Vector3): Warp | null {
+    const W = this.warps
+    const cost = new Array<number>(W.length).fill(Infinity)
+    const first = new Array<number>(W.length).fill(-1)
+    const done = new Array<boolean>(W.length).fill(false)
+    for (const w of W) {
+      if (w.region !== from) continue
+      let c = Math.hypot(pos.x - w.from.x, pos.z - w.from.z)
+      if (avoid) c += Math.max(0, 16 - Math.hypot(avoid.x - w.from.x, avoid.z - w.from.z)) * 4
+      cost[w.id] = c
+      first[w.id] = w.id
+    }
+    let best: Warp | null = null
+    let bestCost = Infinity
+    for (;;) {
+      let u = -1
+      for (let i = 0; i < W.length; i++) if (!done[i] && cost[i] < Infinity && (u < 0 || cost[i] < cost[u])) u = i
+      if (u < 0 || cost[u] >= bestCost) break
+      done[u] = true
+      const w = W[u]
+      if (w.toRegion === to) {
+        const c = cost[u] + Math.hypot(w.to.x - target.x, w.to.z - target.z)
+        if (c < bestCost) {
+          bestCost = c
+          best = W[first[u]]
+        }
+        continue
+      }
+      for (const n of W) {
+        if (n.region !== w.toRegion || done[n.id]) continue
+        const c = cost[u] + Math.hypot(w.to.x - n.from.x, w.to.z - n.from.z)
+        if (c < cost[n.id]) {
+          cost[n.id] = c
+          first[n.id] = first[u]
+        }
+      }
+    }
+    return best
+  }
+
+  // 正在噴霧的孢子噴泉
+  activeVents() {
+    return this.vents.filter((v) => (this.simTime + v.phase) % v.period < v.duration)
   }
 
   private buildSky() {
@@ -163,12 +318,12 @@ export class World {
     }
   }
 
-  private buildCave(id: number, name: string, cx: number, cz: number, rot: number) {
+  buildCave(id: number, name: string, cx: number, cz: number, rot: number, style: CaveStyle = MEADOW_CAVE) {
     const R = 15
     const center = new THREE.Vector3(cx, 0, cz)
     const gapAngles = [rot, rot + Math.PI]
-    const rockMat = toon(0x8c7f6e, { side: THREE.DoubleSide })
-    const mossMat = toon(0x6d8a3e, { side: THREE.DoubleSide })
+    const rockMat = toon(style.rock, { side: THREE.DoubleSide })
+    const mossMat = toon(style.moss, { side: THREE.DoubleSide })
     const thetaSplit = 1.12
     const flatten = 0.62
     const dome: THREE.Mesh[] = []
@@ -228,7 +383,7 @@ export class World {
     }))
 
     // 洞口兩側巨石 + 洞口上方的拱石
-    const boulderMat = toon(0x7a6e60, {})
+    const boulderMat = toon(style.boulder, {})
     for (const a of gapAngles) {
       for (const s of [-1, 1]) {
         const aa = a + s * (GAP_HALF + 0.08)
@@ -248,7 +403,7 @@ export class World {
     }
 
     // 洞內：深色地面、營火、雜物
-    const floor = mesh(new THREE.CircleGeometry(R - 0.2, 28), toon(0x4a3f36, { outline: false }), false)
+    const floor = mesh(new THREE.CircleGeometry(R - 0.2, 28), toon(style.floor, { outline: false }), false)
     floor.rotation.x = -Math.PI / 2
     floor.position.set(cx, 0.03, cz)
     floor.receiveShadow = true
@@ -260,7 +415,7 @@ export class World {
     for (let k = 0; k < 3; k++) {
       const a = rot + Math.PI / 2 + (k - 1) * 0.9 + (k === 1 ? Math.PI : 0)
       const p = inside(8 + rand() * 2, a)
-      const pillar = mesh(new THREE.CylinderGeometry(0.9, 1.4, 7, 7), toon(0x6b6053, {}))
+      const pillar = mesh(new THREE.CylinderGeometry(0.9, 1.4, 7, 7), toon(style.pillar, {}))
       pillar.position.set(p.x, 3.5, p.z)
       this.scene.add(pillar)
       this.colliders.push({ x: p.x, z: p.z, r: 1.3, blocksSight: true })
@@ -284,7 +439,7 @@ export class World {
       this.scene.add(crate)
       this.colliders.push({ x: p.x, z: p.z, r: 0.75, blocksSight: false })
     }
-    const shroomCap = toon(0x5fd6c8, { emissive: 0x1f8a80, outline: false })
+    const shroomCap = toon(style.shroom, { emissive: style.shroomGlow, outline: false })
     const shroomStem = toon(0xe8e0c8, { outline: false })
     for (let k = 0; k < 14; k++) {
       const p = inside(R - 2 - rand() * 2, rand() * Math.PI * 2)
@@ -295,7 +450,7 @@ export class World {
       capm.position.y = 0.38
       g.add(stem, capm)
       if (k % 2 === 0) {
-        const halo = glowSprite(0x5fe6d8, 1.1, 0.55)
+        const halo = glowSprite(style.halo, 1.1, 0.55)
         halo.position.y = 0.42
         g.add(halo)
       }
@@ -304,10 +459,11 @@ export class World {
       this.scene.add(g)
     }
 
-    this.caves.push({ id, name, center, radius: R, gaps, dome })
+    style.extra?.(this, center, R, gapAngles)
+    this.caves.push({ id, name, center, radius: R, gaps, dome, kind: 'cave' })
   }
 
-  private addCampfire(p: THREE.Vector3) {
+  addCampfire(p: THREE.Vector3) {
     const g = new THREE.Group()
     g.position.copy(p)
     const stoneMat = toon(0x777068, {})
@@ -336,7 +492,7 @@ export class World {
     this.colliders.push({ x: p.x, z: p.z, r: 1.2, blocksSight: false })
   }
 
-  private addTorch(p: THREE.Vector3, light: boolean) {
+  addTorch(p: THREE.Vector3, light: boolean) {
     const pole = mesh(new THREE.CylinderGeometry(0.07, 0.09, 2, 6), toon(0x5a3a22))
     pole.position.set(p.x, 1, p.z)
     this.scene.add(pole)
@@ -354,7 +510,7 @@ export class World {
     }
   }
 
-  private buildCage() {
+  buildCage(roofColor = 0x4f7a3a) {
     const g = new THREE.Group()
     g.position.copy(this.cagePos)
     const wood = toon(0x7a4f2a)
@@ -371,7 +527,7 @@ export class World {
       ring.position.y = y
       g.add(ring)
     }
-    const roof = mesh(new THREE.ConeGeometry(R + 0.6, 1.6, 12), toon(0x4f7a3a))
+    const roof = mesh(new THREE.ConeGeometry(R + 0.6, 1.6, 12), toon(roofColor))
     roof.position.y = 3.8
     g.add(roof)
     const flag = mesh(new THREE.BoxGeometry(0.8, 0.5, 0.04), toon(0xf0e0ff))
@@ -384,7 +540,7 @@ export class World {
     this.colliders.push({ x: this.cagePos.x, z: this.cagePos.z, r: R + 0.3, blocksSight: false })
   }
 
-  private freeSpot(minClear: number) {
+  freeSpot(minClear: number) {
     for (let tries = 0; tries < 60; tries++) {
       const a = rand() * Math.PI * 2
       const r = 10 + Math.sqrt(rand()) * (CONFIG.worldRadius - 12)
@@ -394,6 +550,7 @@ export class World {
         if (Math.hypot(x - c.center.x, z - c.center.z) < c.radius + 7) ok = false
       }
       if (Math.hypot(x, z) < 9) ok = false
+      for (const k of this.keepOut) if (Math.hypot(x - k.x, z - k.z) < k.r + minClear) ok = false
       for (const col of this.colliders) if (Math.hypot(x - col.x, z - col.z) < col.r + minClear) ok = false
       if (ok) return new THREE.Vector3(x, 0, z)
     }
@@ -535,6 +692,24 @@ export class World {
     this.time.value += dt
     const t = this.time.value
     this.fireLights.forEach((l, i) => (l.intensity = 22 + Math.sin(t * 9 + i) * 3 + Math.sin(t * 23 + i * 3) * 2))
+    for (const a of this.animators) a(dt, t)
+  }
+
+  bounce(warp: number) {
+    this.onBounce?.(warp)
+  }
+
+  // 孢子霧擋視線：線段離正在噴霧的噴泉中心比霧的半徑近
+  private ventBlocks(a: THREE.Vector3, b: THREE.Vector3) {
+    if (!this.vents.length) return false
+    const dx = b.x - a.x, dz = b.z - a.z
+    const len2 = dx * dx + dz * dz
+    for (const v of this.activeVents()) {
+      const t = Math.max(0, Math.min(1, ((v.pos.x - a.x) * dx + (v.pos.z - a.z) * dz) / (len2 || 1)))
+      const px = a.x + dx * t - v.pos.x, pz = a.z + dz * t - v.pos.z
+      if (px * px + pz * pz < v.radius * v.radius) return true
+    }
+    return false
   }
 
   // 線段是否被阻擋視線
@@ -547,7 +722,7 @@ export class World {
       const px = a.x + dx * t - c.x, pz = a.z + dz * t - c.z
       if (px * px + pz * pz < c.r * c.r * 0.8) return false
     }
-    return true
+    return !this.ventBlocks(a, b)
   }
 
   // 射線最先碰到阻擋物的距離
@@ -563,6 +738,16 @@ export class World {
       if (d2 > r2) continue
       const hit = t - Math.sqrt(r2 - d2)
       if (hit > 0.3 && hit < best) best = hit
+    }
+    // 孢子霧：光束射進霧裡就停住
+    for (const v of this.vents.length ? this.activeVents() : []) {
+      const ox = v.pos.x - origin.x, oz = v.pos.z - origin.z
+      const t = ox * dir.x + oz * dir.z
+      const d2 = ox * ox + oz * oz - t * t
+      const r2 = v.radius * v.radius
+      if (d2 > r2) continue
+      const hit = Math.max(0.3, t - Math.sqrt(r2 - d2))
+      if (t + Math.sqrt(r2 - d2) > 0 && hit < best) best = hit
     }
     return best
   }

@@ -87,3 +87,10 @@ export const ELF_KINDS: readonly ElfKind[] = ['harp', 'violin']
 export function isElfKind(v: unknown): v is ElfKind {
   return v === 'harp' || v === 'violin'
 }
+
+// 地形（地圖）：預設的翠綠草原 / 蘑菇秘境（有高低層、傳送門與機關）
+export type MapId = 'meadow' | 'mushroom'
+export const MAP_IDS: readonly MapId[] = ['meadow', 'mushroom']
+export function isMapId(v: unknown): v is MapId {
+  return v === 'meadow' || v === 'mushroom'
+}

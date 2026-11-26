@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import { setSearch } from './env'
 import { Game, createHudState } from '../../src/game/Game'
-import type { ElfKind, Role } from '../../src/game/config'
+import type { ElfKind, MapId, Role } from '../../src/game/config'
 import type { NetLink } from '../../src/net/room'
 import type { Slot } from '../../src/net/assign'
 
@@ -140,11 +140,11 @@ function simulate(sides: Side[], opts: { steps: number; dt: number; seed: number
   return { hash: rec.digest(), lines: rec.lines, steps, winner: r ? r.winner : null, violations, stats }
 }
 
-export function makeGame(role: Role, kind: ElfKind, net: NetLink | null = null) {
+export function makeGame(role: Role, kind: ElfKind, net: NetLink | null = null, map: MapId = 'meadow') {
   const hud = createHudState(role, kind)
   const container = (globalThis as any).document.createElement('div')
   const minimap = (globalThis as any).document.createElement('canvas')
-  return new Game(container, minimap, role, hud, () => {}, net, kind)
+  return new Game(container, minimap, role, hud, () => {}, net, kind, map)
 }
 
 function withRandom<T>(seed: number, fn: () => T): T {
@@ -182,12 +182,13 @@ export interface SoloOpts {
   duration?: number
   keep?: boolean
   invariants?: Invariant[]
+  map?: MapId
 }
 
 export function runSolo(o: SoloOpts): RunResult {
   return withRandom(o.seed, () => {
     setSearch(`?fast=${o.duration ?? 150}`)
-    const game = makeGame(o.role, o.kind)
+    const game = makeGame(o.role, o.kind, null, o.map)
     let script: Side['script']
     if (o.mode === 'ai' && o.role === 'elf') game.elf.isPlayer = false
     if (o.mode === 'ai' && o.role === 'goblin') game.playerGoblin!.isPlayer = false
@@ -212,6 +213,9 @@ export interface MpOpts {
   hostAi?: boolean
   keep?: boolean
   invariants?: Invariant[]
+  map?: MapId
+  // 取代加入者的隨機操作
+  clientScript?: Side['script']
 }
 
 export function runMultiplayer(o: MpOpts): RunResult {
@@ -228,28 +232,28 @@ export function runMultiplayer(o: MpOpts): RunResult {
     const names = () => new Map<Slot, string>([[hostSlot, 'Host'], [o.clientSlot, 'Guest']])
     const numbers = () => new Map<Slot, number>([[hostSlot, 1], [o.clientSlot, 2]])
     const hostLink: NetLink = {
-      host: true, me: hostSlot, elfKind: o.kind, peers: new Map([[CLIENT, o.clientSlot]]), numbers: numbers(), names: names(),
+      host: true, me: hostSlot, elfKind: o.kind, map: o.map ?? 'meadow', peers: new Map([[CLIENT, o.clientSlot]]), numbers: numbers(), names: names(),
       send: (msg) => void toClient.push(JSON.stringify(msg)),
       listen: (fn) => (hostListen.add(fn), () => hostListen.delete(fn)),
       onLeave: (fn) => (leave.add(fn), () => leave.delete(fn)),
       onRejoin: (fn) => ((rejoin = fn), () => (rejoin = null)),
     }
     const clientLink: NetLink = {
-      host: false, me: o.clientSlot, elfKind: o.kind, peers: new Map(), numbers: numbers(), names: names(),
+      host: false, me: o.clientSlot, elfKind: o.kind, map: o.map ?? 'meadow', peers: new Map(), numbers: numbers(), names: names(),
       send: (msg) => void toHost.push(JSON.stringify(msg)),
       listen: (fn) => (clientListen.add(fn), () => clientListen.delete(fn)),
       onLeave: () => () => {},
       onRejoin: () => () => {},
     }
-    const host = makeGame(hostSlot === 'elf' ? 'elf' : 'goblin', o.kind, hostLink)
-    const client = makeGame(o.clientSlot === 'elf' ? 'elf' : 'goblin', o.kind, clientLink)
+    const host = makeGame(hostSlot === 'elf' ? 'elf' : 'goblin', o.kind, hostLink, o.map)
+    const client = makeGame(o.clientSlot === 'elf' ? 'elf' : 'goblin', o.kind, clientLink, o.map)
     if (o.hostAi) host.actorOf(hostSlot).isPlayer = false
     let connected = true
     const wire: string[] = []
     const res = simulate(
       [
         { game: host, name: 'host', script: o.hostAi ? undefined : randomPlayer(hostSlot === 'elf' ? ELF_KEYS : GOBLIN_KEYS, 11) },
-        { game: client, name: 'client', script: (g, s, r) => connected && randomPlayer(o.clientSlot === 'elf' ? ELF_KEYS : GOBLIN_KEYS, 7)(g, s, r) },
+        { game: client, name: 'client', script: (g, s, r) => connected && (o.clientScript ?? randomPlayer(o.clientSlot === 'elf' ? ELF_KEYS : GOBLIN_KEYS, 7))(g, s, r) },
       ],
       {
         steps: ((o.duration ?? 120) + 8) * 30,

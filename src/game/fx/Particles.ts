@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { groundAt } from '../ground'
 import { particleAtlas } from './atlas'
 
 export interface ParticleSpec {
@@ -137,7 +138,8 @@ export class Particles {
     this.next = (this.next + 1) % this.max
     const i3 = i * 3
     this.pos[i3] = s.x
-    this.pos[i3 + 1] = s.y
+    // 粒子的座標以所在位置的地面為 0（蘑菇秘境的台地，見 ground.ts）
+    this.pos[i3 + 1] = s.y + groundAt(s.x, s.z)
     this.pos[i3 + 2] = s.z
     this.vel[i3] = s.vx ?? 0
     this.vel[i3 + 1] = s.vy ?? 0

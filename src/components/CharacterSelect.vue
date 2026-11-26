@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { isEmbedded } from '../platform'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
 import goblinArt from '../assets/art/goblin-card.webp'
 import violinArt from '../assets/art/violin-card.webp'
+import meadowArt from '../assets/art/map-meadow.webp'
+import mushroomArt from '../assets/art/map-mushroom.webp'
 import logoZh from '../assets/brand/logo-zh.webp'
 import logoEn from '../assets/brand/logo-en.webp'
-import { CONFIG, type ElfKind, type Role } from '../game/config'
+import { CONFIG, MAP_IDS, type ElfKind, type MapId, type Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
@@ -20,11 +22,11 @@ import IconText from './IconText.vue'
 import CharacterDetail from './CharacterDetail.vue'
 import { icon, type IconName } from '../icons'
 import { displayName, type Room } from '../net/room'
-import type { Pick } from '../net/assign'
+import { tallyVotes, voteWeight, type Pick } from '../net/assign'
 
 // room：在多人房間大廳時，卡片改為選角（精靈 / 哥布林），選擇結果標示在卡片邊框上
 const props = defineProps<{ room?: Room | null }>()
-const emit = defineEmits<{ start: [role: Role, kind: ElfKind]; multiplayer: []; leave: [] }>()
+const emit = defineEmits<{ start: [role: Role, kind: ElfKind, map: MapId]; multiplayer: []; leave: [] }>()
 
 // 卡片：精靈 → 點下後飛出兩張精靈卡（豎琴 / 紫晶）；哥布林 / 豎琴 / 紫晶 → 進入角色詳情頁（模型 + 技能，見 CharacterDetail）
 type CardId = 'elf' | 'goblin' | ElfKind
@@ -118,7 +120,69 @@ const cards = computed<Card[]>(() => {
   ]
 })
 
+// ───── 地形卡：選陣營 → 選角色 → 選地形 ─────
+// 單機：選完角色（詳情頁按開始冒險）後選地形，點下地形卡就開始。
+// 多人：房主按下開始後全員投票（精靈 1.5 票、哥布林 1 票），倒數結束開局
+interface MapCard {
+  id: MapId
+  name: string
+  sub: string
+  tagline: string
+  art: string
+}
+const MAP_ART: Record<MapId, string> = { meadow: meadowArt, mushroom: mushroomArt }
+const mapCards = computed<MapCard[]>(() =>
+  MAP_IDS.map((id) =>
+    id === 'meadow'
+      ? { id, name: t('mapMeadow'), sub: 'Verdant Meadow', tagline: t('mapMeadowTag'), art: MAP_ART[id] }
+      : { id, name: t('mapMushroom'), sub: 'Mushroom Hollow', tagline: t('mapMushroomTag'), art: MAP_ART[id] },
+  ),
+)
 const lobby = computed(() => props.room?.state ?? null)
+// 單機：選好的角色，等待選地形（back＝返回時回到的角色詳情）
+const mapFor = ref<{ role: Role; kind: ElfKind; back: CardId } | null>(null)
+
+const voting = computed(() => (lobby.value?.phase === 'voting' ? lobby.value.vote : null))
+// 單機選地形只在不在房間裡時顯示（選地形途中加入房間：回到選角）
+const soloMaps = computed(() => !!mapFor.value && !lobby.value)
+watch(lobby, (l) => l && (mapFor.value = null))
+const showMaps = computed(() => soloMaps.value || !!voting.value)
+// 投票倒數
+const now = ref(Date.now())
+const ticker = window.setInterval(() => (now.value = Date.now()), 250)
+onBeforeUnmount(() => clearInterval(ticker))
+const voteLeft = computed(() => (voting.value ? Math.max(0, Math.ceil((voting.value.endsAt - now.value) / 1000)) : 0))
+const voteSlots = computed(() => new Map(voting.value?.slots ?? []))
+const tally = computed(() => tallyVotes(voting.value?.votes ?? {}, voteSlots.value))
+// 目前領先的地形（平手時不標示）
+const leading = computed<MapId | null>(() => {
+  const top = Math.max(...MAP_IDS.map((m) => tally.value[m]))
+  const lead = MAP_IDS.filter((m) => tally.value[m] === top)
+  return top > 0 && lead.length === 1 ? lead[0] : null
+})
+const myVote = computed(() => (voting.value ? (voting.value.votes[lobby.value!.me] ?? null) : null))
+const mySlot = computed(() => voteSlots.value.get(lobby.value?.me ?? ''))
+const myVoteLine = computed(() => {
+  const slot = mySlot.value
+  if (slot === undefined) return ''
+  const role = slot === 'elf' ? kindName(voting.value?.kind) : t('goblinName')
+  return t('mapMyRole', { role, n: voteWeight(slot) })
+})
+function voters(m: MapId) {
+  const v = voting.value
+  if (!v) return []
+  return (lobby.value?.players ?? []).filter((p) => v.votes[p.id] === m)
+}
+function chooseMap(m: MapId) {
+  sfx.unlock()
+  sfx.flip()
+  if (voting.value) return props.room?.vote(m)
+  const f = mapFor.value
+  if (f && !lobby.value) emit('start', f.role, f.kind, m)
+}
+function fmtVotes(n: number) {
+  return t('mapVotes', { n: Number.isInteger(n) ? n : n.toFixed(1) })
+}
 const me = computed(() => lobby.value?.players.find((p) => p.id === lobby.value!.me) ?? null)
 const myPick = computed(() => me.value?.pick ?? null)
 const kindName = (k?: ElfKind) => (k === 'violin' ? t('violinName') : t('elfName'))
@@ -174,10 +238,13 @@ function choose(id: CardId) {
   detailId.value = id
 }
 
-// 詳情頁返回 → 回到原本的卡片（精靈詳情回到兩張精靈卡）；兩張精靈卡返回 → 回到陣營選擇
+// 詳情頁返回 → 回到原本的卡片（精靈詳情回到兩張精靈卡）；兩張精靈卡返回 → 回到陣營選擇；地形 → 回到角色詳情
 function back() {
   sfx.flip()
-  if (detailId.value) detailId.value = null
+  if (soloMaps.value && mapFor.value) {
+    detailId.value = mapFor.value.back
+    mapFor.value = null
+  } else if (detailId.value) detailId.value = null
   else elfMenu.value = false
 }
 
@@ -196,13 +263,19 @@ function confirm() {
   const c = detail.value
   if (!c) return
   sfx.unlock()
-  if (!lobby.value) return emit('start', c.role, c.kind ?? 'harp')
+  if (!lobby.value) {
+    // 單機：接著選地形
+    sfx.flip()
+    mapFor.value = { role: c.role, kind: c.kind ?? 'harp', back: c.id }
+    detailId.value = null
+    return
+  }
   pickRole(isMine(c) ? 'random' : c.role, isMine(c) ? undefined : c.kind)
 }
 </script>
 
 <template>
-  <div class="select" :class="{ entered, 'elf-menu': elfMenu }">
+  <div class="select" :class="{ entered, 'elf-menu': elfMenu || showMaps }">
     <div class="glow"></div>
     <button class="lang" :class="{ solo: touchMode, 'with-fs': touchMode && fullscreenSupported }" @click="toggleLocale">{{ t('langSwitch') }}</button>
     <FullscreenButton class="menu-fs" />
@@ -226,18 +299,44 @@ function confirm() {
       <p class="eyebrow">{{ t('eyebrow') }}</p>
       <!-- 標題以 logo 呈現；h1 保留、alt 為 logo 上的完整文字，螢幕閱讀器與 SEO 仍讀得到標題 -->
       <h1 class="logo" :style="{ '--logo': `url(${logo})` }"><img :src="logo" :alt="t('logoAlt')" width="1120" height="560" decoding="async" fetchpriority="high" draggable="false" /></h1>
-      <p class="lead">{{ elfMenu ? t('chooseElf') : t('chooseSide') }}</p>
+      <p class="lead">{{ voting ? t('mapVoteTitle') : soloMaps ? t('chooseMap') : elfMenu ? t('chooseElf') : t('chooseSide') }}</p>
     </header>
 
     <!-- 精靈卡飛出時的紫色星塵 -->
     <!-- disable-telemetry：shaders 套件預設會在 5% 的連線把網域 / 瀏覽器 / 裝置 / 效能資料送到 shaders.com -->
-    <Shader v-if="elfMenu && !detailId" key="elf-menu" class="fairy-dust violet" disable-telemetry>
+    <Shader v-if="elfMenu && !detailId && !showMaps" key="elf-menu" class="fairy-dust violet" disable-telemetry>
       <FloatingParticles shape="glow" particle-color="#c9a0ff" :count="160" :particle-size="2.4" :softness="0.9" :speed="0.14" :angle="270" :angle-variance="50" :speed-variance="0.5" :randomness="0.6" :twinkle="0.9" />
       <FloatingParticles particle-color="#f0e4ff" :count="500" :particle-size="0.9" :softness="0.3" :speed="0.2" :angle="270" :angle-variance="30" :speed-variance="0.6" :randomness="0.45" :twinkle="1" />
       <Sparkle :size="60" :intensity="7" :threshold="0.5" :ray-length="6" :colorize="0.8" :speed="1.2" />
     </Shader>
 
-    <div class="stage">
+    <!-- 地形卡：單機選地形 / 多人投票 -->
+    <div v-if="showMaps" class="stage maps" :key="voting ? 'vote' : 'solo'">
+      <div
+        v-for="m in mapCards"
+        :key="m.id"
+        class="card-wrap fly map-card"
+        :class="{ mine: voting && myVote === m.id, lead: voting && leading === m.id }"
+        :style="{ '--from': '0px' }"
+      >
+        <div v-if="voting" class="pickers">
+          <span class="tally">{{ fmtVotes(tally[m.id]) }}</span>
+          <span v-for="p in voters(m.id)" :key="p.id" :class="{ me: p.id === lobby!.me }">{{ p.id === lobby!.me ? t('you') : displayName(p) }}</span>
+        </div>
+        <div class="card map" :class="m.id" @click="chooseMap(m.id)">
+          <div class="face front">
+            <div class="art" :style="{ backgroundImage: `url(${m.art})` }"></div>
+            <div class="frame"></div>
+            <div class="plate">
+              <span class="sub">{{ m.sub }}</span>
+              <h2>{{ m.name }}</h2>
+              <p>{{ m.tagline }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-else class="stage">
       <div
         v-for="c in cards"
         :key="c.id"
@@ -269,10 +368,10 @@ function confirm() {
         </div>
       </div>
     </div>
-    <button v-if="elfMenu" class="ghost elf-back" @click="back">← {{ t('back') }}</button>
+    <button v-if="(elfMenu && !showMaps) || soloMaps" class="ghost elf-back" @click="back">← {{ t('back') }}</button>
 
     <CharacterDetail
-      v-if="detail"
+      v-if="detail && !showMaps"
       :key="detail.id"
       :role="detail.role"
       :kind="detail.kind"
@@ -287,7 +386,12 @@ function confirm() {
       @confirm="confirm"
     />
 
-    <footer v-if="lobby" class="lobby-bar">
+    <footer v-if="voting" class="lobby-bar vote-bar">
+      <span class="my-pick">{{ myVoteLine }}</span>
+      <span class="count" :class="{ soon: voteLeft <= 5 }"><img class="gi" :src="icon('ui-timer')" alt="" />{{ t('mapVoteLeft', { s: voteLeft }) }}</span>
+      <span class="rule">{{ t('mapVoteHint') }}</span>
+    </footer>
+    <footer v-else-if="lobby" class="lobby-bar">
       <span class="my-pick"><img class="gi" :src="icon(myPickIcon)" alt="" />{{ t('mpMyPick', { pick: myPickLabel }) }}</span>
       <button v-if="myPick && myPick !== 'random'" class="ghost small" @click="pickRole('random')">{{ t('mpUnpick') }}</button>
       <button v-if="lobby.host" class="go small" :disabled="lobby.players.length < 2" :title="lobby.players.length < 2 ? t('mpNeedTwo') : ''" @click="startRoom">
@@ -584,6 +688,53 @@ h1.logo::after {
 }
 .fairy-dust.violet {
   animation-duration: 2.4s;
+}
+/* 地形卡 */
+.map .plate {
+  background: linear-gradient(transparent, rgba(10, 16, 30, 0.94) 55%);
+}
+.map.mushroom .plate {
+  background: linear-gradient(transparent, rgba(22, 16, 52, 0.94) 55%);
+}
+.map .art {
+  background-position: center;
+}
+.pickers .tally {
+  background: #14261f;
+  color: #ffe9a8;
+  border-color: #ffe9a8;
+  font-size: 13px;
+}
+.card-wrap.lead .face {
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.55),
+    0 0 0 2px #e8c770,
+    0 0 0 6px rgba(30, 20, 8, 0.8),
+    0 0 28px 6px rgba(140, 220, 255, 0.45);
+}
+.vote-bar {
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+.vote-bar .count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff3d6;
+}
+.vote-bar .count.soon {
+  color: #ffb38a;
+}
+.vote-bar .count .gi {
+  width: 22px;
+  height: 22px;
+}
+.vote-bar .rule {
+  font-size: 11px;
+  color: #a99f86;
 }
 /* 多人大廳：選角標示 */
 .pickers {

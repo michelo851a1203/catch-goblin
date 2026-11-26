@@ -2,7 +2,7 @@
 import { isEmbedded } from '../platform'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Game, createHudState } from '../game/Game'
-import type { ElfKind, Role } from '../game/config'
+import type { ElfKind, MapId, Role } from '../game/config'
 import type { NetLink } from '../net/room'
 import { recordResult } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
@@ -19,7 +19,7 @@ import { locale } from '../i18n'
 import logoZh from '../assets/brand/logo-zh.webp'
 import logoEn from '../assets/brand/logo-en.webp'
 
-const props = defineProps<{ role: Role; net?: NetLink; elfKind?: ElfKind }>()
+const props = defineProps<{ role: Role; net?: NetLink; elfKind?: ElfKind; map?: MapId }>()
 const emit = defineEmits<{ restart: []; menu: [] }>()
 
 const host = ref<HTMLDivElement | null>(null)
@@ -32,7 +32,7 @@ const loading = ref(true)
 const logo = computed(() => (locale.value === 'zh' ? logoZh : logoEn))
 
 onMounted(() => {
-  const g = (game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null, kind))
+  const g = (game = new Game(host.value!, minimap.value!, props.role, hud, (winner) => recordResult(props.role, winner), props.net ?? null, kind, props.net?.map ?? props.map ?? 'meadow'))
   game.start()
   void game.ready.then(() => {
     if (game !== g) return

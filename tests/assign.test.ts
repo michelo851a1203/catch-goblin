@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_PLAYERS, assignSlots, canPick, type Pick } from '../src/net/assign'
+import { MAX_PLAYERS, VOTE_SECONDS, assignSlots, canPick, pickMap, tallyVotes, voteWeight, type Pick, type Slot } from '../src/net/assign'
 
 const room = (...picks: Pick[]) => picks.map((pick, i) => ({ id: `p${i}`, pick }))
 
@@ -53,4 +53,28 @@ describe('assignSlots', () => {
     expect(slots.filter((x) => x === 'elf').length).toBe(1)
     expect(slots.filter((x) => typeof x === 'number').every((x) => (x as number) >= 0 && (x as number) < 8)).toBe(true)
   })
+})
+
+describe('地形投票', () => {
+  const slots = new Map<string, Slot>([['e', 'elf'], ['g1', 0], ['g2', 1], ['g3', 2]])
+  it('精靈 1.5 票、哥布林 1 票', () => {
+    expect(voteWeight('elf')).toBe(1.5)
+    expect(voteWeight(3)).toBe(1)
+    expect(tallyVotes({ e: 'mushroom', g1: 'meadow', g2: 'meadow' }, slots)).toEqual({ meadow: 2, mushroom: 1.5 })
+  })
+  it('精靈對上一隻哥布林：精靈的選擇勝出；兩隻哥布林勝過精靈', () => {
+    expect(pickMap(tallyVotes({ e: 'mushroom', g1: 'meadow' }, slots))).toBe('mushroom')
+    expect(pickMap(tallyVotes({ e: 'mushroom', g1: 'meadow', g2: 'meadow' }, slots))).toBe('meadow')
+  })
+  it('不在這一局的玩家、不合法的地形不算票', () => {
+    expect(tallyVotes({ ghost: 'mushroom', g1: 'lava' as never }, slots)).toEqual({ meadow: 0, mushroom: 0 })
+  })
+  it('平手時從平手的地形中隨機；沒人投票時從所有地形中隨機', () => {
+    const tie = tallyVotes({ g1: 'mushroom', g2: 'meadow' }, slots)
+    expect(pickMap(tie, () => 0)).toBe('meadow')
+    expect(pickMap(tie, () => 0.99)).toBe('mushroom')
+    expect(pickMap(tallyVotes({}, slots), () => 0)).toBe('meadow')
+    expect(pickMap(tallyVotes({}, slots), () => 0.99)).toBe('mushroom')
+  })
+  it('倒數 20 秒', () => expect(VOTE_SECONDS).toBe(20))
 })

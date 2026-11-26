@@ -4,7 +4,7 @@
 
 - Play: {{SITE_URL}}
 - Sides: Harp Elf (Gaze, Harp, Stun, Capture), Amethyst Violinist elf (Invisibility, Assassin's Eye, Charge, Capture), Cave Goblin (Dash, Interfere, Break Free, Goblin Radar)
-- Map: a grassland with five goblin caves (two entrances each) and a cage at the center
+- Terrains: Verdant Meadow (a grassland with five goblin caves, two entrances each) or Mushroom Hollow (a night mushroom forest with two caves and three raised ledges reached by portals, plus bounce mushrooms and sight-blocking spore vents); a cage at the center. Online rooms vote for the terrain (elf 1.5 votes, goblins 1 each, 20-second countdown)
 - Match length: up to 10 minutes
 - Languages: English, Traditional Chinese
 - Price: free

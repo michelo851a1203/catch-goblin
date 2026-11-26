@@ -4,10 +4,11 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { ElfMagicFx } from './elf/ElfMagicFx'
 import { ViolinFx } from './elf/ViolinFx'
 import { GHOST_OPACITY } from './elf/rigs'
-import { CONFIG, type ElfKind, type Role } from './config'
+import { CONFIG, type ElfKind, type MapId, type Role } from './config'
 import { Actor, Elf, Goblin, setBarProgress, type ChargePhase, type ElfAction } from './entities'
 import { behindSpot, fearTargets, nearestTarget, sweepHit, targetable } from './violin'
-import { GAP_HALF, World } from './world'
+import { GAP_HALF, World, type Warp } from './world'
+import { groundAt, setGround } from './ground'
 import { makeSprite, noOutline, releaseToonGpu } from './toon'
 import { updateElfAI, updateGoblinAI } from './ai'
 import { sfx } from './audio'
@@ -48,6 +49,8 @@ export type GameEvent =
   | { e: 'charge'; o: V2; d: V2; g?: number }
   | { e: 'chargeEnd'; p: V2; g: number }
   | { e: 'left'; name: string }
+  // 蘑菇秘境：角色 s 走進傳送門 / 踩到彈跳蘑菇 w
+  | { e: 'warp'; s: Slot; w: number }
   | { e: 'end'; w: Role; c: number; time: number }
 // 真人玩家名單：[角色, 暱稱, 玩家編號]
 type Roster = [Slot, string, number][]
@@ -87,6 +90,8 @@ const STALE_CHARGE = 0.6
 // 小地圖：精靈視線內看到的哥布林
 const MAP_SEEN = '#9effa0'
 const r2 = (v: number) => Math.round(v * 100) / 100
+// 彈跳蘑菇的飛行時間（秒，畫面上的拋物線）
+const HOP_TIME = 0.75
 
 export interface SkillView {
   key: string
@@ -262,6 +267,7 @@ export class Game {
     onEnd: (winner: Role, stats: { captured: number; time: number }) => void,
     net: NetLink | null = null,
     elfKind: ElfKind = 'harp',
+    map: MapId = 'meadow',
   ) {
     this.container = container
     this.minimap = minimap
@@ -282,10 +288,14 @@ export class Game {
     this.effect = new OutlineEffect(this.renderer, { defaultThickness: 0.0035, defaultColor: [0.1, 0.07, 0.05] })
 
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 900)
-    this.scene.fog = new THREE.Fog(0xd6eefa, 90, 300)
-    this.hemi = new THREE.HemisphereLight(0xdff0ff, 0x5a7a32, 1.6)
+    // 地圖：多人時由房主投票決定（NetLink），單機為玩家選的地形
+    this.world = new World(this.scene, net?.map ?? map)
+    setGround(this.world.heightAt)
+    const theme = this.world.theme
+    this.scene.fog = new THREE.Fog(theme.fog, theme.fogNear, theme.fogFar)
+    this.hemi = new THREE.HemisphereLight(theme.hemiSky, theme.hemiGround, theme.hemi)
     this.scene.add(this.hemi)
-    this.sun = new THREE.DirectionalLight(0xfff0d0, 2.4)
+    this.sun = new THREE.DirectionalLight(theme.sunColor, theme.sun)
     this.sun.castShadow = true
     this.sun.shadow.mapSize.setScalar(lowPower ? 1024 : 2048)
     const sc = this.sun.shadow.camera
@@ -298,10 +308,10 @@ export class Game {
     this.sun.shadow.bias = -0.0008
     this.scene.add(this.sun, this.sun.target)
 
-    this.world = new World(this.scene)
     this.fx = new FxSystem(this.scene)
     this.fx.fires = this.world.fires
     this.fx.caves = this.world.caves
+    this.fx.ambientStyle = theme.ambient
     this.staff = this.fx.createStaff()
     this.elfFx = new ElfMagicFx(this.scene, this.fx)
     this.violinFx = new ViolinFx(this.scene, this.fx, this.elfFx)
@@ -433,6 +443,7 @@ export class Game {
     this.renderer.dispose()
     this.renderer.forceContextLoss()
     this.renderer.domElement.remove()
+    setGround(null)
     const w = window as unknown as { __game?: Game }
     if (w.__game === this) delete w.__game
   }
@@ -810,7 +821,7 @@ export class Game {
     if (!this.authority || !elf.stealthed) return
     const S = CONFIG.violin.stealth
     elf.exitStealth()
-    const hits = fear ? fearTargets(elf.pos, this.goblins, S.fearRadius) : []
+    const hits = fear ? fearTargets(elf.pos, this.goblins, S.fearRadius).filter((g) => this.sameRegion(g, elf)) : []
     for (const g of hits) {
       g.terror = S.fearTime
       g.attract = 0
@@ -845,9 +856,11 @@ export class Game {
     // 身後被牆擋住時改試左右兩側、最後才站在原地附近
     const to = new THREE.Vector3()
     const tries = [0, 0.9, -0.9, 1.8, -1.8, Math.PI]
+    const region = this.world.regionOf(g.pos)
     for (const a of tries) {
       behindSpot({ pos: g.pos, yaw: g.yaw + a }, E.behind, to)
-      if (!this.world.blockedAt(to.x, to.z, elf.radius)) break
+      // 台地邊緣的哥布林：身後可能是懸崖外，落點要和哥布林在同一層
+      if (!this.world.blockedAt(to.x, to.z, elf.radius) && this.world.regionOf(to) === region) break
     }
     this.world.resolve(to, elf.radius)
     elf.pos.copy(to)
@@ -870,7 +883,7 @@ export class Game {
     dir = dir.clone()
     let target = -1
     if (elf.blinkLock > 0) {
-      const g = nearestTarget(elf.pos, this.goblins.filter(targetable), CONFIG.violin.charge.distance)
+      const g = nearestTarget(elf.pos, this.goblins.filter((x) => targetable(x) && this.sameRegion(x, elf)), CONFIG.violin.charge.distance)
       if (g) {
         target = g.id
         v2.copy(g.pos).sub(elf.pos).setY(0)
@@ -1317,6 +1330,27 @@ export class Game {
       case 'left':
         this.toast(t('tPlayerLeft', { name: ev.name }), 'warn')
         return
+      case 'warp': {
+        const w = this.world.warps[ev.w]
+        if (!w || !this.validSlot(ev.s)) return
+        const a = this.actorOf(ev.s)
+        const hidden = a === elf && this.elfHiddenFromViewer()
+        // 彈跳蘑菇：從起跳點畫一道拋物線到落點（遊戲邏輯已在落點）
+        if (w.kind === 'bounce') {
+          a.hop = { from: new THREE.Vector3(w.from.x, groundAt(w.from.x, w.from.z), w.from.z), t: 0, dur: HOP_TIME, peak: 7 }
+          this.world.bounce(w.id)
+        } else a.hop = null
+        if (!hidden) {
+          this.fx.ring(w.from, 2.2, w.color, 0.5, 0.15)
+          this.fx.sparkles(w.from, 16, w.color, 0.6, 2.5, 1)
+          if (w.kind === 'portal') {
+            this.fx.ring(w.to, 2.2, w.color, 0.5, 0.15)
+            this.fx.sparkles(w.to, 18, w.color, 0.6, 2.5, 1)
+          }
+        }
+        if (a.isPlayer || (!hidden && d2(a.pos, this.focusActor().pos) < 14)) w.kind === 'portal' ? sfx.blink() : sfx.dash()
+        return
+      }
       case 'end':
         this.showResult(ev.w, ev.c, ev.time)
         return
@@ -1613,7 +1647,8 @@ export class Game {
 
   // ───────────────────────── 導航 ─────────────────────────
   navigate(a: Actor, target: THREE.Vector3, avoid?: THREE.Vector3): THREE.Vector3 {
-    const wp = this.waypoint(a.pos, target, avoid)
+    a.routeWarp = -1
+    const wp = this.waypoint(a.pos, target, avoid, a)
     const dir = new THREE.Vector3(wp.x - a.pos.x, 0, wp.z - a.pos.z)
     const len = dir.length()
     if (len < 0.3) return dir.set(0, 0, 0)
@@ -1637,10 +1672,24 @@ export class Game {
     return dir
   }
 
-  private waypoint(pos: THREE.Vector3, target: THREE.Vector3, avoid?: THREE.Vector3): THREE.Vector3 {
+  private waypoint(pos: THREE.Vector3, target: THREE.Vector3, avoid?: THREE.Vector3, actor?: Actor): THREE.Vector3 {
     const world = this.world
-    const zA = world.zoneOf(pos)
-    const zT = world.zoneOf(target)
+    // 不同區域（地面 / 各個台地）：先走向路線上的第一個傳送門 / 彈跳蘑菇
+    if (world.warps.length) {
+      const rA = world.regionOf(pos)
+      const rT = world.regionOf(target)
+      if (rA !== rT) {
+        const w = world.route(pos, rA, target, rT, avoid)
+        if (w) {
+          target = w.from
+          if (actor) actor.routeWarp = w.id
+        }
+      }
+    }
+    // 山洞的洞口導航只用在真的山洞（台地沒有洞口，在同一個區域裡直線就到得了）
+    const cave = (z: number) => (z >= 0 && world.caves[z].kind === 'cave' ? z : -1)
+    const zA = cave(world.zoneOf(pos))
+    const zT = cave(world.zoneOf(target))
     if (zA === zT && zA >= 0) return target
     if (zA >= 0) {
       const cave = world.caves[zA]
@@ -1685,7 +1734,7 @@ export class Game {
     const dx = target.x - pos.x, dz = target.z - pos.z
     const len = Math.hypot(dx, dz) || 1
     const ux = dx / len, uz = dz / len
-    for (const c of this.world.caves) {
+    for (const c of this.obstacles(pos)) {
       const ox = c.center.x - pos.x, oz = c.center.z - pos.z
       const t = ox * ux + oz * uz
       if (t < 0 || t > len) continue
@@ -1706,6 +1755,65 @@ export class Game {
       return new THREE.Vector3(c.center.x + nx * (c.radius + 4.5), 0, c.center.z + nz * (c.radius + 4.5))
     }
     return target
+  }
+
+  // 繞行時要避開的大型障礙：山洞；在地面上時還有台地的崖壁
+  private obstacles(pos: THREE.Vector3): { id: number; center: THREE.Vector3; radius: number }[] {
+    const caves = this.world.caves
+    if (!this.world.plateaus.length) return caves
+    const out: { id: number; center: THREE.Vector3; radius: number }[] = caves.filter((c) => c.kind === 'cave')
+    if (this.world.regionOf(pos) === 0) for (const p of this.world.plateaus) out.push({ id: -10 - p.region, center: p.center, radius: p.radius })
+    return out
+  }
+
+  // 是否在同一個區域（地面 / 同一座台地）：琴聲、恐懼等範圍效果不會跨過崖壁
+  sameRegion(a: Actor, b: Actor) {
+    return !this.world.plateaus.length || this.world.regionOf(a.pos) === this.world.regionOf(b.pos)
+  }
+
+  // ───────────────────────── 傳送門 / 彈跳蘑菇（房主 / 單機判定）─────────────────────────
+  private checkWarps(dt: number) {
+    const elf = this.elf
+    const actors: [Actor, Slot][] = [[elf, 'elf'], ...this.goblins.map((g) => [g, g.id] as [Actor, Slot])]
+    for (const [a, slot] of actors) {
+      a.warpCd = Math.max(0, a.warpCd - dt)
+      if (a.warpCd > 0) continue
+      // 打包、彈奏、拉琴、衝鋒中的精靈，被打包 / 已捕獲 / 暈眩定身的哥布林不會被傳送
+      if (a === elf ? elf.busy : (a as Goblin).captured || (a as Goblin).held || (a as Goblin).stun > 0 || (a as Goblin).rooted > 0) continue
+      const w = this.warpAt(a.pos)
+      // 真人玩家走進去就傳送；AI 只走進自己路線上的傳送點
+      if (w && (a.isPlayer || a.netDriven || a.routeWarp === w.id)) this.warp(a, slot, w)
+    }
+  }
+
+  private warpAt(p: THREE.Vector3): Warp | null {
+    const r = this.world.regionOf(p)
+    for (const w of this.world.warps) if (w.region === r && d2(p, w.from) < w.radius) return w
+    return null
+  }
+
+  private warp(a: Actor, slot: Slot, w: Warp) {
+    a.pos.set(w.to.x, 0, w.to.z)
+    this.world.resolve(a.pos, a.radius)
+    a.warpCd = 0.6
+    // 彈跳蘑菇：飛行的那一下哥布林抓不到（與畫面上的拋物線一致）
+    if (w.kind === 'bounce' && a instanceof Goblin) a.grace = Math.max(a.grace, HOP_TIME)
+    a.corr++
+    this.emit({ e: 'warp', s: slot, w: w.id })
+  }
+
+  // 角色模型的位置：地面高度＋彈跳蘑菇的拋物線（純畫面效果，遊戲邏輯已經在落點）
+  private placeRoot(a: Actor, dt: number) {
+    const hop = a.hop
+    if (hop) {
+      hop.t += dt
+      const k = Math.min(1, hop.t / hop.dur)
+      a.root.position.set(hop.from.x + (a.pos.x - hop.from.x) * k, 0, hop.from.z + (a.pos.z - hop.from.z) * k)
+      a.root.position.y = hop.from.y + (groundAt(a.pos.x, a.pos.z) - hop.from.y) * k + Math.sin(k * Math.PI) * hop.peak
+      if (k >= 1) a.hop = null
+      return
+    }
+    a.root.position.set(a.pos.x, groundAt(a.pos.x, a.pos.z), a.pos.z)
   }
 
   // ───────────────────────── 主迴圈 ─────────────────────────
@@ -1730,6 +1838,7 @@ export class Game {
   private update(dt: number) {
     const hud = this.hud
     const auth = this.authority
+    this.world.simTime = this.elapsed
     this.musicStopT -= dt
     if (hud.phase === 'countdown') {
       this.countdown -= dt
@@ -1800,7 +1909,7 @@ export class Game {
             if (g.attract > 0 && d2(g.pos, elf.pos) < M.radius) g.attract = M.attractTime
             continue
           }
-          if (d2(g.pos, elf.pos) < M.radius) {
+          if (d2(g.pos, elf.pos) < M.radius && this.sameRegion(g, elf)) {
             elf.musicAffected.add(g)
             g.attract = M.attractTime
             g.charm = M.charmTime
@@ -1918,10 +2027,11 @@ export class Game {
       this.moveActor(g, sp, dt, CONFIG.goblin.speed)
     }
     this.separate()
+    if (auth && playing && this.world.warps.length) this.checkWarps(dt)
 
     // 姿勢與動畫
     elf.pose = elf.stagger > 0 ? 'stunned' : ELF_ACTION_POSE[elf.action] ?? (elf.castT > 0 ? elf.castPose : 'normal')
-    elf.root.position.copy(elf.pos)
+    this.placeRoot(elf, dt)
     elf.root.rotation.y = elf.yaw
     // 隱身：哥布林（含觀戰中）看不見；精靈玩家自己看到半透明
     const viewerIsElf = this.me === 'elf'
@@ -1950,7 +2060,7 @@ export class Game {
 
     for (const g of this.goblins) {
       g.pose = g.captured || g.held ? 'held' : g.stun > 0 ? 'stunned' : g.rooted > 0 ? 'rooted' : 'normal'
-      g.root.position.copy(g.pos)
+      this.placeRoot(g, dt)
       g.root.rotation.y = g.yaw
       const dElf = d2(g.pos, elf.pos)
       // 操控的哥布林察覺精靈時會露出害怕的樣子；隱身中的精靈察覺不到（不能透過動作洩漏位置）
@@ -1963,9 +2073,11 @@ export class Game {
         const k = Math.min(1, fl.t / fl.dur)
         const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2
         g.root.position.lerpVectors(fl.from, fl.to, e)
-        g.root.position.y = Math.sin(k * Math.PI) * (6 + fl.from.distanceTo(fl.to) * 0.15)
+        const arc = Math.sin(k * Math.PI) * (6 + fl.from.distanceTo(fl.to) * 0.15)
+        g.root.position.y = arc + groundAt(fl.from.x, fl.from.z) * (1 - e) + groundAt(fl.to.x, fl.to.z) * e
         g.yaw += dt * 8
-        this.fx.trail(g.root.position, 0xffe6a0, 0.5)
+        // 特效的座標以地面為 0（見 ground.ts），扣掉麻袋所在位置的地面高度
+        this.fx.trail(v2.copy(g.root.position).setY(g.root.position.y - groundAt(g.root.position.x, g.root.position.z)), 0xffe6a0, 0.5)
         if (k >= 1) {
           g.flight = null
           g.root.position.copy(fl.to)
@@ -2014,17 +2126,20 @@ export class Game {
 
     // 洞內變暗、太陽陰影跟隨
     const focus = this.focusActor()
-    const inCave = this.world.zoneOf(focus.pos) >= 0
+    const zone = this.world.zoneOf(focus.pos)
+    const inCave = zone >= 0 && this.world.caves[zone].kind === 'cave'
     const k = Math.min(1, dt * 2)
-    this.hemi.intensity += ((inCave ? 1.0 : 1.6) - this.hemi.intensity) * k
-    this.sun.intensity += ((inCave ? 1.5 : 2.4) - this.sun.intensity) * k
+    const theme = this.world.theme
+    this.hemi.intensity += ((inCave ? theme.hemiCave : theme.hemi) - this.hemi.intensity) * k
+    this.sun.intensity += ((inCave ? theme.sunCave : theme.sun) - this.sun.intensity) * k
     this.fx.update(dt, focus.pos, inCave)
     this.shake = Math.max(0, this.shake - dt * 1.8)
-    this.sun.position.set(focus.pos.x + 30, 60, focus.pos.z + 18)
-    this.sun.target.position.set(focus.pos.x, 0, focus.pos.z)
+    const fy = groundAt(focus.pos.x, focus.pos.z)
+    this.sun.position.set(focus.pos.x + 30, fy + 60, focus.pos.z + 18)
+    this.sun.target.position.set(focus.pos.x, fy, focus.pos.z)
     this.marker.visible = !(this.playerGoblin?.captured ?? false)
     const me = this.playerGoblin ?? this.elf
-    this.marker.position.set(me.pos.x, 0.06, me.pos.z)
+    this.marker.position.set(me.pos.x, groundAt(me.pos.x, me.pos.z) + 0.06, me.pos.z)
   }
 
   private moveActor(a: Actor, speed: number, dt: number, base: number) {
@@ -2079,7 +2194,9 @@ export class Game {
   private updateCamera(dt: number) {
     const focus = this.focusActor()
     const h = focus === this.elf ? 1.5 : 1.0
-    const target = v1.set(focus.pos.x, h + 0.3, focus.pos.z)
+    // 跟著角色畫面上的位置（含台地高度、彈跳蘑菇的拋物線）
+    const target = v1.set(focus.root.position.x, focus.root.position.y + h + 0.3, focus.root.position.z)
+    if (focus instanceof Goblin && focus.flight) target.set(focus.pos.x, h + 0.3, focus.pos.z)
     const cp = Math.cos(this.camPitch)
     const dir = v2.set(Math.sin(this.camYaw) * cp, Math.sin(this.camPitch) + 0.15, Math.cos(this.camYaw) * cp).normalize()
     let dist = this.camDist
@@ -2088,7 +2205,7 @@ export class Game {
     const hit = this.raycaster.intersectObjects(this.world.occluders, false)[0]
     if (hit) dist = Math.max(1.2, hit.distance - 0.4)
     const want = new THREE.Vector3().copy(target).addScaledVector(dir, dist)
-    want.y = Math.max(want.y, 0.4)
+    want.y = Math.max(want.y, groundAt(want.x, want.z) + 0.4)
     this.camera.position.lerp(want, Math.min(1, dt * 14))
     this.camera.lookAt(target)
     if (this.shake > 0) {
@@ -2280,12 +2397,46 @@ export class Game {
     const tz = (z: number) => S / 2 + z * sc
     g.clearRect(0, 0, S, S)
     g.save()
+    const world = this.world
+    const mushroom = world.map === 'mushroom'
     g.beginPath()
     g.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2)
-    g.fillStyle = 'rgba(86,130,60,0.85)'
+    g.fillStyle = mushroom ? 'rgba(34,70,78,0.9)' : 'rgba(86,130,60,0.85)'
     g.fill()
     g.clip()
+    // 蘑菇秘境：孢子噴泉（噴霧中畫成一團霧）、台地（亮色＋邊框）、傳送門、彈跳蘑菇
+    for (const v of world.vents) {
+      const on = world.activeVents().includes(v)
+      g.beginPath()
+      g.arc(tx(v.pos.x), tz(v.pos.z), on ? v.radius * sc : 2, 0, Math.PI * 2)
+      g.fillStyle = on ? 'rgba(170,140,255,0.45)' : 'rgba(200,184,232,0.8)'
+      g.fill()
+    }
+    for (const pl of world.plateaus) {
+      g.beginPath()
+      g.arc(tx(pl.center.x), tz(pl.center.z), pl.radius * sc, 0, Math.PI * 2)
+      g.fillStyle = 'rgba(92,150,120,0.95)'
+      g.fill()
+      g.strokeStyle = '#2a2448'
+      g.lineWidth = 2.5
+      g.stroke()
+    }
+    for (const w of world.warps) {
+      g.beginPath()
+      if (w.kind === 'portal') g.arc(tx(w.from.x), tz(w.from.z), 2.6, 0, Math.PI * 2)
+      else {
+        // 彈跳蘑菇：指向落點的小箭頭
+        const a = Math.atan2(w.to.z - w.from.z, w.to.x - w.from.x)
+        g.moveTo(tx(w.from.x) + Math.cos(a) * 4, tz(w.from.z) + Math.sin(a) * 4)
+        g.lineTo(tx(w.from.x) + Math.cos(a + 2.4) * 3, tz(w.from.z) + Math.sin(a + 2.4) * 3)
+        g.lineTo(tx(w.from.x) + Math.cos(a - 2.4) * 3, tz(w.from.z) + Math.sin(a - 2.4) * 3)
+        g.closePath()
+      }
+      g.fillStyle = '#' + w.color.toString(16).padStart(6, '0')
+      g.fill()
+    }
     for (const cave of this.world.caves) {
+      if (cave.kind !== 'cave') continue
       g.beginPath()
       g.arc(tx(cave.center.x), tz(cave.center.z), cave.radius * sc, 0, Math.PI * 2)
       g.fillStyle = 'rgba(70,55,45,0.9)'

@@ -27,9 +27,11 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
   const d = dist2d(g.pos, elf.pos)
   const sameCave = g.zone >= 0 && g.zone === elf.zone // 被動：哥布林雷達
   // 隱身的紫晶精靈：看不到、雷達也偵測不到，除非幾乎撞上
+  // 台地上下（不同區域）只能靠視線看見，不會「聽到」崖壁另一邊的精靈
+  const near = game.sameRegion(g, elf)
   const sees = elf.stealthed
-    ? d < CONFIG.violin.stealth.revealRadius
-    : sameCave || d < 6 || (d < 24 && game.world.lineOfSight(g.pos, elf.pos))
+    ? d < CONFIG.violin.stealth.revealRadius && near
+    : sameCave || (d < 6 && near) || (d < 24 && game.world.lineOfSight(g.pos, elf.pos))
   if (sees) {
     ai.fear = 5
     ai.lastElf = elf.pos.clone()
@@ -96,7 +98,7 @@ function flee(game: Game, g: Goblin, elfPos: THREE.Vector3, d: number) {
   const world = game.world
   const elf = game.elf
   let target: THREE.Vector3
-  if (g.zone >= 0 && (elf.zone === g.zone || d < 9)) {
+  if (g.zone >= 0 && (elf.zone === g.zone || (d < 9 && game.sameRegion(g, elf)))) {
     // 精靈闖進來了：從遠離精靈的洞口逃到最遠的洞
     target = farthestCave(game, g, elfPos)
   } else if (g.zone >= 0) {
@@ -234,7 +236,7 @@ function senseGoblins(game: Game) {
     const d = Math.hypot(dx, dz)
     const facing = (dx * fwdX + dz * fwdZ) / (d || 1)
     // 刺客之眼開圖中、最終狩獵：全部看得到
-    const visible = elf.eye > 0 || game.finalHunt || d < 4 || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
+    const visible = elf.eye > 0 || game.finalHunt || (d < 4 && game.sameRegion(g, elf)) || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
     const rec = ai.seen.get(g)
     if (visible) {
       if (rec && now - rec.at < 0.5) {

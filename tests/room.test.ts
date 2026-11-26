@@ -108,6 +108,17 @@ afterEach(() => {
   peers.clear()
 })
 
+// 房主按下開始 → 投票選地形 → 全員投完後（稍等 1.2 秒）開局
+async function startAndVote(rooms: RoomT[], map: 'meadow' | 'mushroom' = 'meadow') {
+  rooms[0].start()
+  await flush()
+  for (const r of rooms) r.vote(map)
+  await flush()
+  await wait(1300)
+  await flush()
+}
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 async function hostAndGuest() {
   const host = await Room.create()
   open.push(host)
@@ -133,12 +144,11 @@ describe('Room 狀態流程', () => {
     guest.onStart = gs
     guest.setPick('elf', 'violin')
     await flush()
-    host.start()
-    await flush()
+    await startAndVote([host, guest], 'mushroom')
     expect(host.state.phase).toBe('playing')
     expect(guest.state.phase).toBe('playing')
-    expect(gs.mock.calls[0][0]).toMatchObject({ host: false, me: 'elf', elfKind: 'violin' })
-    expect(hs.mock.calls[0][0]).toMatchObject({ host: true, elfKind: 'violin' })
+    expect(gs.mock.calls[0][0]).toMatchObject({ host: false, me: 'elf', elfKind: 'violin', map: 'mushroom' })
+    expect(hs.mock.calls[0][0]).toMatchObject({ host: true, elfKind: 'violin', map: 'mushroom' })
     host.backToLobby()
     guest.backToLobby()
     expect(host.state.phase).toBe('lobby')
@@ -196,8 +206,7 @@ describe('Room 狀態流程', () => {
     const { host, guest } = await hostAndGuest()
     let link: Parameters<NonNullable<RoomT['onStart']>>[0] | null = null
     host.onStart = (l) => (link = l)
-    host.start()
-    await flush()
+    await startAndVote([host, guest], 'mushroom')
     const prev = [...link!.peers.values()][0]
     // 與 Game.onPeerRejoin 相同：把新的 peer id 對應到原本的角色
     const rejoin = vi.fn((peer: string, slot: unknown) => {
@@ -216,6 +225,125 @@ describe('Room 狀態流程', () => {
     expect(rejoin.mock.calls[0][1]).toBe(prev)
     expect(back.state.phase).toBe('playing')
     expect(back.current?.me).toBe(prev)
+    // 連回來的玩家也拿到同一張地圖
+    expect(back.current?.map).toBe('mushroom')
+  })
+})
+
+describe('Room 投票選地形', () => {
+  async function three() {
+    const { host, guest } = await hostAndGuest()
+    const g2 = await Room.join(host.state.code)
+    open.push(g2)
+    await flush()
+    return { host, guest, g2 }
+  }
+
+  it('房主按下開始 → 全員進入投票，角色已分配好，選角時沒有倒數；倒數 20 秒', async () => {
+    const { host, guest } = await hostAndGuest()
+    guest.setPick('elf')
+    await flush()
+    const started = vi.fn()
+    host.onStart = started
+    host.start()
+    await flush()
+    expect(host.state.phase).toBe('voting')
+    expect(guest.state.phase).toBe('voting')
+    expect(started).not.toHaveBeenCalled()
+    expect(guest.mySlot).toBe('elf')
+    expect(host.mySlot).toBe(0)
+    const left = guest.state.vote!.endsAt - Date.now()
+    expect(left).toBeGreaterThan(19000)
+    expect(left).toBeLessThanOrEqual(20000)
+    // 投票中不能再選角
+    guest.setPick('goblin')
+    await flush()
+    expect(host.state.players.find((p) => p.id === guest.state.me)?.pick).toBe('elf')
+  })
+
+  it('精靈 1.5 票勝過 1 隻哥布林；兩隻哥布林（2 票）勝過精靈', async () => {
+    {
+      const { host, guest } = await hostAndGuest()
+      guest.setPick('elf')
+      await flush()
+      const got = vi.fn()
+      guest.onStart = got
+      host.start()
+      await flush()
+      guest.vote('mushroom')
+      host.vote('meadow')
+      await flush()
+      expect(host.state.vote?.votes).toEqual({ [guest.state.me]: 'mushroom', [host.state.me]: 'meadow' })
+      await wait(1300)
+      await flush()
+      expect(got.mock.calls[0][0].map).toBe('mushroom')
+      for (const r of open.splice(0)) r.leave()
+      peers.clear()
+    }
+    const { host, guest, g2 } = await three()
+    guest.setPick('elf')
+    await flush()
+    const got = vi.fn()
+    host.onStart = got
+    host.start()
+    await flush()
+    guest.vote('mushroom')
+    host.vote('meadow')
+    g2.vote('meadow')
+    await wait(1300)
+    await flush()
+    expect(got.mock.calls[0][0].map).toBe('meadow')
+  })
+
+  it('可以改票；倒數結束時沒人投票 → 隨機地形', async () => {
+    const { host, guest } = await hostAndGuest()
+    const got = vi.fn()
+    guest.onStart = got
+    host.start()
+    await flush()
+    guest.vote('mushroom')
+    await flush()
+    guest.vote('meadow')
+    await flush()
+    expect(host.state.vote?.votes[guest.state.me]).toBe('meadow')
+    delete host.state.vote!.votes[guest.state.me]
+    ;(host as unknown as { finishVote(): void }).finishVote()
+    await flush()
+    expect(['meadow', 'mushroom']).toContain(got.mock.calls[0][0].map)
+    expect(guest.state.phase).toBe('playing')
+  })
+
+  it('投票中離開：收回這一票，開局時不分配角色給離開的人；投票中新玩家不能加入', async () => {
+    const { host, guest, g2 } = await three()
+    const got = vi.fn()
+    host.onStart = got
+    host.start()
+    await flush()
+    g2.vote('mushroom')
+    await flush()
+    const g2id = g2.state.me
+    g2.leave()
+    await flush()
+    expect(host.state.vote?.votes[g2id]).toBeUndefined()
+    await expect(Room.join(host.state.code)).rejects.toBe('started')
+    host.vote('meadow')
+    guest.vote('meadow')
+    await wait(1300)
+    await flush()
+    const link = got.mock.calls[0][0]
+    expect(link.map).toBe('meadow')
+    expect([...link.peers.keys()]).toEqual([guest.state.me])
+  })
+
+  it('還在結算畫面的玩家收到投票就進入投票（回到大廳後再開局）', async () => {
+    const { host, guest } = await hostAndGuest()
+    await startAndVote([host, guest])
+    expect(guest.state.phase).toBe('playing')
+    host.backToLobby()
+    host.start()
+    await flush()
+    expect(guest.state.phase).toBe('voting')
+    expect(guest.current).toBeNull()
   })
 })
 
