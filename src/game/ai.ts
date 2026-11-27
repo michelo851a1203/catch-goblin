@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { CONFIG } from './config'
 import type { Goblin } from './entities'
+import { canPlantAt, pressured } from './ranger'
 import type { Game } from './Game'
 
 const tmp = new THREE.Vector3()
@@ -52,6 +53,17 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
     if (ai.rescueId !== game.packId) {
       ai.rescueId = game.packId
       ai.rescuing = d < 30 && Math.random() < 0.6
+      if (elf.ranger) g.cutWait = CONFIG.ranger.aiCutDelay[0] + Math.random() * (CONFIG.ranger.aiCutDelay[1] - CONFIG.ranger.aiCutDelay[0])
+    }
+    if (ai.rescuing && elf.ranger) {
+      // 遊俠在遠處收網：跑到被困的隊友身邊割斷繩索
+      const dr = dist2d(g.pos, packing.g.pos)
+      g.wish.copy(game.navigate(g, packing.g.pos))
+      if (dr > 7 && g.dashCd <= 0) game.goblinDash(g)
+      g.cutWait -= dt
+      if (dr < CONFIG.ranger.reel.cutRange - 0.3 && g.interfereCd <= 0 && g.cutWait <= 0) game.goblinInterfere(g)
+      avoidTraps(game, g)
+      return
     }
     if (ai.rescuing) {
       const dir = game.navigate(g, elf.pos)
@@ -64,6 +76,7 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
 
   if (ai.fear > 0 && ai.lastElf) {
     flee(game, g, ai.lastElf, d)
+    if (elf.ranger) avoidTraps(game, g)
     return
   }
 
@@ -91,6 +104,37 @@ export function updateGoblinAI(game: Game, g: Goblin, dt: number) {
   if (ai.target) {
     const dir = game.navigate(g, ai.target)
     g.wish.copy(dir).multiplyScalar(ai.relocating ? 0.85 : ai.walk)
+  }
+  if (elf.ranger) avoidTraps(game, g)
+}
+
+// 遊俠精靈的陷阱：哥布林靠近到看得見的距離時，每個陷阱只判斷一次有沒有注意到（逃命中比較容易漏看）。
+// 注意到的陷阱：沒被追著跑、攪局也好了就順手拆掉；否則繞開
+const TRAP_NOTICE = 0.55
+const TRAP_NOTICE_FLEEING = 0.3
+function avoidTraps(game: Game, g: Goblin) {
+  const r = game.elf.ranger
+  if (!r || !r.traps.length) return
+  const T = CONFIG.ranger.trap
+  const fleeing = g.ai.fear > 0
+  for (const tr of r.traps) {
+    const dx = g.pos.x - tr.pos.x, dz = g.pos.z - tr.pos.z
+    const d = Math.hypot(dx, dz)
+    if (d > T.revealRadius) continue
+    let seen = g.trapSeen.get(tr.id)
+    if (seen === undefined) {
+      seen = Math.random() < (fleeing ? TRAP_NOTICE_FLEEING : TRAP_NOTICE)
+      g.trapSeen.set(tr.id, seen)
+    }
+    if (!seen) continue
+    if (!fleeing && g.interfereCd <= 0 && !game.elf.packing && game.goblinInterfere(g)) return
+    // 繞開：加上遠離陷阱的分量（越近越強），正前方的陷阱往側邊閃
+    const k = (T.revealRadius - d) / T.revealRadius
+    const len = g.wish.length()
+    if (len < 0.05) continue
+    tmp.set(dx / (d || 1), 0, dz / (d || 1))
+    if (g.wish.dot(tmp) < -0.6 * len) tmp.set(-g.wish.z / len, 0, g.wish.x / len).multiplyScalar(g.avoidSide)
+    g.wish.addScaledVector(tmp, 1.6 * k * len).setLength(len)
   }
 }
 
@@ -140,6 +184,7 @@ export function updateElfAI(game: Game, dt: number) {
   const ai = elf.ai
   elf.wish.set(0, 0, 0)
   if (elf.kind === 'violin') return updateVioletAI(game, dt)
+  if (elf.kind === 'ranger') return updateRangerAI(game, dt)
   if (elf.stagger > 0 || elf.packing) return
   if (elf.channel >= 0) {
     if (elf.channel > ai.plannedChannel) game.elfStopMusic()
@@ -235,8 +280,10 @@ function senseGoblins(game: Game) {
     const dx = g.pos.x - elf.pos.x, dz = g.pos.z - elf.pos.z
     const d = Math.hypot(dx, dz)
     const facing = (dx * fwdX + dz * fwdZ) / (d || 1)
-    // 刺客之眼開圖中、最終狩獵：全部看得到
-    const visible = elf.eye > 0 || game.finalHunt || (d < 4 && game.sameRegion(g, elf)) || (d < E.aiSight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
+    // 刺客之眼開圖中、最終狩獵：全部看得到；遊俠：被標記 / 受困 / 剛踩到陷阱的哥布林（玩家的小地圖上也看得到），視野也比較遠
+    const sight = elf.ranger ? CONFIG.ranger.aiSight : E.aiSight
+    const tracked = !!elf.ranger && (g.mark > 0 || g.snare > 0 || g.reveal > 0)
+    const visible = elf.eye > 0 || game.finalHunt || tracked || (d < 4 && game.sameRegion(g, elf)) || (d < sight && (facing > 0.35 || d < 9) && game.world.lineOfSight(elf.pos, g.pos))
     const rec = ai.seen.get(g)
     if (visible) {
       if (rec && now - rec.at < 0.5) {
@@ -343,6 +390,129 @@ function updateVioletAI(game: Game, dt: number) {
   patrol(game, dt, false)
 }
 
+// ───────────────────────── 遊俠精靈 AI ─────────────────────────
+// 風箏打法：和目標保持中距離吹笛召喚箭（兩箭受困），有受困的哥布林就退到收網距離收網；
+// 被貼身時後躍拉開；巡邏、追人途中在洞口與自己和目標之間放陷阱
+function updateRangerAI(game: Game, dt: number) {
+  const elf = game.elf
+  const ai = elf.ai
+  const r = elf.ranger!
+  const R = CONFIG.ranger
+  const E = CONFIG.elf
+  const now = game.elapsed
+  if (elf.stagger > 0 || elf.packing || r.busy) return
+  senseGoblins(game)
+
+  // 有受困的哥布林：站到收網距離內收網（太近就退開、太遠就靠近）
+  let snared: Goblin | null = null
+  let sd = Infinity
+  for (const g of game.goblins) {
+    if (g.captured || g.held || g.snare <= 0) continue
+    const d = dist2d(g.pos, elf.pos)
+    if (d < sd) {
+      sd = d
+      snared = g
+    }
+  }
+  if (snared) {
+    faceTo(elf, snared.pos)
+    if (elf.cd.capture <= 0 && game.reelTarget()) {
+      game.elfStartCapture()
+      return
+    }
+    if (sd < R.reel.minRange + 0.4) {
+      if (r.cd.leap <= 0 && sd < R.reel.minRange - 1) {
+        game.rangerLeap()
+        return
+      }
+      tmp.subVectors(elf.pos, snared.pos).setY(0).normalize().multiplyScalar(6).add(elf.pos)
+      elf.wish.copy(game.navigate(elf, tmp))
+    } else elf.wish.copy(game.navigate(elf, snared.pos))
+    return
+  }
+
+  // 被貼身：後躍拉開（留下的陷阱會擋住直線追上來的哥布林）
+  if (r.cd.leap <= 0 && pressured(elf.pos, game.goblins, R.pressureRadius - 0.6)) {
+    game.rangerLeap()
+    return
+  }
+
+  ai.think -= dt
+  if (ai.think <= 0) {
+    ai.think = 0.2
+    let best: Goblin | null = null
+    let bestScore = Infinity
+    for (const [g, rec] of ai.seen) {
+      if (now - rec.at > 0.3 || g.held) continue
+      let s = dist2d(g.pos, elf.pos)
+      // 已標記的再中一箭就受困
+      if (g.mark > 0) s -= 10
+      if (g.slow > 0) s -= 4
+      if (g === ai.target) s -= 4
+      if (g.grace > 0) s += 6
+      if (s < bestScore) {
+        bestScore = s
+        best = g
+      }
+    }
+    ai.target = best
+  }
+
+  const t = ai.target
+  if (t && !t.captured && !t.held) {
+    const rec = ai.seen.get(t)
+    const d = dist2d(t.pos, elf.pos)
+    const visibleFor = rec ? now - rec.since : 0
+    faceTo(elf, t.pos)
+    const sight = game.world.lineOfSight(elf.pos, t.pos)
+    if (r.cd.arrow <= 0 && t.grace <= 0 && d < R.arrow.range - 2 && d > 1.5 && visibleFor > E.aiReaction * 0.6 && sight) {
+      // 預判：吹奏 draw 秒 + 飛行時間後哥布林的位置（射出時還會再對準一次），加上一點手抖
+      const lead = R.arrow.draw + d / R.arrow.speed
+      tmp.copy(t.pos).addScaledVector(t.vel, lead).sub(elf.pos).setY(0)
+      if (tmp.lengthSq() > 0.01) {
+        const err = (Math.random() - 0.5) * 2 * R.aiAimError
+        tmp.normalize().applyAxisAngle(UP, err)
+        game.rangerArrow(tmp, Math.abs(err) < R.aiAimError * R.aiAimLock ? t : null)
+        return
+      }
+    }
+    // 目標朝自己衝過來（想貼身干擾）或自己正追著目標：在腳邊放陷阱
+    if (r.charges > 0 && d < 9 && d > 2.5 && canPlantAt(elf.pos, game.goblins) && !trapNear(game, elf.pos, 5)) {
+      game.rangerTrap()
+      return
+    }
+    // 保持距離：太遠就追、太近就退，中間就站著等下一箭
+    if (d > R.aiKeep + 2 || !sight) {
+      tmp.copy(t.pos).addScaledVector(t.vel, Math.min(0.6, d / 12))
+      elf.wish.copy(game.navigate(elf, tmp))
+    } else if (d < R.aiKeep - 3) {
+      tmp.subVectors(elf.pos, t.pos).setY(0).normalize().multiplyScalar(6).add(elf.pos)
+      elf.wish.copy(game.navigate(elf, tmp))
+    }
+    return
+  }
+
+  // 沒有目標：經過洞口時放陷阱（哥布林進出山洞的必經之路）
+  if (r.charges > 0 && ai.patrolWait <= 0) {
+    for (const c of game.world.caves) {
+      if (c.kind !== 'cave') continue
+      for (const gp of c.gaps) {
+        if (dist2d(gp.inner, elf.pos) < 2.2 && canPlantAt(elf.pos, game.goblins) && !trapNear(game, elf.pos, 6)) {
+          game.rangerTrap()
+          return
+        }
+      }
+    }
+  }
+  if (chaseLastSeen(game)) return
+  patrol(game, dt, true)
+}
+
+const UP = new THREE.Vector3(0, 1, 0)
+function trapNear(game: Game, p: THREE.Vector3, radius: number) {
+  return !!game.elf.ranger?.traps.some((tr) => dist2d(tr.pos, p) < radius)
+}
+
 // 沒有目標時走向記憶中最後看到哥布林的位置（7 秒內）；有地方可去時回傳 true
 function chaseLastSeen(game: Game) {
   const elf = game.elf
@@ -372,7 +542,20 @@ function patrol(game: Game, dt: number, listen: boolean) {
     elf.yaw += dt * 1.5
     return
   }
-  if (listen) {
+  if (listen && elf.ranger) {
+    // 遊俠是追蹤的好手：聽得到更遠、連躲在洞裡的哥布林也聽得到（取最近的）
+    const R = CONFIG.ranger
+    let heard: Goblin | null = null
+    let hd = R.aiHearRange
+    for (const g of game.goblins) {
+      const d = dist2d(g.pos, elf.pos)
+      if (!g.captured && d < hd) {
+        hd = d
+        heard = g
+      }
+    }
+    if (heard && Math.random() < R.aiHearChance) ai.dest = heard.pos.clone()
+  } else if (listen) {
     const outside = game.goblins.find((g) => !g.captured && g.zone < 0 && dist2d(g.pos, elf.pos) < 40)
     if (outside && Math.random() < 0.005) ai.dest = outside.pos.clone()
   }

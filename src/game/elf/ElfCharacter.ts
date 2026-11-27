@@ -353,6 +353,16 @@ export class ElfCharacter implements CharacterModel {
     })
   }
 
+  // 模型上某個節點（骨頭）區域座標 local 的世界位置（例如遊俠的笛子喇叭口，特效由此發出）；
+  // 模型還沒載入或找不到節點時回傳 false
+  nodeWorld(name: string, local: readonly [number, number, number], out: THREE.Vector3) {
+    const n = this.model?.getObjectByName(name)
+    if (!n) return false
+    n.updateWorldMatrix(true, false)
+    out.set(local[0], local[1], local[2]).applyMatrix4(n.matrixWorld)
+    return true
+  }
+
   setCamera(camera: THREE.Camera | null) {
     this.camera = camera
   }

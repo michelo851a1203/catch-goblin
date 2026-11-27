@@ -32,7 +32,8 @@ const C = {
   gem: 0x5cc8f0,
 }
 
-export type Pose = 'normal' | 'stunned' | 'rooted' | 'held' | 'cast' | 'play' | 'attack' | 'pack' | 'windup' | 'dash' | 'recover'
+// shoot / plant / leap：遊俠精靈（吹笛召喚箭矢、放陷阱、後躍撤步）；snared：哥布林被藤蔓纏住
+export type Pose = 'normal' | 'stunned' | 'rooted' | 'held' | 'cast' | 'play' | 'attack' | 'pack' | 'windup' | 'dash' | 'recover' | 'shoot' | 'plant' | 'leap' | 'snared'
 
 export interface AnimFlags {
   scared?: boolean
@@ -531,7 +532,7 @@ export function createGoblin(tint = 0): CharacterModel {
     animate(dt, m, pose, flags = {}) {
       t += dt
       phase += dt * (5 + 9 * Math.min(m, 1.4))
-      const still = pose === 'stunned' || pose === 'rooted' || pose === 'held'
+      const still = pose === 'stunned' || pose === 'rooted' || pose === 'held' || pose === 'snared'
       const run = still ? 0 : m
       const dash = !!flags.dash && !still
       scaredK += ((flags.scared && !still ? 1 : 0) - scaredK) * Math.min(1, dt * 6)
@@ -553,7 +554,7 @@ export function createGoblin(tint = 0): CharacterModel {
       lastBob = bob
       body.position.y = bob - crouch * 0.12
       body.rotation.x = 0.12 + run * 0.22 + (dash ? 0.25 : 0)
-      body.rotation.z = sw * 0.06 * run
+      body.rotation.z = sw * 0.06 * run + (pose === 'snared' ? Math.sin(t * 14) * 0.09 : 0)
       chest.rotation.y = -sw * 0.18 * run
       hips.rotation.y = sw * 0.12 * run
       chest.scale.set(1, 1 + Math.sin(t * 2.4) * 0.015, 1) // 呼吸
@@ -566,6 +567,10 @@ export function createGoblin(tint = 0): CharacterModel {
         if (pose === 'stunned') {
           A.sh.rotation.set(0.2, 0, out * (0.6 + Math.sin(t * 3 + i) * 0.1))
           A.elbow.rotation.x = -0.2
+        } else if (pose === 'snared') {
+          // 被藤蔓纏住：雙手亂揮想掙脫
+          A.sh.rotation.set(-1.4 + Math.sin(t * 16 + i * 2.1) * 0.5, 0, out * (0.5 + Math.sin(t * 13 + i) * 0.25))
+          A.elbow.rotation.x = -0.9 + Math.sin(t * 19 + i) * 0.4
         } else if (pose === 'rooted') {
           // 被迷住：雙手捧臉
           A.sh.rotation.set(-1.9, 0, -out * 0.5)
@@ -591,7 +596,7 @@ export function createGoblin(tint = 0): CharacterModel {
         lookT = 1.5 + Math.random() * 3
         lookYaw = run > 0.3 ? 0 : (Math.random() - 0.5) * 1.2
       }
-      const panic = scaredK > 0.3 || pose === 'held'
+      const panic = scaredK > 0.3 || pose === 'held' || pose === 'snared'
       head.rotation.y += ((panic ? Math.sin(t * 9) * 0.5 : lookYaw) - head.rotation.y) * Math.min(1, dt * 5)
       head.rotation.x = -0.12 - run * 0.15 + (pose === 'rooted' ? -0.25 : 0)
       head.rotation.z = pose === 'stunned' ? Math.sin(t * 4) * 0.3 : pose === 'rooted' ? Math.sin(t * 3) * 0.12 : 0
@@ -1190,6 +1195,10 @@ export function createElf(): CharacterModel {
       harp.visible = on
     },
     animate(dt, m, pose) {
+      // 程序化替身沒有遊俠專用的動作：吹笛沿用彈奏、放陷阱沿用揮擊
+      if (pose === 'shoot') pose = 'play'
+      else if (pose === 'plant') pose = 'attack'
+      else if (pose === 'leap') pose = 'normal'
       t += dt
       phase += dt * (4 + 7 * Math.min(m, 1.3))
       const still = pose === 'play' || pose === 'pack' || pose === 'stunned'

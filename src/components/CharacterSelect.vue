@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { isEmbedded } from '../platform'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { FloatingParticles, Shader, Sparkle } from 'shaders/vue'
 import elfArt from '../assets/art/elf-card.webp'
 import goblinArt from '../assets/art/goblin-card.webp'
 import violinArt from '../assets/art/violin-card.webp'
+import rangerArt from '../assets/art/ranger-card.webp'
 import meadowArt from '../assets/art/map-meadow.webp'
 import mushroomArt from '../assets/art/map-mushroom.webp'
 import logoZh from '../assets/brand/logo-zh.webp'
 import logoEn from '../assets/brand/logo-en.webp'
-import { CONFIG, MAP_IDS, type ElfKind, type MapId, type Role } from '../game/config'
+import { CONFIG, ELF_KINDS, MAP_IDS, type ElfKind, type MapId, type Role } from '../game/config'
 import { sfx } from '../game/audio'
 import { loadStats } from '../stats'
 import { keyLabel, loadKeybinds } from '../keybinds'
@@ -28,12 +29,12 @@ import { tallyVotes, voteWeight, type Pick } from '../net/assign'
 const props = defineProps<{ room?: Room | null }>()
 const emit = defineEmits<{ start: [role: Role, kind: ElfKind, map: MapId]; multiplayer: []; leave: [] }>()
 
-// 卡片：精靈 → 點下後飛出兩張精靈卡（豎琴 / 紫晶）；哥布林 / 豎琴 / 紫晶 → 進入角色詳情頁（模型 + 技能，見 CharacterDetail）
+// 卡片：精靈 → 點下後飛出三張精靈卡（豎琴 / 紫晶 / 遊俠）；哥布林 / 各精靈 → 進入角色詳情頁（模型 + 技能，見 CharacterDetail）
 type CardId = 'elf' | 'goblin' | ElfKind
 const detailId = ref<CardId | null>(null)
 const elfMenu = ref(false)
 // 飛出動畫的起點（相對於最終位置的水平位移）
-const flyFrom = ref<Record<CardId, number>>({ elf: 0, goblin: 0, harp: 0, violin: 0 })
+const flyFrom = ref<Record<CardId, number>>({ elf: 0, goblin: 0, harp: 0, violin: 0, ranger: 0 })
 const cardEls = ref<Record<string, HTMLElement | null>>({})
 const stats = loadStats()
 const binds = ref(loadKeybinds())
@@ -97,6 +98,22 @@ const cards = computed<Card[]>(() => {
           { icon: 'skill-eye', key: keyLabel(b.elf.music), name: t('skillEye'), desc: t('skillEyeDesc') },
           { icon: 'skill-charge', key: keyLabel(b.elf.stun), name: t('skillCharge'), desc: t('skillChargeDesc', { stun: CONFIG.violin.charge.stun, lock: CONFIG.violin.eye.lockTime }) },
           { icon: 'skill-capture', key: keyLabel(b.elf.capture), name: t('skillCapture'), desc: t('skillCaptureDesc', { s: CONFIG.elf.capture.packTime }) },
+        ],
+      },
+      {
+        id: 'ranger',
+        role: 'elf',
+        kind: 'ranger',
+        name: t('rangerName'),
+        sub: t('rangerSub'),
+        art: rangerArt,
+        tagline: t('rangerTagline'),
+        goal: t('elfGoal'),
+        skills: [
+          { icon: 'skill-trap', key: keyLabel(b.elf.gaze), name: t('skillTrap'), desc: t('skillTrapDesc', { n: CONFIG.ranger.trap.charges, snare: CONFIG.ranger.trap.snare }) },
+          { icon: 'skill-leap', key: keyLabel(b.elf.music), name: t('skillLeap'), desc: t('skillLeapDesc', { d: CONFIG.ranger.leap.distance, r: CONFIG.ranger.pressureRadius }) },
+          { icon: 'skill-arrow', key: keyLabel(b.elf.stun), name: t('skillArrow'), desc: t('skillArrowDesc', { near: CONFIG.ranger.arrow.fullRange }) },
+          { icon: 'skill-reel', key: keyLabel(b.elf.capture), name: t('skillReel'), desc: t('skillReelDesc', { min: CONFIG.ranger.reel.minRange, max: CONFIG.ranger.reel.maxRange, s: CONFIG.ranger.reel.time }) },
         ],
       },
     ]
@@ -185,14 +202,14 @@ function fmtVotes(n: number) {
 }
 const me = computed(() => lobby.value?.players.find((p) => p.id === lobby.value!.me) ?? null)
 const myPick = computed(() => me.value?.pick ?? null)
-const kindName = (k?: ElfKind) => (k === 'violin' ? t('violinName') : t('elfName'))
+const kindName = (k?: ElfKind) => (k === 'violin' ? t('violinName') : k === 'ranger' ? t('rangerName') : t('elfName'))
 const myPickLabel = computed(() => {
   const label: Record<Pick, string> = { elf: kindName(me.value?.elf), goblin: t('goblinName'), random: t('mpPickRandom') }
   return label[myPick.value ?? 'random']
 })
 const myPickIcon = computed<IconName>(() => {
   const p = myPick.value ?? 'random'
-  return p === 'elf' ? (me.value?.elf === 'violin' ? 'icon-elf-violin' : 'icon-elf-harp') : p === 'goblin' ? 'icon-goblin' : 'icon-random'
+  return p === 'elf' ? (me.value?.elf === 'violin' ? 'icon-elf-violin' : me.value?.elf === 'ranger' ? 'icon-elf-ranger' : 'icon-elf-harp') : p === 'goblin' ? 'icon-goblin' : 'icon-random'
 })
 function pickers(c: Card) {
   return lobby.value?.players.filter((p) => p.pick === c.role && (!c.kind || (p.elf ?? 'harp') === c.kind)) ?? []
@@ -227,12 +244,22 @@ function choose(id: CardId) {
   sfx.unlock()
   sfx.flip()
   if (id === 'elf') {
-    // 精靈卡：從卡片位置飛出兩張精靈卡（豎琴留在原位、紫晶飛到右邊）
+    // 精靈卡：從被點的精靈卡位置飛出三張精靈卡。三張卡的最終位置要等排版完才知道，
+    // 所以在畫面更新後、繪製前量出每張卡離原本精靈卡的水平距離，當作飛出動畫的起點
     const from = cardEls.value.elf!.getBoundingClientRect()
-    const right = cardEls.value.goblin!.getBoundingClientRect()
-    flyFrom.value.harp = 0
-    flyFrom.value.violin = from.left - right.left
+    const cx = from.left + from.width / 2
+    flyFrom.value.harp = flyFrom.value.violin = flyFrom.value.ranger = 0
     elfMenu.value = true
+    void nextTick(() => {
+      for (const id of ELF_KINDS) {
+        const el = cardEls.value[id]
+        if (!el) continue
+        // 量排版位置（offsetLeft 不受飛出動畫的 transform 影響）
+        const stage = el.offsetParent as HTMLElement | null
+        const left = (stage?.getBoundingClientRect().left ?? 0) + el.offsetLeft
+        flyFrom.value[id] = cx - (left + el.offsetWidth / 2)
+      }
+    })
     return
   }
   detailId.value = id
@@ -674,9 +701,23 @@ h1.logo::after {
 .elf-back {
   z-index: 2;
 }
-/* 兩張精靈卡下方多了返回鈕：卡片再縮一點，矮視窗（CrazyGames 821×462）返回鈕才不會壓到卡片 */
+/* 精靈卡下方多了返回鈕：卡片再縮一點，矮視窗（CrazyGames 821×462）返回鈕才不會壓到卡片；三張精靈卡並排，間距也縮小 */
 .select.elf-menu .card-wrap {
-  width: min(clamp(240px, 26vw, 400px), 40dvh);
+  width: min(clamp(200px, 24vw, 400px), 40dvh);
+}
+.select.elf-menu .stage {
+  gap: clamp(14px, 3.2vw, 56px);
+}
+.card-wrap.fly + .card-wrap.fly + .card-wrap.fly {
+  animation-delay: 0.16s;
+}
+.ranger .art {
+  /* 原畫是淺色背景：疊一層森林綠漸層（multiply），中央保持明亮、四周暗下來，和其他卡片的色調一致 */
+  background-image: var(--art), radial-gradient(ellipse 75% 65% at 50% 38%, #fff 30%, #a8cf96 62%, #1f4a2a 100%) !important;
+  background-blend-mode: multiply;
+}
+.ranger .plate {
+  background: linear-gradient(transparent, rgba(14, 40, 22, 0.94) 55%);
 }
 .violin .art {
   /* 原畫是淺色背景：疊一層紫夜漸層（multiply），中央保持明亮、四周暗下來，和其他卡片的色調一致 */
@@ -986,7 +1027,10 @@ footer {
     width: min(44vw, 45dvh);
   }
   .select.elf-menu .card-wrap {
-    width: min(44vw, 40dvh);
+    width: min(30vw, 40dvh);
+  }
+  .select.elf-menu .stage {
+    gap: 8px;
   }
 }
 /* iOS Safari 的 vh 以工具列收起時的高度計算，網址列 / 分頁列展開時卡片會超出畫面、點不到開始按鈕，

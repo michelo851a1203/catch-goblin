@@ -78,14 +78,59 @@ export const CONFIG = {
     // AI 開場多久之後才會開刺客之眼找人（秒）
     aiEyeAfter: SHORT ? 5 : 25,
   },
+
+  // 遊俠精靈（長笛遊俠）：吹笛召喚藤蔓陷阱與箭矢，沒有暈眩 / 定身，只能讓哥布林「受困」再從遠處收網（見 docs/ranger.md）。
+  // 移動速度與其他精靈相同；近身是弱點：pressureRadius 內有哥布林時吹笛（箭、收網）速度乘上 pressureRate。
+  // 2026-11-27 量測（短局版，每格 192 場；豎琴 / 紫晶的基準見 mushroomWorld.ts）：
+  //                     草原    蘑菇秘境
+  //   遊俠・AI 精靈       0.80     0.78
+  //   遊俠・玩家速度精靈   0.94     0.93
+  // 射程（arrow.range）主要影響草原、收網時間（reel.time）主要影響蘑菇秘境：兩張地圖靠這兩個數值拉平
+  // 網站版（每格 96 場）：AI 精靈 0.70 / 0.74；玩家速度精靈 0.79 / 0.93（蘑菇秘境偏高，尚未拉平，見 docs/ranger.md 6.3）
+  ranger: {
+    // 藤蔓陷阱：充能制（最多 charges 層、每 recharge 秒回一層）；放下 armTime 秒後生效、存在 life 秒；場上最多 maxActive 個（超過時最舊的消失）。
+    // 哥布林在 revealRadius 內才看得到；踩到（triggerRadius）受困 snare 秒，並在精靈小地圖顯示 minimapTime 秒。
+    // 哥布林可在 disarmRange 內用攪局拆掉；被困哥布林 noTrapRadius 內不能再放陷阱（避免專抓救援者的誘餌組合太強）
+    trap: { charges: 2, recharge: 12, maxActive: 3, armTime: 1, life: 45, revealRadius: 3, triggerRadius: 1.1, snare: 3, minimapTime: 4, disarmRange: 3.2, noTrapRadius: 4, castTime: 0.35 },
+    // 召喚箭矢：吹笛 draw 秒後射出，飛行速度 speed、射程 range。飛行距離 fullRange 以內命中只減速（slow＝速度倍率），
+    // 超過才標記 markTime 秒；命中已標記 / 減速中的目標＝受困 snare 秒。
+    // 射中哥布林時冷卻縮短為 hitCooldown（獎勵連中兩箭；落空則要等完整的 cooldown），
+    // markTime 要比「冷卻 + 吹奏 + 飛行」長，第二箭才來得及
+    arrow: { range: 24, speed: 45, hitRadius: 0.6, cooldown: 3, hitCooldown: 1.5, draw: 0.35, fullRange: 6, slow: 0.6, slowTime: 1.5, markTime: 8, markSlow: 0.6, snare: 3 },
+    // 後躍撤步：time 秒內向後跳 distance 公尺，在起跳位置留下一個不佔充能的陷阱（立即生效）
+    leap: { distance: 6, time: 0.38, cooldown: 14 },
+    // 收網（捕獲）：只能對 minRange～maxRange 內、視線可及的受困哥布林使用；進度保留沿用 elf.capture 的 keep 規則。
+    // 隊友在被困者 cutRange 內按攪局＝割斷繩索；割繩的哥布林會被藤蔓反纏、標記 cutMark 秒（救人有風險，0＝關閉）
+    // 收網時哥布林會被繩索以 pull（m/s）拖向精靈，直到距離剩 pullTo：把牠從同伴身邊拖走，救援者得追上來
+    reel: { minRange: 4, maxRange: 12, time: SHORT ? 3 : 5, cooldown: 1, cutRange: 3.2, cutMark: 8, freedMark: true, pull: 10, pullTo: 2.5, keep: 1, keepMax: 0.85, keepTime: 10, cutStagger: 0.5 },
+    pressureRadius: 3,
+    pressureRate: 0.5,
+    aiSpeed: SHORT ? 6.8 : 6.2,
+    // AI 遊俠與目標保持的距離、視野（比其他精靈的 elf.aiSight 遠，配合箭的射程）
+    aiKeep: 8,
+    aiSight: 24,
+    // AI 巡邏時每個判定步驟有 aiHearChance 的機率聽到 aiHearRange 內最近的哥布林（含洞內），走過去找
+    aiHearRange: 45,
+    // 網站版的地圖大、時間長，聽得太靈會讓 AI 遊俠在蘑菇秘境明顯偏強
+    aiHearChance: SHORT ? 0.06 : 0.02,
+    // AI 的箭：瞄準誤差（弧度，±）；誤差小於 aiAimError × aiAimLock 時視為瞄準到位（射出時會再對準目標）
+    aiAimError: 0.08,
+    aiAimLock: 0.7,
+    // AI 哥布林看到同伴被收網後，要過這麼久才割得斷繩索（秒，下限～上限；模擬真人的反應時間）
+    aiCutDelay: [0.5, 1.2],
+  },
 }
 
 export type Role = 'elf' | 'goblin'
-// 精靈角色：預設的豎琴精靈 / 紫晶精靈（小提琴刺客）
-export type ElfKind = 'harp' | 'violin'
-export const ELF_KINDS: readonly ElfKind[] = ['harp', 'violin']
+// 精靈角色：預設的豎琴精靈 / 紫晶精靈（小提琴刺客）/ 遊俠精靈（長笛遊俠）。所有精靈都以樂器作為攻擊手段
+export type ElfKind = 'harp' | 'violin' | 'ranger'
+export const ELF_KINDS: readonly ElfKind[] = ['harp', 'violin', 'ranger']
 export function isElfKind(v: unknown): v is ElfKind {
-  return v === 'harp' || v === 'violin'
+  return v === 'harp' || v === 'violin' || v === 'ranger'
+}
+// 隨機挑一位精靈（單機當哥布林時的 AI 對手、多人沒有人指定精靈時）
+export function randomElfKind(): ElfKind {
+  return ELF_KINDS[Math.floor(Math.random() * ELF_KINDS.length)]
 }
 
 // 地形（地圖）：預設的翠綠草原 / 蘑菇秘境（有高低層、傳送門與機關）

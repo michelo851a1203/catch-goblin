@@ -151,8 +151,74 @@ export const VIOLINIST_RIG: ElfRig = {
   },
 }
 
+// 遊俠精靈（長笛遊俠）：tools/blender/build_ranger.py 產生。長笛掛在 prop_flute 骨（右手的子骨），每個動作各自打了關鍵影格
+// （垂在身側 ⇄ 舉到唇邊），所以不能移除 prop_ 軌道。她穿牛仔褲、短髮，沒有布料 / 頭髮彈簧骨。
+// 手指：每隻手兩節四指骨（Left/RightFingers1、2），握笛時四指彎起來包住笛身，所以不需要 holdProp
+export const RANGER_ASSETS = {
+  character: `${base}models/ranger/ranger.glb`,
+  // Meshy 原始 4096² 色彩 / 法線貼圖另存（GLB 內嵌 2048²）
+  colorHiRes: `${base}models/ranger/ranger_color_4k.webp`,
+  normalHiRes: `${base}models/ranger/ranger_normal_4k.webp`,
+} as const
+
+export const RANGER_CLIPS = ['Idle', 'Walk', 'Run', 'Play', 'Shoot', 'Plant', 'Leap', 'Capture', 'Victory', 'Stunned'] as const
+
+// 長笛在 prop_flute 骨區域座標中的位置（公尺，+Y 沿笛身）：喇叭口（箭矢 / 繩索由這一端出去）與吹口端
+export const RANGER_FLUTE = { socket: 'prop_flute', tip: [0, 0.23, 0], mouth: [0, -0.37, 0] } as const
+
+export const RANGER_ANIM: AnimSpec = {
+  clips: {
+    Idle: { loop: true, fade: 0.3 },
+    Walk: { loop: true, fade: 0.25 },
+    Run: { loop: true, fade: 0.2 },
+    Play: { loop: true, fade: 0.2 },
+    // 吹笛召喚箭矢（0.83 s）：0.33 s 吹出那一聲（箭在此刻出現）
+    Shoot: { loop: false, fade: 0.08 },
+    // 吹笛種下藤蔓陷阱（0.58 s）：0.33 s 喇叭口點向腳前的地面
+    Plant: { loop: false, fade: 0.08 },
+    // 後躍撤步（0.5 s）：0.06～0.36 s 騰空，之後落地緩衝；角色的水平位移由遊戲控制
+    Leap: { loop: false, fade: 0.05 },
+    Capture: { loop: true, fade: 0.18 },
+    Victory: { loop: true, fade: 0.4 },
+    Stunned: { loop: true, fade: 0.12 },
+  },
+  poseClip: {
+    play: 'Play', cast: 'Shoot', shoot: 'Shoot', attack: 'Plant', plant: 'Plant', pack: 'Capture', stunned: 'Stunned',
+    dash: 'Leap', leap: 'Leap',
+  },
+  // build_ranger.py 的程序化步態（WALK_REF / RUN_REF）：timeScale=1 時腳底相對地面的速度
+  gaitRef: { Walk: 1.6, Run: 6.5 },
+  gaitRange: { Walk: [0.5, 2.0], Run: [0.6, 1.5] },
+}
+
+export const RANGER_RIG: ElfRig = {
+  kind: 'ranger',
+  url: RANGER_ASSETS.character,
+  clips: RANGER_CLIPS,
+  anim: RANGER_ANIM,
+  lod: ['RangerMesh_LOD0', 'RangerMesh_LOD1'],
+  springChains: {},
+  colliders: [],
+  // 沒有由程式驅動的骨頭（不會符合任何軌道）
+  stripTracks: /^(?!)/,
+  atlasMaterial: 'M_Ranger',
+  // 皮膚很白（貼圖接近 1.0）：亮面壓低一些，才看得出鎖骨、腹部的明暗
+  cel: { lit: 0.36, shade: 0.66, faceShade: 0.88 },
+  hiResMap: RANGER_ASSETS.colorHiRes,
+  hiResNormal: RANGER_ASSETS.normalHiRes,
+  blink: {
+    eyes: [
+      // z 的容許範圍收窄：瀏海就在眼睛前方 2 cm，範圍太大時垂在眼前的髮絲也會被塗成眼皮
+      { center: [-0.0395, 1.554, 0.071], radius: [0.024, 0.0165, 0.012] },
+      { center: [0.0395, 1.554, 0.071], radius: [0.024, 0.0165, 0.012] },
+    ],
+    skin: 0xf5e2da,
+    lash: 0x3a3038,
+  },
+}
+
 export function rigOf(kind: ElfKind): ElfRig {
-  return kind === 'violin' ? VIOLINIST_RIG : HARP_RIG
+  return kind === 'violin' ? VIOLINIST_RIG : kind === 'ranger' ? RANGER_RIG : HARP_RIG
 }
 
 // 隱身時精靈玩家自己看到的半透明程度

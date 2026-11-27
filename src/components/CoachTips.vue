@@ -192,10 +192,12 @@ const card = computed((): { icon: IconName; text: string } | null => {
     case 'dash':
       return { icon: 'skill-dash', text: touch ? t('coachDashTouch') : t('coachDash', { key: k(gb.dash) }) }
     case 'rescue':
+      if (props.elfKind === 'ranger') return { icon: 'skill-interfere', text: touch ? t('coachCutTouch') : t('coachCut', { key: k(gb.interfere) }) }
       return { icon: 'skill-interfere', text: touch ? t('coachRescueTouch') : t('coachRescue', { key: k(gb.interfere) }) }
     case 'ult':
       return { icon: 'skill-ult', text: touch ? t('coachUltTouch') : t('coachUlt', { key: k(gb.ult) }) }
     case 'combo': {
+      if (props.elfKind === 'ranger') return { icon: 'skill-arrow', text: touch ? t('coachComboRangerTouch') : t('coachComboRanger', { a: k(e.gaze), b: k(e.stun) }) }
       const violin = props.elfKind === 'violin'
       if (touch) return { icon: violin ? 'skill-charge' : 'skill-gaze', text: violin ? t('coachComboViolinTouch') : t('coachComboTouch') }
       const keys = { a: k(e.gaze), b: k(e.stun) }

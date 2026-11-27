@@ -7,6 +7,7 @@ export const ROOT = resolve(__dirname, '..')
 export const ELF_GLB = resolve(ROOT, 'public/models/elf/elf.glb')
 export const HARP_GLB = resolve(ROOT, 'public/models/elf/harp.glb')
 export const VIOLINIST_GLB = resolve(ROOT, 'public/models/violinist/violinist.glb')
+export const RANGER_GLB = resolve(ROOT, 'public/models/ranger/ranger.glb')
 
 // Node 沒有 Image / createImageBitmap：以外掛攔截貼圖載入，其餘照真實 GLTFLoader 流程解析
 export function parseGlb(file: string) {
@@ -28,6 +29,7 @@ export function fileLoad(url: string) {
   if (url.endsWith('elf.glb')) return parseGlb(ELF_GLB)
   if (url.endsWith('harp.glb')) return parseGlb(HARP_GLB)
   if (url.endsWith('violinist.glb')) return parseGlb(VIOLINIST_GLB)
+  if (url.endsWith('ranger.glb')) return parseGlb(RANGER_GLB)
   return Promise.reject(new Error(`404 ${url}`))
 }
 

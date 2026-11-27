@@ -38,7 +38,7 @@ onMounted(() => {
     if (game !== g) return
     loading.value = false
     // 當哥布林時告訴玩家這一局的精靈是哪一位
-    if (props.role === 'goblin') g.toast(t('tOpponent', { name: kind === 'violin' ? t('violinName') : t('elfName') }), 'info')
+    if (props.role === 'goblin') g.toast(t('tOpponent', { name: kind === 'violin' ? t('violinName') : kind === 'ranger' ? t('rangerName') : t('elfName') }), 'info')
   })
   // 遊戲中播自己陣營的音樂；再玩一局時 GameView 重新掛載，從結算的勝利音樂換回來
   music.play(props.role)
@@ -125,7 +125,7 @@ function toggleSpeed() {
     <!-- 上方：時間與剩餘數量 -->
     <div class="top">
       <div class="pill side">
-        <span class="label">{{ role === 'elf' ? (hud.elfKind === 'violin' ? t('violinName') : t('elfName')) : t('goblinName') }}</span>
+        <span class="label">{{ role === 'elf' ? (hud.elfKind === 'violin' ? t('violinName') : hud.elfKind === 'ranger' ? t('rangerName') : t('elfName')) : t('goblinName') }}</span>
       </div>
       <div class="pill timer" :class="{ urgent: hud.timeLeft < 60 }"><img class="gi" :src="icon('ui-timer')" alt="" />{{ clock }}</div>
       <div class="pill side">
@@ -175,6 +175,7 @@ function toggleSpeed() {
         <img class="ico" :src="icon(s.used ? 'skill-ult-used' : s.icon)" alt="" />
         <span class="cd" v-if="s.cd > 0" :style="{ '--p': (s.cd / s.max) * 100 + '%' }"></span>
         <span class="num" v-if="s.cd > 0">{{ Math.ceil(s.cd) }}</span>
+        <span class="count" v-if="s.count !== undefined">{{ s.count }}</span>
         <kbd>{{ s.key }}</kbd>
         <small>{{ s.name }}</small>
       </button>
@@ -538,6 +539,21 @@ function toggleSpeed() {
   font-size: 22px;
   font-weight: 700;
   z-index: 2;
+}
+.skill .count {
+  position: absolute;
+  right: -4px;
+  bottom: -2px;
+  min-width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: #2f6b2a;
+  border: 1.5px solid #e6c878;
+  border-radius: 9px;
+  z-index: 3;
 }
 .skill kbd {
   position: absolute;

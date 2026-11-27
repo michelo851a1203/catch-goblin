@@ -44,8 +44,9 @@ controls.enableDamping = true
 // 方便在主控台調整視角（例如拉近臉部）：__preview.controls.target.set(0, 1.47, 0)
 Object.assign(window, { __preview: { camera, controls } })
 
-// ?kind=violin 預覽紫晶精靈
-const kind = new URLSearchParams(location.search).get('kind') === 'violin' ? 'violin' : 'harp'
+// ?kind=violin 預覽紫晶精靈、?kind=ranger 預覽遊俠精靈
+const qKind = new URLSearchParams(location.search).get('kind')
+const kind = qKind === 'violin' || qKind === 'ranger' ? qKind : 'harp'
 const elf = new ElfCharacter({ rig: rigOf(kind), blink: true })
 elf.setCamera(camera)
 scene.add(elf.root)
@@ -68,6 +69,8 @@ let walkAround = false
 let music = 0
 const POSES: [string, Pose | 'victory'][] = [
   ['一般', 'normal'], ['彈奏', 'play'], ['凝視', 'cast'], ['攻擊', 'attack'], ['打包', 'pack'], ['暈眩', 'stunned'], ['勝利', 'victory'],
+  // 遊俠精靈：吹笛召喚箭矢 / 種陷阱 / 後躍撤步（其他角色沒有對應的動作，會維持一般姿勢）
+  ...(kind === 'ranger' ? ([['射箭', 'shoot'], ['陷阱', 'plant'], ['後躍', 'leap']] as [string, Pose][]) : []),
 ]
 const poseBox = $('poses')
 for (const [label, p] of POSES) {

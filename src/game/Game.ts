@@ -3,10 +3,12 @@ import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { ElfMagicFx } from './elf/ElfMagicFx'
 import { ViolinFx } from './elf/ViolinFx'
-import { GHOST_OPACITY } from './elf/rigs'
+import { RangerFx } from './elf/RangerFx'
+import { GHOST_OPACITY, RANGER_FLUTE } from './elf/rigs'
 import { CONFIG, type ElfKind, type MapId, type Role } from './config'
 import { Actor, Elf, Goblin, setBarProgress, type ChargePhase, type ElfAction } from './entities'
 import { behindSpot, fearTargets, nearestTarget, sweepHit, targetable } from './violin'
+import { TRAP_GONE, arrowEffect, canPlantAt, pressured, reelRange, type ArrowEffect, type Trap } from './ranger'
 import { GAP_HALF, World, type Warp } from './world'
 import { groundAt, setGround } from './ground'
 import { makeSprite, noOutline, releaseToonGpu } from './toon'
@@ -48,15 +50,26 @@ export type GameEvent =
   | { e: 'blink'; from: V2; to: V2; yaw: number }
   | { e: 'charge'; o: V2; d: V2; g?: number }
   | { e: 'chargeEnd'; p: V2; g: number }
+  // 遊俠精靈：開始吹笛放陷阱、陷阱出現 / 消失（why＝TRAP_GONE，g＝踩到或拆掉的哥布林）、開始吹笛召喚箭、箭射出、箭命中、後躍 / 落地
+  | { e: 'rplant' }
+  | { e: 'trap'; id: number; p: V2; arm: number }
+  | { e: 'trapGone'; id: number; p: V2; why: number; g: number }
+  | { e: 'draw'; d: V2 }
+  | { e: 'arrow'; id: number; o: V2; d: V2; len: number }
+  | { e: 'arrowHit'; id: number; p: V2; g: number; k: ArrowEffect }
+  | { e: 'leap'; o: V2; d: V2 }
+  | { e: 'leapEnd'; p: V2 }
   | { e: 'left'; name: string }
   // 蘑菇秘境：角色 s 走進傳送門 / 踩到彈跳蘑菇 w
   | { e: 'warp'; s: Slot; w: number }
   | { e: 'end'; w: Role; c: number; time: number }
 // 真人玩家名單：[角色, 暱稱, 玩家編號]
 type Roster = [Slot, string, number][]
-type Act = 'gaze' | 'music' | 'musicStop' | 'stun' | 'capture' | 'dash' | 'interfere' | 'ult' | 'stealth' | 'eye' | 'charge'
+type Act = 'gaze' | 'music' | 'musicStop' | 'stun' | 'capture' | 'dash' | 'interfere' | 'ult' | 'stealth' | 'eye' | 'charge' | 'trap' | 'arrow' | 'leap'
 const HARP_ACTS: Act[] = ['gaze', 'music', 'musicStop', 'stun', 'capture']
 const VIOLIN_ACTS: Act[] = ['stealth', 'eye', 'charge', 'capture']
+const RANGER_ACTS: Act[] = ['trap', 'arrow', 'leap', 'capture']
+const ACTS: Record<ElfKind, Act[]> = { harp: HARP_ACTS, violin: VIOLIN_ACTS, ranger: RANGER_ACTS }
 const CHARGE_PHASES: ChargePhase[] = ['windup', 'dash', 'recover']
 interface Snapshot {
   t: 's'
@@ -68,16 +81,19 @@ interface Snapshot {
   pk: number
   e: number[]
   g: number[][]
+  // 遊俠精靈的陷阱：[編號, x, z, 還要幾秒生效, 剩餘秒數]（其他精靈沒有這個欄位）
+  tr?: number[][]
 }
 // 加入者回報位置的位移額度上限（公尺）
 const IN_BUDGET_CAP = 4
 const PHASES: HudState['phase'][] = ['countdown', 'play', 'over']
 // 瀏覽器收得到的媒體鍵（系統層級的靜音 / 音量鍵由 macOS 直接處理，網頁攔不到）
 const MEDIA_KEYS = new Set(['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'AudioVolumeMute'])
-const CAST_POSES: Pose[] = ['normal', 'cast', 'attack']
+const CAST_POSES: Pose[] = ['normal', 'cast', 'attack', 'shoot']
 // 精靈動作狀態 → 姿勢（硬直優先；空閒時看施法動作）
 const ELF_ACTION_POSE: Record<ElfAction, Pose | null> = {
   windup: 'windup', dash: 'dash', recover: 'recover', channel: 'play', stealthCast: 'play', packing: 'pack', idle: null,
+  draw: 'shoot', plant: 'plant', leap: 'leap',
 }
 // 精靈模型載入的等待上限（毫秒）：寧可載入畫面久一點，也不要以程序化替身開局（會破壞遊戲體驗）。
 // 下載失敗（重試用完）時 ready 會立刻完成、改用替身；這個上限只防網路卡住永遠不回應
@@ -92,6 +108,13 @@ const MAP_SEEN = '#9effa0'
 const r2 = (v: number) => Math.round(v * 100) / 100
 // 彈跳蘑菇的飛行時間（秒，畫面上的拋物線）
 const HOP_TIME = 0.75
+// 遊俠精靈：箭矢的輔助瞄準（準星方向這個夾角內的哥布林，cos 值）、後躍時這個距離內有哥布林就往遠離牠的方向跳、
+// 後躍留下的陷阱多久後生效（直線追上來的哥布林會踩到，往旁邊閃就躲得掉）
+const AIM_CONE = Math.cos((7 * Math.PI) / 180)
+const LEAP_AWAY = 8
+const LEAP_TRAP_ARM = 0.4
+// 加入者：房主已經沒有這個動作、本機卻還停在吹笛 / 後躍超過這個秒數時（漏掉事件），以快照為準清掉
+const STALE_RANGER = 0.8
 
 export interface SkillView {
   key: string
@@ -103,6 +126,8 @@ export interface SkillView {
   active: boolean
   usable: boolean
   used?: boolean
+  // 充能制的技能（遊俠的陷阱）：剩餘層數
+  count?: number
 }
 
 export interface Toast {
@@ -211,6 +236,7 @@ export class Game {
   fx: FxSystem
   elfFx: ElfMagicFx
   violinFx: ViolinFx
+  rangerFx: RangerFx
   // 環境光反射貼圖（PMREM 的 render target）：WebGL context 遺失後內容會清空，恢復時要重新產生
   private envTarget: THREE.WebGLRenderTarget | null = null
   // 可以開始倒數了：精靈模型載入完成（或逾時改用替身）；多人加入者另外等到房主的第一個快照
@@ -315,6 +341,7 @@ export class Game {
     this.staff = this.fx.createStaff()
     this.elfFx = new ElfMagicFx(this.scene, this.fx)
     this.violinFx = new ViolinFx(this.scene, this.fx, this.elfFx)
+    this.rangerFx = new RangerFx(this.scene, this.fx, this.elfFx)
     // 環境光反射只影響 PBR 材質（GLB 精靈），場景其他卡通材質不受影響
     this.buildEnv()
     this.scene.environmentIntensity = 0.55
@@ -327,6 +354,8 @@ export class Game {
     this.elf.isPlayer = this.me === 'elf'
     this.elf.character.setCamera(this.camera)
     this.scene.add(this.elf.root)
+    // 遊俠：音符、繩索從笛子的喇叭口出來
+    if (kind === 'ranger') this.rangerFx.tip = (out) => this.elf.character.nodeWorld(RANGER_FLUTE.socket, RANGER_FLUTE.tip, out)
 
     // 哥布林：分散在各個山洞，玩家在第一個洞
     const caves = this.world.caves
@@ -429,6 +458,7 @@ export class Game {
     this.fx.dispose()
     this.elfFx.dispose()
     this.violinFx.dispose()
+    this.rangerFx.dispose()
     this.xrayMat?.dispose()
     this.elf.character.dispose()
     this.envTarget?.dispose()
@@ -603,10 +633,12 @@ export class Game {
     if (this.role === 'elf') {
       const b = this.binds.elf
       // 紫晶精靈沿用同一組四個技能鍵：隱身 / 刺客之眼 / 衝鋒擊暈 / 捕獲
-      const v = this.elf.kind === 'violin'
-      if (hit(b.gaze, 'Digit1')) act = v ? 'stealth' : 'gaze'
-      else if (hit(b.music, 'Digit2')) act = v ? 'eye' : 'music'
-      else if (hit(b.stun, 'Digit3', 'Mouse0')) act = v ? 'charge' : 'stun'
+      // 遊俠精靈也是同一組鍵：藤蔓陷阱 / 後躍撤步 / 召喚箭矢 / 收網
+      const k = this.elf.kind
+      const pick = (harp: Act, violin: Act, ranger: Act) => (k === 'violin' ? violin : k === 'ranger' ? ranger : harp)
+      if (hit(b.gaze, 'Digit1')) act = pick('gaze', 'stealth', 'trap')
+      else if (hit(b.music, 'Digit2')) act = pick('music', 'eye', 'leap')
+      else if (hit(b.stun, 'Digit3', 'Mouse0')) act = pick('stun', 'charge', 'arrow')
       else if (hit(b.capture, 'Digit4', 'Mouse2')) act = 'capture'
     } else {
       const g = this.playerGoblin!
@@ -622,8 +654,8 @@ export class Game {
 
   // 本機玩家的技能：房主 / 單機直接執行，加入者送給房主判定
   private act(act: Act) {
-    // 凝視朝畫面正前方；衝鋒朝角色面向
-    const d = act === 'gaze' ? this.camForward() : act === 'charge' ? new THREE.Vector3(Math.sin(this.elf.yaw), 0, Math.cos(this.elf.yaw)) : null
+    // 凝視、箭矢朝畫面正前方；衝鋒朝角色面向
+    const d = act === 'gaze' || act === 'arrow' ? this.camForward() : act === 'charge' ? new THREE.Vector3(Math.sin(this.elf.yaw), 0, Math.cos(this.elf.yaw)) : null
     const dir: V2 | undefined = d ? [r2(d.x), r2(d.z)] : undefined
     if (this.authority) this.perform(this.me, act, dir)
     else this.net!.send({ t: 'act', a: act, d: dir }, true)
@@ -633,15 +665,18 @@ export class Game {
     if (this.hud.phase !== 'play') return
     if (slot === 'elf') {
       const elf = this.elf
-      if (!(elf.kind === 'violin' ? VIOLIN_ACTS : HARP_ACTS).includes(act)) return
-      // 擊暈鍵兼打包鍵：在房主端判定，加入者送來的 stun / charge 也會照當下狀態轉成打包
-      if ((act === 'stun' || act === 'charge') && this.packReady()) act = 'capture'
+      if (!ACTS[elf.kind].includes(act)) return
+      // 擊暈鍵兼打包鍵：在房主端判定，加入者送來的 stun / charge / arrow 也會照當下狀態轉成打包（收網）
+      if ((act === 'stun' || act === 'charge' || act === 'arrow') && this.packReady()) act = 'capture'
       const dirOf = () => {
         const dir = vec2(d)
         if (dir.lengthSq() < 1e-4) dir.set(Math.sin(elf.yaw), 0, Math.cos(elf.yaw))
         return dir.normalize()
       }
-      if (act === 'stealth') this.violinStealth()
+      if (act === 'trap') this.rangerTrap()
+      else if (act === 'arrow') this.rangerArrow(dirOf())
+      else if (act === 'leap') this.rangerLeap()
+      else if (act === 'stealth') this.violinStealth()
       else if (act === 'eye') this.violinEye()
       else if (act === 'charge') this.violinCharge(dirOf())
       else if (act === 'gaze') {
@@ -768,6 +803,7 @@ export class Game {
   private packReady() {
     const elf = this.elf
     if (elf.packing || elf.cd.capture > 0) return false
+    if (elf.ranger) return !!this.reelTarget()
     const R = CONFIG.elf.capture.range
     return this.goblins.some((g) => !g.captured && !g.held && g.stun > 0 && d2(g.pos, elf.pos) < R)
   }
@@ -775,6 +811,7 @@ export class Game {
   elfStartCapture() {
     const elf = this.elf
     const C = CONFIG.elf.capture
+    if (elf.ranger) return this.rangerReel()
     // 紫晶精靈：捕獲可以取消衝鋒的收招（暈眩只有 1.5 秒，收招 0.4 秒不該吃掉捕獲時間）
     if (elf.charge?.phase === 'recover' && this.authority && elf.cd.capture <= 0 && this.goblins.some((g) => !g.captured && !g.held && g.stun > 0 && d2(g.pos, elf.pos) < C.range))
       elf.cancelCharge()
@@ -1005,10 +1042,317 @@ export class Game {
     }
   }
 
+  // ───────────────────────── 遊俠精靈技能 ─────────────────────────
+  // 所有技能都是吹笛施放：召喚藤蔓陷阱、召喚箭矢、收網的繩索。沒有暈眩 / 定身，只能讓哥布林「受困」再從遠處收網。
+  // 貼身干擾：有行動自如的哥布林貼在身邊時，吹笛（召喚箭、收網）的速度乘上 pressureRate
+  rangerRate() {
+    const R = CONFIG.ranger
+    return this.elf.ranger && pressured(this.elf.pos, this.goblins, R.pressureRadius) ? R.pressureRate : 1
+  }
+
+  // 陷阱長出來的位置：面前 1.3 公尺；被牆擋住就放在腳邊
+  private trapSpot(out = new THREE.Vector3()) {
+    const elf = this.elf
+    out.set(elf.pos.x + Math.sin(elf.yaw) * 1.3, 0, elf.pos.z + Math.cos(elf.yaw) * 1.3)
+    if (this.world.blockedAt(out.x, out.z, 0.4) || this.world.regionOf(out) !== this.world.regionOf(elf.pos)) out.copy(elf.pos)
+    return out
+  }
+
+  // 藤蔓陷阱：吹一小段笛音（castTime 秒）後藤蔓從面前的地上長出來，再過 armTime 秒生效
+  rangerTrap() {
+    const elf = this.elf
+    const r = elf.ranger
+    if (!r || !this.elfCanAct()) return false
+    if (r.charges <= 0) {
+      this.say(elf, 'elf', 'fNoCharge')
+      return false
+    }
+    if (!canPlantAt(this.trapSpot(v2), this.goblins)) {
+      this.say(elf, 'elf', 'fTrapTooClose')
+      return false
+    }
+    r.plant = 0
+    elf.vel.set(0, 0, 0)
+    this.emit({ e: 'rplant' })
+    return true
+  }
+
+  private addTrap(pos: THREE.Vector3, arm: number) {
+    const r = this.elf.ranger!
+    const T = CONFIG.ranger.trap
+    const tr: Trap = { id: ++r.seq, pos: pos.clone().setY(0), arm, life: T.life, region: this.world.regionOf(pos) }
+    r.traps.push(tr)
+    this.emit({ e: 'trap', id: tr.id, p: [r2(pos.x), r2(pos.z)], arm })
+    while (r.traps.length > T.maxActive) this.removeTrap(r.traps[0], TRAP_GONE.old, -1)
+  }
+
+  private removeTrap(tr: Trap, why: number, g: number) {
+    const r = this.elf.ranger!
+    const i = r.traps.indexOf(tr)
+    if (i < 0) return
+    r.traps.splice(i, 1)
+    this.emit({ e: 'trapGone', id: tr.id, p: [r2(tr.pos.x), r2(tr.pos.z)], why, g })
+  }
+
+  // 受困：被藤蔓纏住不能動，精靈可以從遠處收網
+  private snareGoblin(g: Goblin, secs: number) {
+    g.snare = Math.max(g.snare, secs)
+    g.mark = g.slow = 0
+    g.attract = g.dashT = g.terror = 0
+  }
+
+  // 召喚箭矢：朝 dir 吹笛 draw 秒後射出。aim＝鎖定的目標（AI 指定；玩家則是準星附近 AIM_CONE 內的哥布林），
+  // 射出時會瞄準目標屆時的位置；目標在吹奏途中改變方向仍然躲得掉
+  rangerArrow(dir: THREE.Vector3, aim: Goblin | null = null) {
+    const elf = this.elf
+    const r = elf.ranger
+    const A = CONFIG.ranger.arrow
+    if (!r || !this.elfCanAct() || r.cd.arrow > 0) return false
+    dir = dir.clone()
+    if (!aim) {
+      let best = AIM_CONE
+      for (const g of this.goblins) {
+        if (!targetable(g)) continue
+        v2.subVectors(g.pos, elf.pos).setY(0)
+        const d = v2.length()
+        if (d < 0.5 || d > A.range) continue
+        const cos = v2.dot(dir) / d
+        if (cos > best && this.world.lineOfSight(elf.pos, g.pos)) {
+          best = cos
+          aim = g
+        }
+      }
+    }
+    r.cd.arrow = A.cooldown
+    r.draw = { t: 0, dir, aim: aim ? aim.id : -1 }
+    elf.yaw = Math.atan2(dir.x, dir.z)
+    elf.vel.set(0, 0, 0)
+    this.emit({ e: 'draw', d: [r2(dir.x), r2(dir.z)] })
+    return true
+  }
+
+  private fireArrow() {
+    const elf = this.elf
+    const r = elf.ranger!
+    const A = CONFIG.ranger.arrow
+    const dir = r.draw!.dir
+    const g = this.goblins[r.draw!.aim]
+    if (g && targetable(g)) {
+      // 瞄準目標在箭飛到時的位置
+      const lead = d2(g.pos, elf.pos) / A.speed
+      v2.copy(g.pos).addScaledVector(g.vel, lead).sub(elf.pos).setY(0)
+      if (v2.lengthSq() > 1e-4) dir.copy(v2).normalize()
+    }
+    r.draw = null
+    elf.yaw = Math.atan2(dir.x, dir.z)
+    const len = this.world.rayDistance(elf.pos, dir, A.range)
+    const id = ++r.seq
+    r.arrows.push({ id, from: elf.pos.clone(), pos: elf.pos.clone(), dir: dir.clone(), done: 0, len })
+    this.emit({ e: 'arrow', id, o: [r2(elf.pos.x), r2(elf.pos.z)], d: [dir.x, dir.z], len: r2(len) })
+  }
+
+  // 後躍撤步：朝遠離最近哥布林的方向跳開（附近沒有哥布林就往背後跳），在起跳位置留下一個不佔充能的陷阱
+  rangerLeap() {
+    const elf = this.elf
+    const r = elf.ranger
+    const L = CONFIG.ranger.leap
+    if (!r || !this.elfCanAct() || r.cd.leap > 0) return false
+    const dir = new THREE.Vector3(-Math.sin(elf.yaw), 0, -Math.cos(elf.yaw))
+    const near = nearestTarget(elf.pos, this.goblins.filter((g) => !g.disabled && this.sameRegion(g, elf)), LEAP_AWAY)
+    if (near) {
+      v2.subVectors(elf.pos, near.pos).setY(0)
+      if (v2.lengthSq() > 1e-4) dir.copy(v2).normalize()
+    }
+    r.cd.leap = L.cooldown
+    r.leap = { t: 0, dir, done: 0 }
+    elf.yaw = Math.atan2(-dir.x, -dir.z)
+    elf.vel.set(0, 0, 0)
+    const from = elf.pos.clone()
+    this.emit({ e: 'leap', o: [r2(from.x), r2(from.z)], d: [r2(dir.x), r2(dir.z)] })
+    if (canPlantAt(from, this.goblins)) this.addTrap(from, LEAP_TRAP_ARM)
+    return true
+  }
+
+  // 可以收網的哥布林：受困中、距離在 minRange～maxRange、視線可及；取最近的
+  reelTarget(): Goblin | null {
+    const elf = this.elf
+    let best: Goblin | null = null
+    let bd = Infinity
+    for (const g of this.goblins) {
+      if (g.captured || g.held || g.snare <= 0) continue
+      const d = d2(g.pos, elf.pos)
+      if (d < bd && reelRange(d) === 'ok' && this.world.lineOfSight(elf.pos, g.pos)) {
+        bd = d
+        best = g
+      }
+    }
+    return best
+  }
+
+  // 收網（遊俠的捕獲）：吹笛把繩索套上遠處受困的哥布林，收網完成就抓進牢籠。隊友要跑到被困者身邊割斷繩索
+  private rangerReel() {
+    const elf = this.elf
+    const R = CONFIG.ranger.reel
+    if (!this.elfCanAct() || elf.cd.capture > 0) return false
+    const g = this.reelTarget()
+    if (!g) {
+      const close = this.goblins.some((x) => !x.captured && !x.held && x.snare > 0 && d2(x.pos, elf.pos) < R.minRange)
+      this.say(elf, 'elf', close ? 'fReelTooClose' : 'fNoSnared')
+      return false
+    }
+    this.packId++
+    elf.startPacking(g, R.time)
+    elf.vel.set(0, 0, 0)
+    this.emit({ e: 'pack', g: g.id })
+    return true
+  }
+
+  // 哥布林對遊俠精靈的攪局：在被收網的隊友身邊＝割斷繩索；否則拆掉身邊的陷阱
+  private goblinCut(g: Goblin) {
+    const elf = this.elf
+    const R = CONFIG.ranger
+    const p = elf.packing
+    if (p && p.g !== g && d2(g.pos, p.g.pos) <= R.reel.cutRange) {
+      g.interfereCd = CONFIG.goblin.interfereCooldown
+      const freed = p.g
+      this.interruptPacking('interfere', g)
+      // 割斷的藤蔓還纏在身上：割繩的哥布林與被救的同伴都被標記（再中一箭就受困），救人有風險
+      if (R.reel.cutMark > 0) {
+        g.mark = Math.max(g.mark, R.reel.cutMark)
+        if (R.reel.freedMark) freed.mark = Math.max(freed.mark, R.reel.cutMark)
+      }
+      return true
+    }
+    const region = this.world.regionOf(g.pos)
+    let best: Trap | null = null
+    let bd = R.trap.disarmRange
+    for (const tr of elf.ranger!.traps) {
+      const d = d2(tr.pos, g.pos)
+      if (d < bd && tr.region === region) {
+        bd = d
+        best = tr
+      }
+    }
+    if (best) {
+      g.interfereCd = CONFIG.goblin.interfereCooldown
+      this.removeTrap(best, TRAP_GONE.cut, g.id)
+      return true
+    }
+    this.say(g, g.id, p && p.g !== g ? 'fCutTooFar' : 'fNoTarget')
+    return false
+  }
+
+  // 每個子步驟：充能、吹笛放陷阱 / 召喚箭、箭矢飛行、後躍的位移、陷阱觸發
+  private updateRanger(dt: number) {
+    const elf = this.elf
+    const r = elf.ranger!
+    const R = CONFIG.ranger
+    const auth = this.authority
+    r.cd.arrow = Math.max(0, r.cd.arrow - dt)
+    r.cd.leap = Math.max(0, r.cd.leap - dt)
+    if (r.charges < R.trap.charges) {
+      r.recharge -= dt
+      if (r.recharge <= 0 && auth) {
+        r.charges++
+        r.recharge = r.charges < R.trap.charges ? R.trap.recharge : 0
+      }
+    }
+    if (r.plant >= 0) {
+      r.plant += dt
+      if (r.plant >= R.trap.castTime && auth) {
+        r.plant = -1
+        if (r.charges === R.trap.charges) r.recharge = R.trap.recharge
+        r.charges--
+        this.addTrap(this.trapSpot(), R.trap.armTime)
+      }
+    }
+    if (r.draw) {
+      r.draw.t += dt * this.rangerRate()
+      this.rangerFx.drawTick(dt, elf.pos, elf.yaw, Math.min(1, r.draw.t / R.arrow.draw))
+      if (r.draw.t >= R.arrow.draw && auth) this.fireArrow()
+    }
+    if (r.leap) {
+      const l = r.leap
+      const L = R.leap
+      l.t += dt
+      if (auth || elf.isPlayer) {
+        const step = Math.min((L.distance / L.time) * dt, Math.max(0, L.distance - l.done))
+        elf.pos.addScaledVector(l.dir, step)
+        this.world.resolve(elf.pos, elf.radius)
+        l.done += step
+      }
+      elf.vel.set(0, 0, 0)
+      if (l.t >= L.time && auth) {
+        r.leap = null
+        elf.corr++
+        this.emit({ e: 'leapEnd', p: [r2(elf.pos.x), r2(elf.pos.z)] })
+      }
+    }
+    if (!auth) return
+    // 箭矢：掃掠判定，碰到的第一隻哥布林依飛行距離決定效果
+    for (let i = r.arrows.length - 1; i >= 0; i--) {
+      const a = r.arrows[i]
+      const step = Math.min(R.arrow.speed * dt, a.len - a.done)
+      const from = v1.copy(a.pos)
+      a.pos.addScaledVector(a.dir, step)
+      a.done += step
+      const g = sweepHit(from, a.pos, this.goblins, R.arrow.hitRadius)
+      if (g) {
+        const k = arrowEffect(d2(a.from, g.pos), g)
+        if (k === 'snare') this.snareGoblin(g, R.arrow.snare)
+        else if (k === 'mark') g.mark = R.arrow.markTime
+        else g.slow = R.arrow.slowTime
+        r.cd.arrow = Math.min(r.cd.arrow, R.arrow.hitCooldown)
+        r.arrows.splice(i, 1)
+        this.emit({ e: 'arrowHit', id: a.id, p: [r2(g.pos.x), r2(g.pos.z)], g: g.id, k })
+      } else if (a.done >= a.len - 1e-4) {
+        r.arrows.splice(i, 1)
+        this.emit({ e: 'arrowHit', id: a.id, p: [r2(a.pos.x), r2(a.pos.z)], g: -1, k: 'slow' })
+      }
+    }
+    // 陷阱：生效計時、存在時間、觸發
+    for (let i = r.traps.length - 1; i >= 0; i--) {
+      const tr = r.traps[i]
+      tr.arm = Math.max(0, tr.arm - dt)
+      tr.life -= dt
+      if (tr.life <= 0) {
+        this.removeTrap(tr, TRAP_GONE.old, -1)
+        continue
+      }
+      if (tr.arm > 0) continue
+      for (const g of this.goblins) {
+        if (g.captured || g.held || g.grace > 0 || g.snare > 0) continue
+        if (d2(g.pos, tr.pos) > R.trap.triggerRadius || this.world.regionOf(g.pos) !== tr.region) continue
+        this.snareGoblin(g, R.trap.snare)
+        g.reveal = R.trap.minimapTime
+        this.removeTrap(tr, TRAP_GONE.snap, g.id)
+        break
+      }
+    }
+  }
+
+  // 遊俠精靈的常駐特效：腳邊的葉片、陷阱（依觀看者決定看不看得到）、收網的繩索
+  private updateRangerFx(dt: number) {
+    const elf = this.elf
+    const r = elf.ranger!
+    for (let k = 0; k < this.fx.rate('elftrail', 1.5 + elf.moveAmt * 10, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xc8f5a0 : 0xfff6c8, 0.2 + Math.random() * 1.4)
+    this.rangerFx.ambient(dt, elf.pos, elf.moveAmt)
+    this.rangerFx.syncTraps(r.traps, this.me === 'elf' ? null : this.focusActor().pos, CONFIG.ranger.trap.revealRadius)
+    const p = elf.packing
+    if (p) this.rangerFx.rope(dt, elf.pos, elf.yaw, p.g.pos, p.t / p.total)
+    else this.rangerFx.ropeOff()
+  }
+
+  // 目前的觀看者看不看得到這個位置的陷阱：精靈玩家都看得到；哥布林（含觀戰）要靠近到 revealRadius 內
+  private trapVisible(p: THREE.Vector3) {
+    return this.me === 'elf' || d2(p, this.focusActor().pos) < CONFIG.ranger.trap.revealRadius
+  }
+
   private interruptPacking(reason: 'ult' | 'interfere', by?: Goblin) {
     const elf = this.elf
     if (!elf.packing) return
-    const C = CONFIG.elf.capture
+    // 遊俠的收網有自己的進度保留比例（reel.keep / keepMax / keepTime）
+    const C = elf.ranger ? CONFIG.ranger.reel : CONFIG.elf.capture
     const p = elf.packing
     const g = elf.endPacking()
     // 攪局：保留這次新增進度的一部分；大招掙脫：進度歸零
@@ -1017,9 +1361,11 @@ export class Game {
       g.packSaved = Math.min(C.keepMax, g.packSaved + Math.max(0, done - g.packSaved) * C.keep)
       g.packSavedT = C.keepTime
     } else g.packSaved = g.packSavedT = 0
-    elf.stagger = reason === 'ult' ? CONFIG.elf.staggerOnInterrupt + 0.4 : CONFIG.elf.staggerOnInterrupt
+    // 遊俠站在遠處，繩索被割斷只會短暫踉蹌（cutStagger）；被大招掙脫則和其他精靈一樣
+    elf.stagger = reason === 'ult' ? CONFIG.elf.staggerOnInterrupt + 0.4 : elf.ranger ? CONFIG.ranger.reel.cutStagger : CONFIG.elf.staggerOnInterrupt
     g.stun = 0
     g.rooted = 0
+    g.snare = 0
     g.grace = CONFIG.goblin.breakFreeGrace
     v1.subVectors(g.pos, elf.pos).setY(0).normalize()
     g.pos.addScaledVector(v1, 1.2)
@@ -1034,6 +1380,7 @@ export class Game {
     const n = this.goblins.filter((x) => x.captured).length
     g.capture()
     g.stun = g.rooted = g.attract = g.charm = 0
+    g.snare = g.mark = g.slow = g.reveal = 0
     g.capturedAt = this.elapsed
     g.zone = -2
     g.corr++
@@ -1061,6 +1408,7 @@ export class Game {
       this.say(g, g.id, 'fLured')
       return false
     }
+    if (elf.ranger) return this.goblinCut(g)
     if (!elf.packing || elf.packing.g === g) {
       this.say(g, g.id, 'fNoTarget')
       return false
@@ -1165,8 +1513,17 @@ export class Game {
         elf.cancelCharge()
         this.fx.dust(g.pos.x, g.pos.z, 10, 1.4)
         this.fx.sparkles(g.pos, 10, 0xffe6a0, 0.4, 1.5, 0.8)
-        this.elfFx.capture(g.pos)
         elf.yaw = Math.atan2(g.pos.x - elf.pos.x, g.pos.z - elf.pos.z)
+        if (elf.ranger) {
+          // 遊俠：繩索從笛子飛向遠處的哥布林；救人要跑到被困的隊友身邊
+          elf.ranger.cancel()
+          this.rangerFx.reelStart(elf.pos, g.pos)
+          sfx.reel()
+          if (g.isPlayer) this.toast(g.ultUsed ? t('tYouReeled') : touchMode.value ? t('tYouPackedUltTouch') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
+          else if (this.role === 'goblin') this.toast(touchMode.value ? t('tAllyReeledTouch', { name: g.name }) : t('tAllyReeled', { name: g.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
+          return
+        }
+        this.elfFx.capture(g.pos)
         if (g.isPlayer) this.toast(g.ultUsed ? t('tYouPacked') : touchMode.value ? t('tYouPackedUltTouch') : t('tYouPackedUlt', { key: keyLabel(this.binds.goblin.ult) }), 'bad')
         else if (this.role === 'goblin') this.toast(touchMode.value ? t('tAllyPackedTouch', { name: g.name }) : t('tAllyPacked', { name: g.name, key: keyLabel(this.binds.goblin.interfere) }), 'warn')
         return
@@ -1182,12 +1539,17 @@ export class Game {
           this.toast(g.isPlayer ? t('tYouBrokeFree') : t('tBrokeFree', { name: g.name }), g.isPlayer || this.role === 'goblin' ? 'good' : 'bad')
         } else {
           sfx.interfere()
-          const at = by ? by.pos.clone().lerp(elf.pos, 0.5) : g.pos
+          const at = by && !elf.ranger ? by.pos.clone().lerp(elf.pos, 0.5) : g.pos
           this.fx.starBurst(at, 0x9effa0)
           this.fx.pow(at, 'POW!', '#ffd23f')
           this.fx.dust(g.pos.x, g.pos.z, 10, 1.6)
           this.shake = Math.max(this.shake, 0.35)
           this.toast(t('tRescued', { by: by?.isPlayer ? t('you') : by?.name ?? t('aGoblin'), name: g.isPlayer ? t('you') : g.name }), this.role === 'goblin' ? 'good' : 'bad')
+          // 遊俠：割斷的藤蔓反纏上來，割繩的哥布林被標記
+          if (elf.ranger && by && CONFIG.ranger.reel.cutMark > 0) {
+            this.floatText(t('fMarked'), by.pos, '#d8ff9a')
+            if (by.isPlayer) this.toast(t('tYouCutMarked'), 'warn')
+          }
         }
         return
       }
@@ -1324,6 +1686,139 @@ export class Game {
         if (g.isPlayer) this.toast(t('tYouCharged'), 'bad')
         return
       }
+      case 'rplant': {
+        const r = elf.ranger
+        if (!r) return
+        if (!this.authority) r.plant = Math.max(r.plant, 0)
+        this.rangerFx.plantStart(elf.pos, elf.yaw)
+        sfx.fluteNote(0, 0.3)
+        return
+      }
+      case 'trap': {
+        const r = elf.ranger
+        if (!r) return
+        const p = new THREE.Vector3(ev.p[0], 0, ev.p[1])
+        if (!this.authority) {
+          r.plant = -1
+          if (!r.traps.some((x) => x.id === ev.id)) r.traps.push({ id: ev.id, pos: p.clone(), arm: ev.arm, life: CONFIG.ranger.trap.life, region: this.world.regionOf(p) })
+        }
+        if (this.trapVisible(p)) {
+          this.rangerFx.trapSprout(p)
+          sfx.trapSet()
+        }
+        return
+      }
+      case 'trapGone': {
+        const r = elf.ranger
+        if (!r) return
+        const p = new THREE.Vector3(ev.p[0], 0, ev.p[1])
+        const seen = this.trapVisible(p)
+        if (!this.authority) {
+          const i = r.traps.findIndex((x) => x.id === ev.id)
+          if (i >= 0) r.traps.splice(i, 1)
+        }
+        const g = this.goblins[ev.g]
+        if (ev.why === TRAP_GONE.snap && g) {
+          if (!this.authority) {
+            g.snare = CONFIG.ranger.trap.snare
+            g.reveal = CONFIG.ranger.trap.minimapTime
+          }
+          this.rangerFx.snareBurst(g.pos)
+          sfx.trapSnap()
+          this.floatText(t('fSnared'), g.pos, '#a8f08a')
+          if (g.isPlayer) {
+            this.shake = Math.max(this.shake, 0.4)
+            this.toast(t('tYouSnared'), 'bad')
+          } else if (this.role === 'elf') this.toast(t('tTrapSprung', { name: g.name }), 'good')
+          else if (!me?.captured) this.toast(t('tAllySnared', { name: g.name }), 'warn')
+        } else if (ev.why === TRAP_GONE.cut) {
+          this.rangerFx.trapWither(p)
+          sfx.interfere()
+          this.floatText(t('fDisarmed'), p, '#dddddd', 0.6)
+          if (this.role === 'elf') this.toast(t('tTrapCut', { name: g?.name ?? t('aGoblin') }), 'warn')
+        } else if (seen) this.rangerFx.trapWither(p)
+        return
+      }
+      case 'draw': {
+        const r = elf.ranger
+        if (!r) return
+        const dir = new THREE.Vector3(ev.d[0], 0, ev.d[1]).normalize()
+        if (!this.authority) r.draw = { t: 0, dir, aim: -1 }
+        elf.yaw = Math.atan2(dir.x, dir.z)
+        sfx.fluteNote(elf.musicNote++, 0.3)
+        return
+      }
+      case 'arrow': {
+        const r = elf.ranger
+        if (!r) return
+        const o = new THREE.Vector3(ev.o[0], 0, ev.o[1])
+        const dir = new THREE.Vector3(ev.d[0], 0, ev.d[1]).normalize()
+        if (!this.authority) r.draw = null
+        elf.yaw = Math.atan2(dir.x, dir.z)
+        // 放箭後的收勢：短暫放慢腳步，動作播完
+        elf.castT = 0.3
+        elf.castPose = 'shoot'
+        this.rangerFx.arrowSpawn(ev.id, o, dir, ev.len, CONFIG.ranger.arrow.speed)
+        sfx.arrow()
+        return
+      }
+      case 'arrowHit': {
+        const p = new THREE.Vector3(ev.p[0], 0, ev.p[1])
+        const g = this.goblins[ev.g]
+        this.rangerFx.arrowEnd(ev.id, p, !!g)
+        if (!g) return
+        const A = CONFIG.ranger.arrow
+        if (!this.authority) {
+          if (ev.k === 'snare') {
+            g.snare = A.snare
+            g.mark = g.slow = 0
+          } else if (ev.k === 'mark') g.mark = A.markTime
+          else g.slow = A.slowTime
+        }
+        sfx.arrowHit(ev.k === 'snare')
+        if (ev.k === 'snare') {
+          this.rangerFx.snareBurst(g.pos)
+          this.floatText(t('fSnared'), g.pos, '#a8f08a')
+          if (g.isPlayer) {
+            this.shake = Math.max(this.shake, 0.4)
+            this.toast(t('tYouSnared'), 'bad')
+          } else if (this.role === 'elf') {
+            // 收網有距離限制：太遠 / 太近時直接告訴玩家該怎麼做
+            const where = reelRange(d2(g.pos, elf.pos))
+            if (where === 'far') this.toast(t('tSnaredFar', { name: g.name, m: CONFIG.ranger.reel.maxRange }), 'good')
+            else if (where === 'near') this.toast(t('tSnaredNear', { name: g.name }), 'good')
+            else this.toast(touchMode.value ? t('tSnaredTouch', { name: g.name }) : t('tSnared', { name: g.name, key: keyLabel(this.binds.elf.capture) }), 'good')
+          } else if (!me?.captured) this.toast(t('tAllySnared', { name: g.name }), 'warn')
+        } else if (ev.k === 'mark') {
+          this.floatText(t('fMarked'), g.pos, '#d8ff9a')
+          if (g.isPlayer) {
+            this.shake = Math.max(this.shake, 0.25)
+            this.toast(t('tYouMarked'), 'bad')
+          }
+        } else {
+          this.floatText(t('fSlowed'), g.pos, '#bfe8ff')
+          if (g.isPlayer) this.toast(t('tYouSlowed'), 'warn')
+        }
+        return
+      }
+      case 'leap': {
+        const r = elf.ranger
+        if (!r) return
+        const o = new THREE.Vector3(ev.o[0], 0, ev.o[1])
+        const dir = new THREE.Vector3(ev.d[0], 0, ev.d[1]).normalize()
+        if (!this.authority) {
+          r.leap = { t: 0, dir, done: 0 }
+          if (elf.isPlayer) elf.pos.copy(o)
+        }
+        elf.yaw = Math.atan2(-dir.x, -dir.z)
+        this.rangerFx.leap(o, dir)
+        sfx.leap()
+        return
+      }
+      case 'leapEnd':
+        if (!this.authority && elf.ranger) elf.ranger.leap = null
+        this.fx.dust(ev.p[0], ev.p[1], 6, 0.9)
+        return
       case 'say':
         if (ev.s === this.me) this.floatText(t(ev.k), this.actorOf(this.me).pos, '#dddddd', 0.6, 0.25)
         return
@@ -1508,6 +2003,7 @@ export class Game {
   private snapshot(): Snapshot {
     const e = this.elf
     const p = e.packing
+    const rg = e.ranger
     return {
       t: 's',
       q: ++this.seq,
@@ -1524,13 +2020,18 @@ export class Game {
         // 17~24：紫晶精靈
         r2(e.cd.stealth), r2(e.cd.eye), r2(e.cd.charge), r2(e.stealthCast), r2(e.stealth), r2(e.eye),
         e.charge ? CHARGE_PHASES.indexOf(e.charge.phase) : -1, e.charge ? r2(e.charge.t) : 0,
+        // 25~31：遊俠精靈（其他精靈不送）
+        ...(rg ? [rg.charges, r2(rg.recharge), r2(rg.cd.arrow), r2(rg.cd.leap), rg.draw ? r2(rg.draw.t) : -1, r2(rg.plant), rg.leap ? r2(rg.leap.t) : -1] : []),
       ],
       g: this.goblins.map((g) => [
         r2(g.pos.x), r2(g.pos.z), r2(g.yaw), r2(g.vel.x), r2(g.vel.z),
         (g.captured ? 1 : 0) | (g.held ? 2 : 0) | (g.ultUsed ? 4 : 0),
         r2(g.stun), r2(g.rooted), r2(g.attract), r2(g.charm), r2(g.grace), r2(g.dashT), r2(g.dashCd), r2(g.interfereCd), g.corr,
         r2(g.terror),
+        // 16~19：遊俠精靈的受困 / 標記 / 減速 / 小地圖顯示
+        ...(rg ? [r2(g.snare), r2(g.mark), r2(g.slow), r2(g.reveal)] : []),
       ]),
+      ...(rg ? { tr: rg.traps.map((x) => [x.id, r2(x.pos.x), r2(x.pos.z), r2(x.arm), r2(x.life)]) } : {}),
     }
   }
 
@@ -1568,8 +2069,28 @@ export class Game {
       // 衝鋒由事件驅動（本機預測移動）；房主已經結束、本機卻還在衝鋒時（漏掉事件）才清掉
       if (E[23] < 0 && elf.charge && elf.charge.phase !== 'windup' && elf.charge.t > STALE_CHARGE) elf.cancelCharge()
     }
+    const rg = elf.ranger
+    if (rg && E.length > 31) {
+      rg.charges = E[25]
+      rg.recharge = E[26]
+      rg.cd.arrow = E[27]
+      rg.cd.leap = E[28]
+      // 吹笛 / 後躍由事件驅動；房主已經結束、本機卻還停著（漏掉事件）才清掉
+      if (E[29] < 0 && rg.draw && rg.draw.t > CONFIG.ranger.arrow.draw / CONFIG.ranger.pressureRate + STALE_RANGER) rg.draw = null
+      if (E[30] < 0 && rg.plant > CONFIG.ranger.trap.castTime + STALE_RANGER) rg.plant = -1
+      if (E[31] < 0 && rg.leap && rg.leap.t > CONFIG.ranger.leap.time + STALE_RANGER) rg.leap = null
+      if (Array.isArray(m.tr)) {
+        const old = new Map(rg.traps.map((x) => [x.id, x]))
+        rg.traps = m.tr.filter((x) => Array.isArray(x) && x.every(Number.isFinite)).map((x) => {
+          const tr = old.get(x[0]) ?? { id: x[0], pos: new THREE.Vector3(x[1], 0, x[2]), arm: x[3], life: x[4], region: this.world.regionOf(v1.set(x[1], 0, x[2])) }
+          tr.arm = x[3]
+          tr.life = x[4]
+          return tr
+        })
+      }
+    }
     // 衝鋒中的精靈玩家（加入者）由本機預測位置，結束時房主會 corr++ 讓位置一致
-    this.follow(elf, E, E[16], elf.busy && !elf.charge)
+    this.follow(elf, E, E[16], elf.busy && !elf.charge && !rg?.leap)
     m.g.forEach((G, i) => {
       const g = this.goblins[i]
       if (!g) return
@@ -1577,6 +2098,7 @@ export class Game {
       g.ultUsed = !!(G[5] & 4)
       ;[g.stun, g.rooted, g.attract, g.charm, g.grace, g.dashT, g.dashCd, g.interfereCd] = G.slice(6, 14)
       g.terror = G[15] ?? 0
+      if (rg) [g.snare, g.mark, g.slow, g.reveal] = [G[16] ?? 0, G[17] ?? 0, G[18] ?? 0, G[19] ?? 0]
       if (g.captured) {
         g.zone = -2
         g.net = null
@@ -1779,7 +2301,7 @@ export class Game {
       a.warpCd = Math.max(0, a.warpCd - dt)
       if (a.warpCd > 0) continue
       // 打包、彈奏、拉琴、衝鋒中的精靈，被打包 / 已捕獲 / 暈眩定身的哥布林不會被傳送
-      if (a === elf ? elf.busy : (a as Goblin).captured || (a as Goblin).held || (a as Goblin).stun > 0 || (a as Goblin).rooted > 0) continue
+      if (a === elf ? elf.busy : (a as Goblin).captured || (a as Goblin).held || (a as Goblin).stun > 0 || (a as Goblin).rooted > 0 || (a as Goblin).snare > 0) continue
       const w = this.warpAt(a.pos)
       // 真人玩家走進去就傳送；AI 只走進自己路線上的傳送點
       if (w && (a.isPlayer || a.netDriven || a.routeWarp === w.id)) this.warp(a, slot, w)
@@ -1880,6 +2402,10 @@ export class Game {
       if (!g.held) g.stun = Math.max(0, g.stun - dt)
       g.rooted = Math.max(0, g.rooted - dt)
       g.terror = Math.max(0, g.terror - dt)
+      if (!g.held) g.snare = Math.max(0, g.snare - dt)
+      g.mark = Math.max(0, g.mark - dt)
+      g.slow = Math.max(0, g.slow - dt)
+      g.reveal = Math.max(0, g.reveal - dt)
       g.attract = Math.max(0, g.attract - dt)
       g.charm = Math.max(0, g.charm - dt)
       g.grace = Math.max(0, g.grace - dt)
@@ -1952,12 +2478,25 @@ export class Game {
       if (elf.charge) this.updateCharge(dt)
     }
 
-    // 打包
+    if (elf.ranger && hud.phase === 'play') this.updateRanger(dt)
+
+    // 打包（遊俠＝收網：哥布林維持受困，貼身干擾時進度走得慢）
     if (elf.packing) {
       const p = elf.packing
-      p.t += dt
-      p.g.stun = Math.max(p.g.stun, 0.2)
-      if (Math.floor(p.t * 4) !== Math.floor((p.t - dt) * 4)) sfx.pack()
+      const step = dt * this.rangerRate()
+      p.t += step
+      if (elf.ranger) {
+        p.g.snare = Math.max(p.g.snare, 0.2)
+        // 收網：把哥布林拖向精靈（房主判定；被拖的玩家以房主位置為準）
+        const P = CONFIG.ranger.reel
+        const d = d2(p.g.pos, elf.pos)
+        if (auth && P.pull > 0 && d > P.pullTo) {
+          v2.subVectors(elf.pos, p.g.pos).setY(0).normalize()
+          p.g.pos.addScaledVector(v2, Math.min(P.pull * step, d - P.pullTo))
+          this.world.resolve(p.g.pos, p.g.radius)
+        }
+      } else p.g.stun = Math.max(p.g.stun, 0.2)
+      if (Math.floor(p.t * 4) !== Math.floor((p.t - step) * 4)) elf.ranger ? sfx.fluteNote(elf.musicNote++, 0.22) : sfx.pack()
       if (p.t >= p.total && auth) this.completeCapture()
     }
     if (hud.phase === 'over') {
@@ -1992,11 +2531,15 @@ export class Game {
     }
 
     // 移動
-    const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : elf.kind === 'violin' ? CONFIG.violin.aiSpeed : CONFIG.elf.aiSpeed
+    const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : elf.kind === 'violin' ? CONFIG.violin.aiSpeed : elf.kind === 'ranger' ? CONFIG.ranger.aiSpeed : CONFIG.elf.aiSpeed
     if (elf.charge && (auth || elf.isPlayer)) {
       // 衝鋒的位移在 updateCharge 處理
       elf.wish.set(0, 0, 0)
       elf.moveAmt = elf.charge.phase === 'dash' ? 1.3 : 0
+    } else if (elf.ranger?.leap && (auth || elf.isPlayer)) {
+      // 後躍的位移在 updateRanger 處理
+      elf.wish.set(0, 0, 0)
+      elf.moveAmt = 0
     } else if (elf.netDriven) this.netFollow(elf, dt, elfSpeed)
     else {
       if (elf.busy) elf.wish.set(0, 0, 0)
@@ -2010,7 +2553,7 @@ export class Game {
         continue
       }
       let sp = CONFIG.goblin.speed
-      if (g.held || g.stun > 0 || g.rooted > 0) g.wish.set(0, 0, 0)
+      if (g.held || g.stun > 0 || g.rooted > 0 || g.snare > 0) g.wish.set(0, 0, 0)
       else if (g.terror > 0) {
         // 恐懼：不受控制，緩慢遠離精靈
         v2.subVectors(g.pos, elf.pos).setY(0)
@@ -2024,6 +2567,9 @@ export class Game {
         else g.wish.set(0, 0, 0)
         sp *= 0.6
       } else if (g.dashT > 0) sp *= CONFIG.goblin.dashMultiplier
+      // 遊俠的箭：近距離命中的減速；被標記時腳上纏著藤蔓，也會慢一點
+      if (g.slow > 0) sp *= CONFIG.ranger.arrow.slow
+      else if (g.mark > 0) sp *= CONFIG.ranger.arrow.markSlow
       this.moveActor(g, sp, dt, CONFIG.goblin.speed)
     }
     this.separate()
@@ -2044,12 +2590,14 @@ export class Game {
         for (let k = 0; k < this.fx.rate('elftrail', elf.stealthed ? 0 : 1 + elf.moveAmt * 8, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xd8b8ff : 0xffc8f0, 0.2 + Math.random() * 1.4)
         this.violinFx.ghostTick(dt, elf.pos, elf.stealthed ? elf.moveAmt : elf.moveAmt * 0.3)
       }
-    } else {
+    } else if (elf.ranger) this.updateRangerFx(dt)
+    else {
       for (let k = 0; k < this.fx.rate('elftrail', 2 + elf.moveAmt * 14, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xfff0b0 : 0xc8f0ff, 0.2 + Math.random() * 1.4)
       this.elfFx.ambient(dt, elf.pos, elf.moveAmt)
     }
     this.elfFx.update(dt)
     this.violinFx.update(dt)
+    this.rangerFx.update(dt)
     this.updateXray(viewerIsElf && elf.eye > 0)
     if (elf.packing) for (let k = 0; k < this.fx.rate('pack', 10, dt); k++) this.fx.dust(elf.packing.g.pos.x, elf.packing.g.pos.z, 1, 0.5, 0xc8a870)
     elf.fx.stunned.visible = elf.stagger > 0
@@ -2059,7 +2607,7 @@ export class Game {
     else if (elf.channel >= 0) setBarProgress(eb, 1 - elf.channel / CONFIG.elf.music.maxChannel)
 
     for (const g of this.goblins) {
-      g.pose = g.captured || g.held ? 'held' : g.stun > 0 ? 'stunned' : g.rooted > 0 ? 'rooted' : 'normal'
+      g.pose = g.captured || g.held ? 'held' : g.stun > 0 ? 'stunned' : g.snare > 0 ? 'snared' : g.rooted > 0 ? 'rooted' : 'normal'
       this.placeRoot(g, dt)
       g.root.rotation.y = g.yaw
       const dElf = d2(g.pos, elf.pos)
@@ -2109,6 +2657,9 @@ export class Game {
             })
         if (g.grace > 0) for (let k = 0; k < f.rate(`gr${g.id}`, 12, dt); k++) f.trail(g.pos, 0xbfffb0, 0.7)
         if (g.terror > 0) for (let k = 0; k < f.rate(`fe${g.id}`, 4, dt); k++) this.violinFx.fearNote(g.pos)
+        if (g.snare > 0 || (g.held && elf.ranger)) for (let k = 0; k < f.rate(`sn${g.id}`, 9, dt); k++) this.rangerFx.snareLeaf(g.pos)
+        if (g.mark > 0) for (let k = 0; k < f.rate(`mk${g.id}`, 7, dt); k++) this.rangerFx.markMote(g.pos)
+        if (g.slow > 0) for (let k = 0; k < f.rate(`sl2${g.id}`, 6, dt); k++) f.trail(g.pos, 0xbfe8ff, 0.3)
       }
       // 刺客之眼：操控這隻哥布林的玩家頭上跳警告
       g.fx.eyeWarn.visible = g.isPlayer && !g.captured && elf.eye > 0
@@ -2256,6 +2807,7 @@ export class Game {
     this.elf.model.setHarp?.(false)
     // 結算時精靈一定現身
     this.elf.resetForResult()
+    this.rangerFx.ropeOff()
     this.elf.character.setOpacity(1)
     this.updateXray(false)
     for (const g of this.goblins) g.fx.eyeWarn.visible = false
@@ -2288,6 +2840,7 @@ export class Game {
     h.eye = this.role === 'elf' && elf.eye > 0
     h.stealth = this.role === 'elf' && elf.stealthed
     if (this.role === 'elf' && elf.kind === 'violin') this.syncVioletHud(h, touch)
+    else if (this.role === 'elf' && elf.ranger) this.syncRangerHud(h, touch)
     else if (this.role === 'elf') {
       const E = CONFIG.elf
       const b = this.binds.elf
@@ -2315,9 +2868,14 @@ export class Game {
       const g = this.playerGoblin!
       const G = CONFIG.goblin
       const b = this.binds.goblin
+      // 遊俠精靈：攪局鍵＝割斷隊友身上的繩索 / 拆掉身邊的陷阱
+      const rg = elf.ranger
+      const cut = !!rg && !!elf.packing && elf.packing.g !== g
+      const cutNear = cut && d2(g.pos, elf.packing!.g.pos) < CONFIG.ranger.reel.cutRange
+      const trapNear = !!rg && !g.captured && !cutNear && rg.traps.some((x) => d2(x.pos, g.pos) < CONFIG.ranger.trap.disarmRange)
       h.skills = [
         { key: keyLabel(b.dash), code: b.dash, name: t('skillDash'), icon: 'skill-dash', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
-        { key: keyLabel(b.interfere), code: b.interfere, name: t('skillInterfere'), icon: 'skill-interfere', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: !!elf.packing && elf.packing.g !== g && g.canInterfere },
+        { key: keyLabel(b.interfere), code: b.interfere, name: cut ? t('skillCut') : trapNear ? t('skillDisarm') : t('skillInterfere'), icon: 'skill-interfere', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: (trapNear || (!!elf.packing && elf.packing.g !== g)) && g.canInterfere },
         { key: keyLabel(b.ult), code: b.ult, name: t('skillUlt'), icon: 'skill-ult', cd: 0, max: 1, active: false, usable: g.held && !g.ultUsed, used: g.ultUsed },
       ]
       h.radar = !g.captured && !elf.stealthed && g.zone >= 0 && g.zone === elf.zone
@@ -2325,8 +2883,14 @@ export class Game {
       else if (g.held) h.hint = g.ultUsed ? t('hUltUsed') : touch ? t('hUltTouch') : t('hUlt', { key: keyLabel(b.ult) })
       else if (g.terror > 0) h.hint = t('hFeared')
       else if (g.stun > 0) h.hint = t('hStunned')
+      else if (g.snare > 0) h.hint = t('hSnared')
       else if (g.rooted > 0) h.hint = t('hRooted')
       else if (g.attract > 0) h.hint = t('hCharmed')
+      else if (cutNear) h.hint = touch ? t('hCutTouch') : t('hCut', { key: keyLabel(b.interfere) })
+      else if (cut && d2(g.pos, elf.packing!.g.pos) < 40) h.hint = t('hAllyReeled', { name: elf.packing!.g.name })
+      else if (g.mark > 0) h.hint = t('hMarked')
+      else if (trapNear) h.hint = touch ? t('hDisarmTouch') : t('hDisarm', { key: keyLabel(b.interfere) })
+      else if (rg) h.hint = ''
       else if (elf.packing && d2(g.pos, elf.pos) < G.interfereRange) h.hint = touch ? t('hInterfereTouch') : t('hInterfere', { key: keyLabel(b.interfere) })
       else if (elf.packing && d2(g.pos, elf.pos) < 30) h.hint = t('hAllyPacked', { name: elf.packing.g.name })
       else h.hint = ''
@@ -2375,12 +2939,46 @@ export class Game {
     h.spectating = ''
   }
 
+  // 遊俠精靈玩家的技能列與提示
+  private syncRangerHud(h: HudState, touch: boolean) {
+    const elf = this.elf
+    const r = elf.ranger!
+    const R = CONFIG.ranger
+    const b = this.binds.elf
+    const free = elf.stagger <= 0 && !elf.packing && !r.busy
+    const pack = this.packReady()
+    const squeezed = pressured(elf.pos, this.goblins, R.pressureRadius)
+    h.skills = [
+      { key: keyLabel(b.gaze), code: b.gaze, name: t('skillTrap'), icon: 'skill-trap', cd: r.charges > 0 ? 0 : r.recharge, max: R.trap.recharge, active: r.plant >= 0, usable: free && r.charges > 0, count: r.charges },
+      { key: keyLabel(b.music), code: b.music, name: t('skillLeap'), icon: 'skill-leap', cd: r.cd.leap, max: R.leap.cooldown, active: !!r.leap, usable: free },
+      pack
+        ? { key: keyLabel(b.stun), code: b.stun, name: t('skillReel'), icon: 'skill-reel', cd: 0, max: R.reel.cooldown, active: false, usable: free }
+        : { key: keyLabel(b.stun), code: b.stun, name: t('skillArrow'), icon: 'skill-arrow', cd: r.cd.arrow, max: R.arrow.cooldown, active: !!r.draw, usable: free },
+      { key: keyLabel(b.capture), code: b.capture, name: t('skillReel'), icon: 'skill-reel', cd: elf.cd.capture, max: R.reel.cooldown, active: !!elf.packing, usable: free },
+    ]
+    h.radar = false
+    const snaredClose = this.goblins.some((g) => !g.captured && !g.held && g.snare > 0 && d2(g.pos, elf.pos) < R.reel.minRange)
+    const snaredFar = this.goblins.some((g) => !g.captured && !g.held && g.snare > 0 && d2(g.pos, elf.pos) > R.reel.maxRange)
+    if (elf.stagger > 0) h.hint = t('hRopeCut')
+    else if (elf.packing) h.hint = squeezed ? t('hPressured') : ''
+    else if (pack) h.hint = touch ? t('hReelTouch') : t('hReel', { key: keyLabel(b.stun) })
+    else if (snaredClose) h.hint = touch ? t('hReelTooCloseTouch') : t('hReelTooClose', { key: keyLabel(b.music) })
+    else if (snaredFar) h.hint = t('hReelTooFar', { m: R.reel.maxRange })
+    else if (squeezed) h.hint = t('hPressured')
+    else h.hint = ''
+    h.progress = elf.packing ? elf.packing.t / elf.packing.total : -1
+    h.progressLabel = elf.packing ? t('hReeling', { name: elf.packing.g.name }) : ''
+    h.spectating = ''
+  }
+
   // 精靈玩家的小地圖上這隻哥布林的顏色（null = 不顯示）
   // 刺客之眼：全部（紫色）；豎琴彈奏中：全部（金色，只給精靈玩家，AI 的感知不變）；最終狩獵：全部（橘色）；平常：視線內 28 m
   elfMapColor(gb: Goblin): string | null {
     const elf = this.elf
     if (gb.captured) return null
     if (elf.eye > 0) return '#d0a0ff'
+    // 遊俠：受困、被標記、剛踩到陷阱的哥布林
+    if (gb.snare > 0 || gb.mark > 0 || gb.reveal > 0 || (gb.held && elf.ranger)) return '#b6ff8a'
     if (elf.channel >= 0) return '#ffe066'
     if (this.finalHunt) return '#ffb347'
     if (d2(gb.pos, elf.pos) < 28 && this.world.lineOfSight(elf.pos, gb.pos)) return MAP_SEEN
@@ -2454,6 +3052,16 @@ export class Game {
     g.fillStyle = '#c9a36a'
     g.fillRect(tx(-3), tz(-3), 6 * sc, 6 * sc)
     const elf = this.elf
+    // 遊俠的陷阱：精靈玩家都看得到；哥布林只看得到身邊的
+    if (elf.ranger)
+      for (const tr of elf.ranger.traps) {
+        if (!this.trapVisible(tr.pos)) continue
+        g.beginPath()
+        g.arc(tx(tr.pos.x), tz(tr.pos.z), 2.4, 0, Math.PI * 2)
+        g.strokeStyle = tr.arm > 0 ? 'rgba(190,255,150,0.5)' : '#7dff5a'
+        g.lineWidth = 1.6
+        g.stroke()
+      }
     const dot = (p: THREE.Vector3, color: string, r: number) => {
       g.beginPath()
       g.arc(tx(p.x), tz(p.z), r, 0, Math.PI * 2)

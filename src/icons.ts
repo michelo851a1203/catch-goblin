@@ -7,6 +7,7 @@ export const ICONS: Record<string, string> = Object.fromEntries(
 
 export type IconName =
   | 'skill-gaze' | 'skill-music' | 'skill-stun' | 'skill-capture' | 'skill-stealth' | 'skill-reveal' | 'skill-eye' | 'skill-blink'
+  | 'skill-trap' | 'skill-arrow' | 'skill-leap' | 'skill-reel' | 'icon-elf-ranger'
   | 'skill-charge' | 'skill-dash' | 'skill-interfere' | 'skill-ult' | 'skill-ult-used' | 'skill-radar'
   | 'icon-elf-harp' | 'icon-elf-violin' | 'icon-goblin' | 'icon-goblin-caught' | 'icon-random' | 'icon-stunned'
   | 'ui-timer' | 'ui-goal' | 'ui-settings' | 'ui-move' | 'ui-multiplayer' | 'ui-spectate' | 'ui-fast' | 'ui-play'

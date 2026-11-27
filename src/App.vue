@@ -3,7 +3,7 @@ import { onMounted, ref, shallowRef, watch } from 'vue'
 import CharacterSelect from './components/CharacterSelect.vue'
 import GameView from './components/GameView.vue'
 import RoomSheet from './components/RoomSheet.vue'
-import { isElfKind, isMapId, type ElfKind, type MapId, type Role } from './game/config'
+import { ELF_KINDS, isElfKind, isMapId, randomElfKind, type ElfKind, type MapId, type Role } from './game/config'
 import type { Room } from './net/room'
 import * as screens from './screen'
 import * as crazygames from './crazygames'
@@ -19,7 +19,7 @@ import { canPrompt, installGuide, promptInstall } from './input/install'
 // ?role=elf / ?role=goblin 可直接跳過選角（測試用）
 const q = new URLSearchParams(location.search).get('role')
 const qRole: Role | null = q === 'elf' || q === 'goblin' ? q : null
-// ?elf=violin / ?elf=harp 指定精靈角色（測試用）；單機當哥布林時，精靈（AI）沒指定就隨機
+// ?elf=violin / ?elf=harp / ?elf=ranger 指定精靈角色（測試用）；單機當哥布林時，精靈（AI）沒指定就隨機
 const qElf = new URLSearchParams(location.search).get('elf')
 const elfKind = ref<ElfKind>(isElfKind(qElf) ? qElf : 'harp')
 // 單機的地形：選完角色後選擇（?map=mushroom 可直接指定，測試用）
@@ -51,17 +51,17 @@ function joinInvite(code: string) {
 
 // ?role=goblin 直接進入、或新玩家當哥布林時也要決定 AI 精靈（新玩家固定豎琴精靈）
 if (screen.value.kind === 'solo' && screen.value.role === 'goblin' && !isElfKind(qElf))
-  elfKind.value = qRole ? (Math.random() < 0.5 ? 'harp' : 'violin') : 'harp'
+  elfKind.value = qRole ? randomElfKind() : 'harp'
 
 onMounted(() => {
   crazygames.loadingFinished()
   crazygames.onInvite(joinInvite)
   // 在選角畫面時就於背景下載精靈模型（這局會用到的先），開局時不必等下載。
   // 另一位精靈等第一次進入遊玩後才下載（CrazyGames 的初始下載量算到第一次 gameplayStart；網站版立即放行）
-  const [first, second] = elfKind.value === 'violin' ? (['violin', 'harp'] as const) : (['harp', 'violin'] as const)
+  const first = elfKind.value
   void preloadElves([first])
     .then(() => crazygames.afterFirstGameplay())
-    .then(() => preloadElves([second]))
+    .then(() => preloadElves(ELF_KINDS.filter((k) => k !== first)))
 })
 
 // 回報房間狀態給 CrazyGames，好友才能加入：只有大廳還有空位時可加入
@@ -97,7 +97,7 @@ async function newRound(r: Role, kind?: ElfKind, map?: MapId) {
   go(screens.startSolo(from, r))
   if (map) mapId.value = map
   if (r === 'elf') elfKind.value = kind ?? elfKind.value
-  else if (!isElfKind(qElf)) elfKind.value = Math.random() < 0.5 ? 'harp' : 'violin'
+  else if (!isElfKind(qElf)) elfKind.value = randomElfKind()
   round.value++
 }
 

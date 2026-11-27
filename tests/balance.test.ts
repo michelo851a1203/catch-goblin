@@ -76,13 +76,22 @@ describe.runIf(!!env.BALANCE)('地圖平衡', () => {
     if (env.BAL_SHORT) (globalThis as unknown as { location: { hostname: string } }).location.hostname = 'html-classic.itch.zone'
     const { CONFIG } = await import('../src/game/config')
     const { runSolo } = await import('./sim/harness')
+    // BAL_RANGER='{"arrow":{"cooldown":4}}'：暫時覆寫遊俠精靈的參數（各技能的欄位分別合併）
+    if (env.BAL_RANGER) {
+      const R = CONFIG.ranger as unknown as Record<string, unknown>
+      for (const [k, v] of Object.entries(JSON.parse(env.BAL_RANGER) as Record<string, unknown>)) {
+        if (v && typeof v === 'object') Object.assign(R[k] as object, v)
+        else R[k] = v
+      }
+    }
     // BAL_TUNE='{"vents":2}'：暫時覆寫蘑菇秘境的平衡參數
     if (env.BAL_TUNE) Object.assign((await import('../src/game/mushroomWorld')).MUSHROOM_TUNE, JSON.parse(env.BAL_TUNE))
     const map = (env.BAL_MAP ?? 'meadow') as 'meadow' | 'mushroom'
-    const kind = (env.BAL_KIND ?? 'harp') as 'harp' | 'violin'
+    const kind = (env.BAL_KIND ?? 'harp') as 'harp' | 'violin' | 'ranger'
     if (env.BAL_VARIANT === 'player') {
       CONFIG.elf.aiSpeed = CONFIG.elf.speed
       CONFIG.violin.aiSpeed = CONFIG.elf.speed
+      CONFIG.ranger.aiSpeed = CONFIG.elf.speed
     }
     const n = Number(env.BAL_N ?? 16)
     const seed0 = Number(env.BAL_SEED ?? 1000)
@@ -91,7 +100,7 @@ describe.runIf(!!env.BALANCE)('地圖平衡', () => {
     for (let i = 0; i < n; i++) {
       const r = runSolo({ role: 'elf', kind, seed: seed0 + i, mode: 'ai', duration, map })
       if (r.winner === 'elf') wins++
-      const line = JSON.stringify({ tune: env.BAL_TUNE ?? '', map, kind, variant: env.BAL_VARIANT ?? 'ai', short: !!env.BAL_SHORT, seed: seed0 + i, winner: r.winner, steps: r.steps, caught: r.stats['solo:caught'] ?? 0, warps: r.stats['solo:warp'] ?? 0 })
+      const line = JSON.stringify({ tune: env.BAL_TUNE ?? '', map, kind, variant: env.BAL_VARIANT ?? 'ai', short: !!env.BAL_SHORT, seed: seed0 + i, winner: r.winner, steps: r.steps, caught: r.stats['solo:caught'] ?? 0, warps: r.stats['solo:warp'] ?? 0, packs: r.stats['solo:pack'] ?? 0, frees: r.stats['solo:free'] ?? 0, arrows: r.stats['solo:arrow'] ?? 0, traps: r.stats['solo:trap'] ?? 0, st: env.BAL_STATS ? r.stats : undefined })
       if (env.BAL_OUT) appendFileSync(env.BAL_OUT, line + '\n')
     }
     console.log(`${map} ${kind} ${env.BAL_VARIANT ?? 'ai'}: ${wins}/${n}`)

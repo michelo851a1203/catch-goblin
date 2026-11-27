@@ -54,6 +54,9 @@ const harpScale = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.5]
 // 小提琴：小調音階（神秘感），鋸齒波 + 慢起音 + 顫音模擬弓弦
 const violinScale = [440, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99, 880]
 
+// 長笛：五聲音階（清亮、田園感）
+const fluteScale = [587.33, 659.25, 783.99, 880, 987.77, 1174.66, 987.77, 880]
+
 function bowed(freq: number, dur: number, vol = 0.12, when = 0) {
   const c = ac()
   const t = c.currentTime + when
@@ -167,6 +170,35 @@ export const sfx = {
   chargeHit() {
     tone(160, 0.2, 'square', 0.25, 0, 70)
     bowed(880, 0.3, 0.1, 0.03)
+  },
+  // 遊俠精靈：長笛（正弦波 + 氣音般的柔和起音）、箭矢、陷阱、後躍、收網
+  fluteNote(i: number, dur = 0.3) {
+    const f = fluteScale[i % fluteScale.length]
+    tone(f, dur, 'sine', 0.16)
+    tone(f * 2, dur * 0.7, 'sine', 0.035, 0.01)
+    tone(f * 1.005, dur, 'triangle', 0.03)
+  },
+  arrow() {
+    tone(1568, 0.18, 'sine', 0.14, 0, 2637)
+    tone(900, 0.22, 'triangle', 0.07, 0.02, 300)
+  },
+  arrowHit(snare: boolean) {
+    tone(520, 0.12, 'triangle', 0.18, 0, 260)
+    if (snare) [392, 330, 262].forEach((f, i) => tone(f, 0.16, 'triangle', 0.14, 0.05 + i * 0.05))
+  },
+  trapSet() {
+    tone(330, 0.2, 'sine', 0.1, 0, 494)
+    tone(660, 0.18, 'triangle', 0.05, 0.08)
+  },
+  trapSnap() {
+    tone(240, 0.14, 'square', 0.18, 0, 90)
+    ;[330, 262, 196].forEach((f, i) => tone(f, 0.18, 'triangle', 0.14, 0.04 + i * 0.05))
+  },
+  leap() {
+    tone(420, 0.22, 'sine', 0.1, 0, 980)
+  },
+  reel() {
+    ;[784, 988, 1175].forEach((f, i) => tone(f, 0.22, 'sine', 0.12, i * 0.07))
   },
   lose() {
     ;[392, 330, 262, 196].forEach((f, i) => tone(f, 0.5, 'triangle', 0.3, i * 0.18))

@@ -433,6 +433,13 @@ footer {
     radial-gradient(ellipse at 70% 20%, #26302a 0%, #161c19 50%, #0a0d0c 100%);
 }
 
+/* 遊俠精靈：模型背後帶一點森林綠光暈 */
+.detail.ranger {
+  background:
+    radial-gradient(ellipse 60% 70% at 26% 55%, rgba(130, 190, 120, 0.18), transparent 70%),
+    radial-gradient(ellipse at 70% 20%, #26302a 0%, #161c19 50%, #0a0d0c 100%);
+}
+
 /* ── 手機版：只有技能圖示與敘述，開始按鈕在列表上方 ── */
 .detail.touch {
   display: flex;

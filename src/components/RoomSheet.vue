@@ -51,7 +51,7 @@ watch(
 const s = computed(() => props.room?.state)
 // 大廳玩家列表的角色圖示（精靈依選擇的角色顯示豎琴 / 紫晶）
 function pickIcon(p: { pick: Pick; elf?: string }): IconName {
-  return p.pick === 'elf' ? (p.elf === 'violin' ? 'icon-elf-violin' : 'icon-elf-harp') : p.pick === 'goblin' ? 'icon-goblin' : 'icon-random'
+  return p.pick === 'elf' ? (p.elf === 'violin' ? 'icon-elf-violin' : p.elf === 'ranger' ? 'icon-elf-ranger' : 'icon-elf-harp') : p.pick === 'goblin' ? 'icon-goblin' : 'icon-random'
 }
 
 // 先切到輸入暱稱的 sheet，按下確定才建立 / 加入房間

@@ -3,6 +3,7 @@ import { CONFIG, type ElfKind } from './config'
 import { createElf, createGoblin, type CharacterModel, type Pose } from './models'
 import { ElfCharacter } from './elf/ElfCharacter'
 import { rigOf } from './elf/rigs'
+import { RangerState } from './ranger'
 import { makeSprite } from './toon'
 import { t } from '../i18n'
 
@@ -92,6 +93,16 @@ export class Goblin extends Actor {
   rooted = 0
   // 紫晶精靈現身時的恐懼：緩慢遠離精靈、不受控制
   terror = 0
+  // 遊俠精靈：受困（被藤蔓纏住不能動，可被遠距收網）、標記（再中一箭就受困，精靈小地圖看得到）、減速、
+  // 踩到陷阱後在精靈小地圖顯示的剩餘秒數
+  snare = 0
+  mark = 0
+  slow = 0
+  reveal = 0
+  // AI：每個陷阱只判斷一次有沒有注意到（陷阱編號 → 有沒有看到）
+  trapSeen = new Map<number, boolean>()
+  // AI：同伴被收網後還要等多久才割得斷繩索（反應時間）
+  cutWait = 0
   attract = 0
   charm = 0
   grace = 0
@@ -172,7 +183,7 @@ export class Goblin extends Actor {
   }
 
   get disabled() {
-    return this.stun > 0 || this.rooted > 0 || this.terror > 0 || this.held || this.captured
+    return this.stun > 0 || this.rooted > 0 || this.terror > 0 || this.snare > 0 || this.held || this.captured
   }
 
   // 能不能攪局：除了失能之外，被琴聲吸引中也不行（移動仍照常同步，所以不併進 disabled）
@@ -219,6 +230,8 @@ export class Elf extends Actor {
     dest: null as THREE.Vector3 | null,
   }
   fx: { bar: ReturnType<typeof barSprites>; stunned: THREE.Sprite }
+  // 遊俠精靈的技能狀態（陷阱、箭矢、後躍）；其他精靈為 null
+  readonly ranger: RangerState | null
   // GLB 綁骨角色；載入完成前（或失敗時）顯示程序化的 createElf()
   readonly character: ElfCharacter
 
@@ -226,6 +239,7 @@ export class Elf extends Actor {
     const character = new ElfCharacter({ rig: rigOf(kind), fallback: createElf() })
     super(character, CONFIG.elf.radius)
     this.kind = kind
+    this.ranger = kind === 'ranger' ? new RangerState() : null
     this.character = character
     const bar = barSprites()
     bar.group.position.y = 2.25
@@ -241,6 +255,10 @@ export class Elf extends Actor {
   // 以下的轉移函式是唯一該改動這些欄位的地方，房主（判定）與加入者（套用事件）共用，避免兩邊各寫一份而不一致
   get action(): ElfAction {
     if (this.charge) return this.charge.phase
+    const r = this.ranger
+    if (r?.leap) return 'leap'
+    if (r?.draw) return 'draw'
+    if (r && r.plant >= 0) return 'plant'
     if (this.channel >= 0) return 'channel'
     if (this.stealthCast >= 0) return 'stealthCast'
     if (this.packing) return 'packing'
@@ -248,7 +266,7 @@ export class Elf extends Actor {
   }
 
   get busy() {
-    return this.packing !== null || this.channel >= 0 || this.stagger > 0 || this.stealthCast >= 0 || this.charge !== null
+    return this.packing !== null || this.channel >= 0 || this.stagger > 0 || this.stealthCast >= 0 || this.charge !== null || !!this.ranger?.busy
   }
 
   get stealthed() {
@@ -275,7 +293,7 @@ export class Elf extends Actor {
   endPacking(): Goblin {
     const g = this.packing!.g
     this.packing = null
-    this.cd.capture = CONFIG.elf.capture.cooldown
+    this.cd.capture = this.ranger ? CONFIG.ranger.reel.cooldown : CONFIG.elf.capture.cooldown
     g.release()
     return g
   }
@@ -327,6 +345,7 @@ export class Elf extends Actor {
     this.blinkLock = 0
     this.charge = null
     this.channel = -1
+    this.ranger?.cancel()
     if (this.packing) {
       this.packing.g.release()
       this.packing = null
@@ -334,4 +353,4 @@ export class Elf extends Actor {
   }
 }
 
-export type ElfAction = 'idle' | 'channel' | 'stealthCast' | 'packing' | ChargePhase
+export type ElfAction = 'idle' | 'channel' | 'stealthCast' | 'packing' | ChargePhase | 'draw' | 'plant' | 'leap'

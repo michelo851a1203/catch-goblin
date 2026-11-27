@@ -6,7 +6,7 @@ import { iceServers } from './ice'
 import { NAME_MAX, cleanName } from './names'
 import { isCrazyGames, isItch } from '../platform'
 import { t } from '../i18n'
-import { isElfKind, isMapId, type ElfKind, type MapId } from '../game/config'
+import { isElfKind, isMapId, randomElfKind, type ElfKind, type MapId } from '../game/config'
 
 // 多人連線：使用 PeerJS（WebRTC P2P）。預設使用 PeerJS 的公用信令伺服器，可用 VITE_PEER_* 改成自架的 PeerServer。
 // PeerJS 內建的 TURN 網域已無法解析，TURN 改由 Cloudflare 提供（見 ./ice.ts 與 worker/turn）。
@@ -328,7 +328,7 @@ export class Room {
     const slots = [...assignSlots(this.state.players)]
     const elfId = slots.find(([, slot]) => slot === 'elf')?.[0]
     const chosen = this.state.players.find((p) => p.id === elfId)?.elf
-    const kind: ElfKind = chosen ?? (Math.random() < 0.5 ? 'harp' : 'violin')
+    const kind: ElfKind = chosen ?? randomElfKind()
     this.state.vote = { slots, kind, votes: {}, endsAt: Date.now() + VOTE_SECONDS * 1000 }
     this.state.phase = 'voting'
     this.broadcastVote()

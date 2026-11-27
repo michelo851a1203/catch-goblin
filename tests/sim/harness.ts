@@ -126,6 +126,11 @@ function simulate(sides: Side[], opts: { steps: number; dt: number; seed: number
       if (step % 3 === 0) (s.game as any).syncHud()
       const ev = events[i].splice(0)
       for (const e of ev as { e: string }[]) stats[`${s.name}:${e.e}`] = (stats[`${s.name}:${e.e}`] ?? 0) + 1
+      // 遊俠精靈：箭矢命中的效果 / 陷阱消失的原因另外細分（只影響統計，不影響雜湊）
+      for (const e of ev as { e: string; g?: number; k?: string; why?: number; ult?: boolean }[]) {
+        const sub = e.e === 'arrowHit' ? (e.g! >= 0 ? e.k : 'miss') : e.e === 'trapGone' ? ['old', 'snap', 'cut'][e.why!] : e.e === 'free' ? (e.ult ? 'ult' : 'cut') : null
+        if (sub) stats[`${s.name}:${e.e}:${sub}`] = (stats[`${s.name}:${e.e}:${sub}`] ?? 0) + 1
+      }
       rec.add({ k: s.name, step, st: stateOf(s.game), ev, sfx: [...sfxLog], hud: step % 3 === 0 ? hudOf(s.game) : undefined })
       for (const inv of opts.invariants ?? []) {
         const msg = inv(s.game, step)

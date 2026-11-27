@@ -29,6 +29,7 @@ const PAD_R = 1.1
 //   豎琴・玩家速度精靈        0.93      0.89                  0.66      0.76  ← 網站版仍偏精靈（見下）
 //   紫晶・AI 精靈            1.00      0.96                  1.00      1.00
 //   紫晶・玩家速度精靈        0.99      0.99                  1.00      1.00
+// 遊俠精靈（2026-11-27 加入）的量測在 config.ts 的 CONFIG.ranger 與 docs/ranger.md
 // 網站版把月光傘台改成山洞（extraCave）可以把玩家速度精靈調回 0.68，但會變成 3 座山洞（地圖設計是 2 座），所以沒有採用
 const SHORT = isShortSession
 export const MUSHROOM_TUNE = {
