@@ -74,7 +74,7 @@ beforeEach(() => new Promise<void>((r) => setImmediate(r)))
 
 const { makeGame, runMultiplayer, runSolo, seeded } = await import('./sim/harness')
 const { CONFIG } = await import('../src/game/config')
-const { arrowEffect, canPlantAt, pressured, reelRange, TRAP_GONE } = await import('../src/game/ranger')
+const { arrowEffect, canPlantAt, chainCatches, pressured, reelRange, trapChains, TRAP_GONE } = await import('../src/game/ranger')
 type G = ReturnType<typeof makeGame>
 type Goblin = G['goblins'][number]
 const R = CONFIG.ranger
@@ -260,20 +260,21 @@ describe('遊俠：藤蔓陷阱', () => {
     game.dispose()
   })
 
-  it('沒有充能不能放；場上最多 maxActive 個，超過時最舊的消失', () => {
+  it('沒有充能不能放；陷阱不會隨時間消失，放新的也不會讓舊的消失', () => {
     const { game, elf, r } = setup()
     r.charges = 0
     expect(game.rangerTrap()).toBe(false)
     const ids: number[] = []
-    for (let i = 0; i <= R.trap.maxActive; i++) {
+    for (let i = 0; i < R.trap.charges + 3; i++) {
       r.charges = 1
       elf.pos.x += 3
       expect(game.rangerTrap()).toBe(true)
       tick(game, R.trap.castTime + 0.05)
       ids.push(r.traps.at(-1)!.id)
     }
-    expect(r.traps.length).toBe(R.trap.maxActive)
-    expect(r.traps.map((t) => t.id)).toEqual(ids.slice(1))
+    expect(r.traps.map((t) => t.id)).toEqual(ids)
+    tick(game, 300)
+    expect(r.traps.map((t) => t.id)).toEqual(ids)
     game.dispose()
   })
 
@@ -306,10 +307,13 @@ describe('遊俠：藤蔓陷阱', () => {
 
 describe('遊俠：後躍撤步', () => {
   it('往遠離最近哥布林的方向跳開 distance 公尺，原地留下陷阱（不佔充能），追上來的哥布林會踩到', () => {
-    const { game, elf, r, at, o } = setup()
+    const { game, elf, r, at, o, events } = setup()
     const g = at(game.goblins[0], 2)
     expect(game.rangerLeap()).toBe(true)
     expect(elf.pose === 'normal' || elf.pose === 'leap').toBe(true)
+    // 起跳時朝前方射出一支召喚箭矢，不佔箭的冷卻
+    expect(events.some((e) => e.e === 'arrow')).toBe(true)
+    expect(r.cd.arrow).toBe(0)
     tick(game, R.leap.time + 0.1)
     expect(r.leap).toBe(null)
     expect(o.x - elf.pos.x).toBeCloseTo(R.leap.distance, 0)
@@ -322,6 +326,102 @@ describe('遊俠：後躍撤步', () => {
     tick(game, 0.3)
     expect(g.snare).toBeGreaterThan(0)
     game.dispose()
+  })
+})
+
+describe('遊俠：藤蔓連鎖', () => {
+  const trap = (id: number, x: number, z: number, arm = 0) => ({ id, pos: new THREE.Vector3(x, 0, z), arm, region: 0 })
+  // 直接在場上種下已生效的陷阱（相對精靈的位置）
+  const plant = (s: ReturnType<typeof setup>, pts: [number, number][]) => {
+    for (const [dx, dz] of pts) s.r.traps.push(trap(++s.r.seq, s.o.x + dx, s.o.z + dz))
+  }
+
+  it('linkRange 內的已生效陷阱相連；三個兩兩相連形成一個面；太遠或還沒生效的不相連', () => {
+    const L = R.chain.linkRange
+    const chains = trapChains([trap(1, 0, 0), trap(2, 6, 0), trap(3, 3, 5), trap(4, 3 + L + 4, 5), trap(5, 0, 2, 0.5)])
+    expect(chains.map((c) => c.traps.map((t) => t.id))).toEqual([[1, 2, 3], [4]])
+    const [ch] = chains
+    expect(ch.links.length).toBe(3)
+    expect(ch.faces.length).toBe(1)
+    // 連線上、面內會被纏住；外面不會
+    expect(chainCatches(ch, new THREE.Vector3(3, 0, R.chain.linkRadius - 0.1))).toBe(true)
+    expect(chainCatches(ch, new THREE.Vector3(3, 0, 2))).toBe(true)
+    expect(chainCatches(ch, new THREE.Vector3(3, 0, -2))).toBe(false)
+    // 兩個陷阱只有連線，沒有面
+    const line = trapChains([trap(1, 0, 0), trap(2, 6, 0)])[0]
+    expect(line.faces.length).toBe(0)
+    expect(chainCatches(line, new THREE.Vector3(3, 0, 0.3))).toBe(true)
+    expect(chainCatches(line, new THREE.Vector3(3, 0, 2))).toBe(false)
+  })
+
+  it('踩到兩個陷阱之間的連線＝受困，連鎖上的陷阱全部消耗', () => {
+    const s = setup()
+    plant(s, [[6, 0], [12, 0], [30, 20]])
+    const g = s.at(s.game.goblins[0], 9, 0.3)
+    tick(s.game, 0.1)
+    expect(g.snare).toBeGreaterThan(0)
+    expect(s.r.traps.length).toBe(1)
+    expect(s.events.filter((e) => e.e === 'trapGone' && e.why === TRAP_GONE.snap).length).toBe(2)
+    expect(s.events.filter((e) => e.e === 'vine')).toMatchObject([{ g: g.id, far: 0 }])
+    s.game.dispose()
+  })
+
+  it('三個陷阱形成的面內：範圍內的哥布林全部受困，三個陷阱一起消耗', () => {
+    const s = setup()
+    plant(s, [[5, -3], [11, -3], [8, 3]])
+    const a = s.at(s.game.goblins[0], 7, -1)
+    const b = s.at(s.game.goblins[1], 9, -1)
+    tick(s.game, 0.1)
+    expect(a.snare).toBeGreaterThan(0)
+    expect(b.snare).toBeGreaterThan(0)
+    expect(s.r.traps.length).toBe(0)
+    s.game.dispose()
+  })
+
+  it('遠處的哥布林中陷阱：小地圖顯示 farReveal 秒，精靈短暫加速', () => {
+    const s = setup()
+    const far = R.chain.farRange + 4
+    plant(s, [[far, 0]])
+    const g = s.at(s.game.goblins[0], far)
+    tick(s.game, 0.1)
+    expect(g.snare).toBeGreaterThan(0)
+    expect(g.reveal).toBeGreaterThan(R.chain.farReveal - 1)
+    expect(s.r.haste).toBeGreaterThan(0)
+    // 加速：同樣時間走得比較遠
+    const run = () => {
+      const x0 = s.elf.pos.x
+      s.game.setTouchMove(0, -1)
+      tick(s.game, 1)
+      s.game.setTouchMove(0, 0)
+      return Math.abs(s.elf.pos.x - x0) + Math.abs(s.elf.pos.z - s.o.z)
+    }
+    const fast = run()
+    tick(s.game, R.chain.hasteTime)
+    expect(s.r.haste).toBe(0)
+    s.elf.pos.copy(s.o)
+    const slow = run()
+    expect(fast).toBeGreaterThan(slow * 1.1)
+    s.game.dispose()
+  })
+
+  it('近處中陷阱：不加速，小地圖只顯示 minimapTime 秒', () => {
+    const s = setup()
+    plant(s, [[5, 0]])
+    const g = s.at(s.game.goblins[0], 5)
+    tick(s.game, 0.1)
+    expect(g.snare).toBeGreaterThan(0)
+    expect(g.reveal).toBeLessThanOrEqual(R.trap.minimapTime)
+    expect(s.r.haste).toBe(0)
+    s.game.dispose()
+  })
+
+  it('哥布林站在連線旁按攪局：拆掉最近的陷阱，連鎖斷開', () => {
+    const s = setup()
+    plant(s, [[4, 0], [11, 0]])
+    const g = s.at(s.game.goblins[0], 7.5, R.trap.disarmRange - 0.5)
+    expect(s.game.goblinInterfere(g)).toBe(true)
+    expect(s.r.traps.length).toBe(1)
+    s.game.dispose()
   })
 })
 
@@ -435,7 +535,6 @@ function invariants(game: G): string | null {
   // 收網中可以沒有其他動作；吹笛 / 後躍彼此互斥
   if (acts.filter((a) => a !== 'packing').length > 1) return `精靈同時處於 ${acts.join('+')}`
   if (game.hud.phase === 'over' && acts.length) return `結算後精靈仍在 ${acts.join('+')}`
-  if (r.traps.length > R.trap.maxActive) return `陷阱 ${r.traps.length} 個超過上限`
   if (r.charges < 0 || r.charges > R.trap.charges) return `充能 ${r.charges} 超出範圍`
   for (const g of game.goblins) {
     if (g.captured && g.held) return `哥布林 ${g.id} 同時 captured 與 held`

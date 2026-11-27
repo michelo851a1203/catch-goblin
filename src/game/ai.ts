@@ -117,14 +117,23 @@ function avoidTraps(game: Game, g: Goblin) {
   if (!r || !r.traps.length) return
   const T = CONFIG.ranger.trap
   const fleeing = g.ai.fear > 0
-  for (const tr of r.traps) {
-    const dx = g.pos.x - tr.pos.x, dz = g.pos.z - tr.pos.z
+  // 要注意的地方：每個陷阱，加上連鎖的每條連線上離自己最近的點（連線以負數編號記住有沒有注意到）
+  const spots: { key: number; x: number; z: number }[] = r.traps.map((tr) => ({ key: tr.id, x: tr.pos.x, z: tr.pos.z }))
+  for (const ch of game.trapChains())
+    for (const [a, b] of ch.links) {
+      const abx = b.pos.x - a.pos.x, abz = b.pos.z - a.pos.z
+      const L = abx * abx + abz * abz || 1
+      const t = Math.max(0, Math.min(1, ((g.pos.x - a.pos.x) * abx + (g.pos.z - a.pos.z) * abz) / L))
+      spots.push({ key: -(a.id * 4096 + b.id), x: a.pos.x + abx * t, z: a.pos.z + abz * t })
+    }
+  for (const sp of spots) {
+    const dx = g.pos.x - sp.x, dz = g.pos.z - sp.z
     const d = Math.hypot(dx, dz)
     if (d > T.revealRadius) continue
-    let seen = g.trapSeen.get(tr.id)
+    let seen = g.trapSeen.get(sp.key)
     if (seen === undefined) {
       seen = Math.random() < (fleeing ? TRAP_NOTICE_FLEEING : TRAP_NOTICE)
-      g.trapSeen.set(tr.id, seen)
+      g.trapSeen.set(sp.key, seen)
     }
     if (!seen) continue
     if (!fleeing && g.interfereCd <= 0 && !game.elf.packing && game.goblinInterfere(g)) return

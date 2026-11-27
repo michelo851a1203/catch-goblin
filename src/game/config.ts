@@ -81,23 +81,29 @@ export const CONFIG = {
 
   // 遊俠精靈（長笛遊俠）：吹笛召喚藤蔓陷阱與箭矢，沒有暈眩 / 定身，只能讓哥布林「受困」再從遠處收網（見 docs/ranger.md）。
   // 移動速度與其他精靈相同；近身是弱點：pressureRadius 內有哥布林時吹笛（箭、收網）速度乘上 pressureRate。
-  // 2026-11-27 量測（短局版，每格 192 場；豎琴 / 紫晶的基準見 mushroomWorld.ts）：
-  //                     草原    蘑菇秘境
-  //   遊俠・AI 精靈       0.80     0.78
-  //   遊俠・玩家速度精靈   0.94     0.93
+  // 2026-11-27 量測（短局版，每格 192 場；豎琴 / 紫晶的基準見 mushroomWorld.ts）；括號內是加入藤蔓連鎖、陷阱常駐前的數字：
+  //                     草原          蘑菇秘境
+  //   遊俠・AI 精靈       0.90 (0.80)   0.88 (0.78)
+  //   遊俠・玩家速度精靈   0.97 (0.94)   0.96 (0.93)
+  // 網站版尚未重新量測（下面是連鎖前的數字）
   // 射程（arrow.range）主要影響草原、收網時間（reel.time）主要影響蘑菇秘境：兩張地圖靠這兩個數值拉平
   // 網站版（每格 96 場）：AI 精靈 0.70 / 0.74；玩家速度精靈 0.79 / 0.93（蘑菇秘境偏高，尚未拉平，見 docs/ranger.md 6.3）
   ranger: {
-    // 藤蔓陷阱：充能制（最多 charges 層、每 recharge 秒回一層）；放下 armTime 秒後生效、存在 life 秒；場上最多 maxActive 個（超過時最舊的消失）。
+    // 藤蔓陷阱：充能制（最多 charges 層、每 recharge 秒回一層）；放下 armTime 秒後生效；陷阱不會隨時間消失，放新的也不會讓舊的消失（只有被踩到或被拆掉才會不見）。
     // 哥布林在 revealRadius 內才看得到；踩到（triggerRadius）受困 snare 秒，並在精靈小地圖顯示 minimapTime 秒。
     // 哥布林可在 disarmRange 內用攪局拆掉；被困哥布林 noTrapRadius 內不能再放陷阱（避免專抓救援者的誘餌組合太強）
-    trap: { charges: 2, recharge: 12, maxActive: 3, armTime: 1, life: 45, revealRadius: 3, triggerRadius: 1.1, snare: 3, minimapTime: 4, disarmRange: 3.2, noTrapRadius: 4, castTime: 0.35 },
+    trap: { charges: 4, recharge: 12, armTime: 1, revealRadius: 3, triggerRadius: 1.1, snare: 3, minimapTime: 4, disarmRange: 3.2, noTrapRadius: 4, castTime: 0.35 },
+    // 藤蔓連鎖：已生效、同一區域、彼此相距 linkRange 內且視線可及的陷阱以藤蔓相連（兩個＝一條線、三個互連＝一個面，以此類推）。
+    // 連線 linkRadius 內、或站在三角面內的哥布林也會受困；觸發時整條連鎖的陷阱一起消耗，範圍內的哥布林全部受困。
+    // 中陷阱的哥布林離精靈超過 farRange：小地圖顯示 farReveal 秒，精靈加速 haste 倍 hasteTime 秒（趕過去收網）
+    chain: { linkRange: 8, linkRadius: 0.6, farRange: 12, farReveal: 20, haste: 1.3, hasteTime: 3 },
     // 召喚箭矢：吹笛 draw 秒後射出，飛行速度 speed、射程 range。飛行距離 fullRange 以內命中只減速（slow＝速度倍率），
     // 超過才標記 markTime 秒；命中已標記 / 減速中的目標＝受困 snare 秒。
     // 射中哥布林時冷卻縮短為 hitCooldown（獎勵連中兩箭；落空則要等完整的 cooldown），
     // markTime 要比「冷卻 + 吹奏 + 飛行」長，第二箭才來得及
     arrow: { range: 24, speed: 45, hitRadius: 0.6, cooldown: 3, hitCooldown: 1.5, draw: 0.35, fullRange: 6, slow: 0.6, slowTime: 1.5, markTime: 8, markSlow: 0.6, snare: 3 },
-    // 後躍撤步：time 秒內向後跳 distance 公尺，在起跳位置留下一個不佔充能的陷阱（立即生效）
+    // 後躍撤步：time 秒內向後跳 distance 公尺，在起跳位置留下一個不佔充能的陷阱（0.4 秒後生效，可與其他陷阱連鎖），
+    // 同時朝前方（起跳前面對的方向，有輔助瞄準）射出一支召喚箭矢；這支箭不用吹奏、不影響箭的冷卻
     leap: { distance: 6, time: 0.38, cooldown: 14 },
     // 收網（捕獲）：只能對 minRange～maxRange 內、視線可及的受困哥布林使用；進度保留沿用 elf.capture 的 keep 規則。
     // 隊友在被困者 cutRange 內按攪局＝割斷繩索；割繩的哥布林會被藤蔓反纏、標記 cutMark 秒（救人有風險，0＝關閉）

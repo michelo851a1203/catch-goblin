@@ -3,7 +3,7 @@ import { groundAt } from '../ground'
 import { CELL, glowSprite } from '../fx/atlas'
 import type { ParticleSpec } from '../fx/Particles'
 import { noOutline, toon } from '../toon'
-import type { Trap } from '../ranger'
+import type { Trap, TrapChain } from '../ranger'
 import type { ElfMagicFx, ParticleSink } from './ElfMagicFx'
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
@@ -22,6 +22,16 @@ interface TrapView {
   group: THREE.Group
   glow: THREE.Sprite
   age: number
+  show: number
+}
+
+// 藤蔓連鎖：連線是一條貼地的藤蔓（兩股交纏），面是一片淡綠色的光
+interface LinkView {
+  group: THREE.Group
+  show: number
+}
+interface FaceView {
+  mesh: THREE.Mesh
   show: number
 }
 
@@ -44,6 +54,8 @@ export class RangerFx {
   private spec: ParticleSpec = { x: 0, y: 0, z: 0 }
   private traps = new Map<number, TrapView>()
   private arrows = new Map<number, ArrowView>()
+  private links = new Map<string, LinkView>()
+  private faces = new Map<string, FaceView>()
   private acc = { amb: 0, draw: 0, rope: 0 }
   private t = 0
   // 網格資源（陷阱、箭矢、繩索）第一次用到才建立：three 建立物件時會以 Math.random 產生 UUID，
@@ -71,6 +83,8 @@ export class RangerFx {
       shaft: new THREE.CylinderGeometry(0.022, 0.022, 0.9, 6),
       head: new THREE.ConeGeometry(0.07, 0.24, 6),
       lasso: new THREE.TorusGeometry(0.75, 0.035, 5, 24),
+      // 連線用的單位長度藤蔓（沿 +Z，長 1，之後依兩個陷阱的距離縮放）
+      strand: new THREE.CylinderGeometry(0.045, 0.045, 1, 5).rotateX(Math.PI / 2).translate(0, 0, 0.5),
     }
     const mat = {
       vine: toon(VINE),
@@ -78,6 +92,7 @@ export class RangerFx {
       petal: toon(0xfffbe8),
       light: noOutline(new THREE.MeshBasicMaterial({ color: 0xe8ffc0, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })),
       rope: noOutline(new THREE.MeshBasicMaterial({ color: 0xc8ff9a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
+      face: noOutline(new THREE.MeshBasicMaterial({ color: 0x9be36a, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
     }
     // 繩索：水平與垂直兩條帶子交叉，任何角度都看得到
     const ropeGeo = new THREE.BufferGeometry()
@@ -296,6 +311,99 @@ export class RangerFx {
       v.group.rotation.y = this.t * 0.25 + t.id
       ;(v.glow.material as THREE.SpriteMaterial).opacity = armed ? 0.3 + Math.sin(this.t * 4 + t.id) * 0.12 : 0.1
     }
+  }
+
+  // 每幀：依目前的連鎖建立 / 移除連線與面的網格。seen＝目前的觀看者看不看得到這條連鎖
+  syncChains(chains: readonly TrapChain[], seen: (ch: TrapChain) => boolean) {
+    const want = new Map<string, { a: Trap; b: Trap; vis: boolean }>()
+    const wantF = new Map<string, { t: [Trap, Trap, Trap]; vis: boolean }>()
+    for (const ch of chains) {
+      const vis = seen(ch)
+      for (const [a, b] of ch.links) want.set(`${a.id}-${b.id}`, { a, b, vis })
+      for (const f of ch.faces) wantF.set(`${f[0].id}-${f[1].id}-${f[2].id}`, { t: f, vis })
+    }
+    for (const [k, v] of this.links)
+      if (!want.has(k)) {
+        this.scene.remove(v.group)
+        this.links.delete(k)
+      }
+    for (const [k, v] of this.faces)
+      if (!wantF.has(k)) {
+        this.dropFace(v)
+        this.faces.delete(k)
+      }
+    for (const [k, w] of want) {
+      let v = this.links.get(k)
+      if (!v) {
+        v = this.buildLink(w.a.pos, w.b.pos)
+        this.links.set(k, v)
+      }
+      v.show += ((w.vis ? 1 : 0) - v.show) * 0.25
+      v.group.visible = v.show > 0.03
+      v.group.scale.x = v.group.scale.y = Math.max(0.001, v.show)
+    }
+    for (const [k, w] of wantF) {
+      let v = this.faces.get(k)
+      if (!v) {
+        v = this.buildFace(w.t)
+        this.faces.set(k, v)
+      }
+      v.show += ((w.vis ? 1 : 0) - v.show) * 0.25
+      v.mesh.visible = v.show > 0.03
+      ;(v.mesh.material as THREE.MeshBasicMaterial).opacity = (0.14 + Math.sin(this.t * 3) * 0.05) * v.show
+    }
+  }
+
+  private buildLink(a: THREE.Vector3, b: THREE.Vector3): LinkView {
+    const { geo, mat } = this.r
+    const ya = groundAt(a.x, a.z) + 0.08
+    const yb = groundAt(b.x, b.z) + 0.08
+    const len = Math.hypot(b.x - a.x, yb - ya, b.z - a.z)
+    const group = new THREE.Group()
+    group.position.set(a.x, ya, a.z)
+    group.lookAt(b.x, yb, b.z)
+    // 兩股藤蔓微微錯開，中間點綴幾片葉子
+    for (const off of [-0.05, 0.05]) {
+      const st = new THREE.Mesh(geo.strand, mat.vine)
+      st.scale.set(1, 1, len)
+      st.position.x = off
+      group.add(st)
+    }
+    const n = Math.max(1, Math.floor(len / 1.4))
+    for (let i = 1; i <= n; i++) {
+      const lf = new THREE.Mesh(geo.leaf, mat.leaf)
+      lf.scale.set(1.2, 0.3, 0.6)
+      lf.position.set((i % 2 ? 1 : -1) * 0.1, 0.03, (i / (n + 1)) * len)
+      lf.rotation.y = i % 2 ? 0.6 : -0.6
+      group.add(lf)
+    }
+    group.traverse((o) => {
+      o.castShadow = false
+    })
+    this.scene.add(group)
+    return { group, show: 0 }
+  }
+
+  private dropFace(v: FaceView) {
+    this.scene.remove(v.mesh)
+    v.mesh.geometry.dispose()
+    ;(v.mesh.material as THREE.Material).dispose()
+  }
+
+  private buildFace(t: [Trap, Trap, Trap]): FaceView {
+    const pos = new Float32Array(9)
+    t.forEach((tr, i) => {
+      pos[i * 3] = tr.pos.x
+      pos[i * 3 + 1] = groundAt(tr.pos.x, tr.pos.z) + 0.05
+      pos[i * 3 + 2] = tr.pos.z
+    })
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    const mesh = new THREE.Mesh(g, this.r.mat.face.clone())
+    mesh.renderOrder = 4
+    mesh.frustumCulled = false
+    this.scene.add(mesh)
+    return { mesh, show: 0 }
   }
 
   // ── 受困 / 標記 ──
@@ -524,6 +632,10 @@ export class RangerFx {
       ;(v.glow.material as THREE.Material).dispose()
     }
     this.traps.clear()
+    for (const v of this.links.values()) this.scene.remove(v.group)
+    this.links.clear()
+    for (const v of this.faces.values()) this.dropFace(v)
+    this.faces.clear()
     const r = this.res
     if (!r) return
     this.scene.remove(r.ropeMesh, r.lasso)

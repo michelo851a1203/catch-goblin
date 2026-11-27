@@ -8,7 +8,7 @@ import { GHOST_OPACITY, RANGER_FLUTE } from './elf/rigs'
 import { CONFIG, type ElfKind, type MapId, type Role } from './config'
 import { Actor, Elf, Goblin, setBarProgress, type ChargePhase, type ElfAction } from './entities'
 import { behindSpot, fearTargets, nearestTarget, sweepHit, targetable } from './violin'
-import { TRAP_GONE, arrowEffect, canPlantAt, pressured, reelRange, type ArrowEffect, type Trap } from './ranger'
+import { TRAP_GONE, arrowEffect, canPlantAt, chainCatches, chainDist, pressured, reelRange, trapChains, type ArrowEffect, type Trap, type TrapChain } from './ranger'
 import { GAP_HALF, World, type Warp } from './world'
 import { groundAt, setGround } from './ground'
 import { makeSprite, noOutline, releaseToonGpu } from './toon'
@@ -59,6 +59,8 @@ export type GameEvent =
   | { e: 'arrowHit'; id: number; p: V2; g: number; k: ArrowEffect }
   | { e: 'leap'; o: V2; d: V2 }
   | { e: 'leapEnd'; p: V2 }
+  // 遊俠精靈：藤蔓（陷阱或連鎖）纏住哥布林 g；far＝離精靈很遠（小地圖顯示較久、精靈加速）
+  | { e: 'vine'; g: number; far: number }
   | { e: 'left'; name: string }
   // 蘑菇秘境：角色 s 走進傳送門 / 踩到彈跳蘑菇 w
   | { e: 'warp'; s: Slot; w: number }
@@ -1050,6 +1052,39 @@ export class Game {
     return this.elf.ranger && pressured(this.elf.pos, this.goblins, R.pressureRadius) ? R.pressureRate : 1
   }
 
+  // 目前場上的藤蔓連鎖（已生效的陷阱；連線不能穿牆）。房主與加入者都由陷阱清單算出，不另外同步
+  trapChains(): TrapChain[] {
+    const r = this.elf.ranger
+    return r ? trapChains(r.traps, (a, b) => this.world.lineOfSight(a.pos, b.pos)) : []
+  }
+
+  // 哥布林在 p 按攪局會拆掉的陷阱：disarmRange 內最近的陷阱；靠近連鎖的連線 / 面時，拆掉那條連鎖上最近的陷阱（連鎖跟著斷開）
+  disarmTarget(p: THREE.Vector3): Trap | null {
+    const r = this.elf.ranger
+    if (!r) return null
+    const R = CONFIG.ranger.trap
+    const region = this.world.regionOf(p)
+    let best: Trap | null = null
+    let bd = R.disarmRange
+    for (const tr of r.traps) {
+      const d = d2(tr.pos, p)
+      if (d < bd && tr.region === region) {
+        bd = d
+        best = tr
+      }
+    }
+    if (best) return best
+    let cd = R.disarmRange
+    for (const ch of this.trapChains()) {
+      if (ch.traps.length < 2 || ch.region !== region) continue
+      const d = chainDist(ch, p)
+      if (d >= cd) continue
+      cd = d
+      best = ch.traps.reduce((a, b) => (d2(a.pos, p) <= d2(b.pos, p) ? a : b))
+    }
+    return best
+  }
+
   // 陷阱長出來的位置：面前 1.3 公尺；被牆擋住就放在腳邊
   private trapSpot(out = new THREE.Vector3()) {
     const elf = this.elf
@@ -1079,11 +1114,9 @@ export class Game {
 
   private addTrap(pos: THREE.Vector3, arm: number) {
     const r = this.elf.ranger!
-    const T = CONFIG.ranger.trap
-    const tr: Trap = { id: ++r.seq, pos: pos.clone().setY(0), arm, life: T.life, region: this.world.regionOf(pos) }
+    const tr: Trap = { id: ++r.seq, pos: pos.clone().setY(0), arm, region: this.world.regionOf(pos) }
     r.traps.push(tr)
     this.emit({ e: 'trap', id: tr.id, p: [r2(pos.x), r2(pos.z)], arm })
-    while (r.traps.length > T.maxActive) this.removeTrap(r.traps[0], TRAP_GONE.old, -1)
   }
 
   private removeTrap(tr: Trap, why: number, g: number) {
@@ -1109,20 +1142,7 @@ export class Game {
     const A = CONFIG.ranger.arrow
     if (!r || !this.elfCanAct() || r.cd.arrow > 0) return false
     dir = dir.clone()
-    if (!aim) {
-      let best = AIM_CONE
-      for (const g of this.goblins) {
-        if (!targetable(g)) continue
-        v2.subVectors(g.pos, elf.pos).setY(0)
-        const d = v2.length()
-        if (d < 0.5 || d > A.range) continue
-        const cos = v2.dot(dir) / d
-        if (cos > best && this.world.lineOfSight(elf.pos, g.pos)) {
-          best = cos
-          aim = g
-        }
-      }
-    }
+    aim ??= this.autoAim(dir)
     r.cd.arrow = A.cooldown
     r.draw = { t: 0, dir, aim: aim ? aim.id : -1 }
     elf.yaw = Math.atan2(dir.x, dir.z)
@@ -1131,19 +1151,45 @@ export class Game {
     return true
   }
 
+  // 輔助瞄準：準星 AIM_CONE 內、射程內、視線可及的哥布林（取最接近準星的）
+  private autoAim(dir: THREE.Vector3): Goblin | null {
+    const elf = this.elf
+    const A = CONFIG.ranger.arrow
+    let aim: Goblin | null = null
+    let best = AIM_CONE
+    for (const g of this.goblins) {
+      if (!targetable(g)) continue
+      v2.subVectors(g.pos, elf.pos).setY(0)
+      const d = v2.length()
+      if (d < 0.5 || d > A.range) continue
+      const cos = v2.dot(dir) / d
+      if (cos > best && this.world.lineOfSight(elf.pos, g.pos)) {
+        best = cos
+        aim = g
+      }
+    }
+    return aim
+  }
+
   private fireArrow() {
+    const r = this.elf.ranger!
+    const { dir, aim } = r.draw!
+    r.draw = null
+    this.launchArrow(dir, this.goblins[aim] ?? null)
+  }
+
+  // 射出一支箭（朝 dir；有目標時瞄準牠在箭飛到時的位置）
+  private launchArrow(dir: THREE.Vector3, g: Goblin | null) {
     const elf = this.elf
     const r = elf.ranger!
     const A = CONFIG.ranger.arrow
-    const dir = r.draw!.dir
-    const g = this.goblins[r.draw!.aim]
+    dir = dir.clone()
     if (g && targetable(g)) {
       // 瞄準目標在箭飛到時的位置
       const lead = d2(g.pos, elf.pos) / A.speed
       v2.copy(g.pos).addScaledVector(g.vel, lead).sub(elf.pos).setY(0)
       if (v2.lengthSq() > 1e-4) dir.copy(v2).normalize()
     }
-    r.draw = null
     elf.yaw = Math.atan2(dir.x, dir.z)
     const len = this.world.rayDistance(elf.pos, dir, A.range)
     const id = ++r.seq
@@ -1170,6 +1216,9 @@ export class Game {
     const from = elf.pos.clone()
     this.emit({ e: 'leap', o: [r2(from.x), r2(from.z)], d: [r2(dir.x), r2(dir.z)] })
     if (canPlantAt(from, this.goblins)) this.addTrap(from, LEAP_TRAP_ARM)
+    // 起跳的同時朝前方（追來的哥布林）射出一支召喚箭矢：不用吹奏、不佔箭的冷卻
+    const fwd = dir.clone().negate()
+    this.launchArrow(fwd, this.autoAim(fwd))
     return true
   }
 
@@ -1223,16 +1272,7 @@ export class Game {
       }
       return true
     }
-    const region = this.world.regionOf(g.pos)
-    let best: Trap | null = null
-    let bd = R.trap.disarmRange
-    for (const tr of elf.ranger!.traps) {
-      const d = d2(tr.pos, g.pos)
-      if (d < bd && tr.region === region) {
-        bd = d
-        best = tr
-      }
-    }
+    const best = this.disarmTarget(g.pos)
     if (best) {
       g.interfereCd = CONFIG.goblin.interfereCooldown
       this.removeTrap(best, TRAP_GONE.cut, g.id)
@@ -1250,6 +1290,7 @@ export class Game {
     const auth = this.authority
     r.cd.arrow = Math.max(0, r.cd.arrow - dt)
     r.cd.leap = Math.max(0, r.cd.leap - dt)
+    r.haste = Math.max(0, r.haste - dt)
     if (r.charges < R.trap.charges) {
       r.recharge -= dt
       if (r.recharge <= 0 && auth) {
@@ -1310,24 +1351,22 @@ export class Game {
         this.emit({ e: 'arrowHit', id: a.id, p: [r2(a.pos.x), r2(a.pos.z)], g: -1, k: 'slow' })
       }
     }
-    // 陷阱：生效計時、存在時間、觸發
-    for (let i = r.traps.length - 1; i >= 0; i--) {
-      const tr = r.traps[i]
-      tr.arm = Math.max(0, tr.arm - dt)
-      tr.life -= dt
-      if (tr.life <= 0) {
-        this.removeTrap(tr, TRAP_GONE.old, -1)
-        continue
-      }
-      if (tr.arm > 0) continue
-      for (const g of this.goblins) {
-        if (g.captured || g.held || g.grace > 0 || g.snare > 0) continue
-        if (d2(g.pos, tr.pos) > R.trap.triggerRadius || this.world.regionOf(g.pos) !== tr.region) continue
+    // 陷阱：生效計時（陷阱不會隨時間消失）
+    for (const tr of r.traps) tr.arm = Math.max(0, tr.arm - dt)
+    // 觸發：踩到連鎖上的任何陷阱、連線或面，範圍內的哥布林全部受困，整條連鎖的陷阱一起消耗
+    for (const ch of this.trapChains()) {
+      const hit = this.goblins.filter(
+        (g) => !g.captured && !g.held && g.grace <= 0 && g.snare <= 0 && this.world.regionOf(g.pos) === ch.region && chainCatches(ch, g.pos),
+      )
+      if (!hit.length) continue
+      for (const g of hit) {
+        const far = d2(g.pos, elf.pos) > R.chain.farRange
         this.snareGoblin(g, R.trap.snare)
-        g.reveal = R.trap.minimapTime
-        this.removeTrap(tr, TRAP_GONE.snap, g.id)
-        break
+        g.reveal = Math.max(g.reveal, far ? R.chain.farReveal : R.trap.minimapTime)
+        if (far) r.haste = R.chain.hasteTime
+        this.emit({ e: 'vine', g: g.id, far: far ? 1 : 0 })
       }
+      for (const tr of ch.traps) this.removeTrap(tr, TRAP_GONE.snap, hit[0].id)
     }
   }
 
@@ -1337,7 +1376,14 @@ export class Game {
     const r = elf.ranger!
     for (let k = 0; k < this.fx.rate('elftrail', 1.5 + elf.moveAmt * 10, dt); k++) this.fx.trail(elf.pos, Math.random() < 0.6 ? 0xc8f5a0 : 0xfff6c8, 0.2 + Math.random() * 1.4)
     this.rangerFx.ambient(dt, elf.pos, elf.moveAmt)
-    this.rangerFx.syncTraps(r.traps, this.me === 'elf' ? null : this.focusActor().pos, CONFIG.ranger.trap.revealRadius)
+    const viewer = this.me === 'elf' ? null : this.focusActor().pos
+    this.rangerFx.syncTraps(r.traps, viewer, CONFIG.ranger.trap.revealRadius)
+    this.rangerFx.syncChains(
+      this.trapChains().filter((ch) => ch.traps.length > 1),
+      (ch) => this.chainVisible(ch),
+    )
+    // 加速中：腳邊多一些葉片
+    if (r.haste > 0) for (let k = 0; k < this.fx.rate('rhaste', 14, dt); k++) this.fx.trail(elf.pos, 0xb6ff8a, 0.6 + Math.random() * 1.2)
     const p = elf.packing
     if (p) this.rangerFx.rope(dt, elf.pos, elf.yaw, p.g.pos, p.t / p.total)
     else this.rangerFx.ropeOff()
@@ -1346,6 +1392,11 @@ export class Game {
   // 目前的觀看者看不看得到這個位置的陷阱：精靈玩家都看得到；哥布林（含觀戰）要靠近到 revealRadius 內
   private trapVisible(p: THREE.Vector3) {
     return this.me === 'elf' || d2(p, this.focusActor().pos) < CONFIG.ranger.trap.revealRadius
+  }
+
+  // 藤蔓連鎖（連線與面）：同上，哥布林要靠近到連鎖的 revealRadius 內
+  private chainVisible(ch: TrapChain) {
+    return this.me === 'elf' || chainDist(ch, this.focusActor().pos) < CONFIG.ranger.trap.revealRadius
   }
 
   private interruptPacking(reason: 'ult' | 'interfere', by?: Goblin) {
@@ -1700,7 +1751,7 @@ export class Game {
         const p = new THREE.Vector3(ev.p[0], 0, ev.p[1])
         if (!this.authority) {
           r.plant = -1
-          if (!r.traps.some((x) => x.id === ev.id)) r.traps.push({ id: ev.id, pos: p.clone(), arm: ev.arm, life: CONFIG.ranger.trap.life, region: this.world.regionOf(p) })
+          if (!r.traps.some((x) => x.id === ev.id)) r.traps.push({ id: ev.id, pos: p.clone(), arm: ev.arm, region: this.world.regionOf(p) })
         }
         if (this.trapVisible(p)) {
           this.rangerFx.trapSprout(p)
@@ -1718,25 +1769,36 @@ export class Game {
           if (i >= 0) r.traps.splice(i, 1)
         }
         const g = this.goblins[ev.g]
-        if (ev.why === TRAP_GONE.snap && g) {
-          if (!this.authority) {
-            g.snare = CONFIG.ranger.trap.snare
-            g.reveal = CONFIG.ranger.trap.minimapTime
-          }
-          this.rangerFx.snareBurst(g.pos)
-          sfx.trapSnap()
-          this.floatText(t('fSnared'), g.pos, '#a8f08a')
-          if (g.isPlayer) {
-            this.shake = Math.max(this.shake, 0.4)
-            this.toast(t('tYouSnared'), 'bad')
-          } else if (this.role === 'elf') this.toast(t('tTrapSprung', { name: g.name }), 'good')
-          else if (!me?.captured) this.toast(t('tAllySnared', { name: g.name }), 'warn')
+        // 被踩到：哥布林受困由 vine 事件處理，這裡只有陷阱本身收起來
+        if (ev.why === TRAP_GONE.snap) {
+          if (seen) this.rangerFx.trapWither(p)
         } else if (ev.why === TRAP_GONE.cut) {
           this.rangerFx.trapWither(p)
           sfx.interfere()
           this.floatText(t('fDisarmed'), p, '#dddddd', 0.6)
           if (this.role === 'elf') this.toast(t('tTrapCut', { name: g?.name ?? t('aGoblin') }), 'warn')
         } else if (seen) this.rangerFx.trapWither(p)
+        return
+      }
+      case 'vine': {
+        const g = this.goblins[ev.g]
+        const r = elf.ranger
+        if (!g || !r) return
+        const C = CONFIG.ranger.chain
+        if (!this.authority) {
+          g.snare = CONFIG.ranger.trap.snare
+          g.mark = g.slow = 0
+          g.reveal = Math.max(g.reveal, ev.far ? C.farReveal : CONFIG.ranger.trap.minimapTime)
+          if (ev.far) r.haste = C.hasteTime
+        }
+        this.rangerFx.snareBurst(g.pos)
+        sfx.trapSnap()
+        this.floatText(t('fSnared'), g.pos, '#a8f08a')
+        if (g.isPlayer) {
+          this.shake = Math.max(this.shake, 0.4)
+          this.toast(t('tYouSnared'), 'bad')
+        } else if (this.role === 'elf') this.toast(ev.far ? t('tTrapFar', { name: g.name, s: C.farReveal }) : t('tTrapSprung', { name: g.name }), 'good')
+        else if (!me?.captured) this.toast(t('tAllySnared', { name: g.name }), 'warn')
         return
       }
       case 'draw': {
@@ -1917,7 +1979,7 @@ export class Game {
     this.world.resolve(a.pos, a.radius)
     a.yaw = p[2]
     // 速度只用來預測與內插；限制在合法的最高速度內（精靈以衝鋒計），避免灌入極大值讓其他玩家畫面上的角色亂飛
-    const vmax = (a === this.elf ? Math.max(CONFIG.elf.speed, CONFIG.violin.charge.speed) : this.maxSpeedOf(a)) * 1.3
+    const vmax = (a === this.elf ? Math.max(this.maxSpeedOf(a), CONFIG.violin.charge.speed) : this.maxSpeedOf(a)) * 1.3
     a.vel.set(p[3], 0, p[4])
     // 只在超過時才縮放（clampLength 即使沒超過也會除再乘，產生浮點誤差）
     if (a.vel.lengthSq() > vmax * vmax) a.vel.setLength(vmax)
@@ -1925,7 +1987,9 @@ export class Game {
 
   // 該角色可能的最高移動速度（哥布林以衝刺計；精靈的衝鋒期間不採用回報的位置，見 applyInput 的 locked）
   private maxSpeedOf(a: Actor) {
-    return a === this.elf ? CONFIG.elf.speed : CONFIG.goblin.speed * CONFIG.goblin.dashMultiplier
+    // 遊俠加速期間放寬到加速後的速度（封包延遲由位移額度的上限吸收）
+    if (a === this.elf) return CONFIG.elf.speed * (this.elf.ranger && this.elf.ranger.haste > 0 ? CONFIG.ranger.chain.haste : 1)
+    return CONFIG.goblin.speed * CONFIG.goblin.dashMultiplier
   }
 
   // 房主：玩家離線後改由 AI 接手
@@ -2020,8 +2084,8 @@ export class Game {
         // 17~24：紫晶精靈
         r2(e.cd.stealth), r2(e.cd.eye), r2(e.cd.charge), r2(e.stealthCast), r2(e.stealth), r2(e.eye),
         e.charge ? CHARGE_PHASES.indexOf(e.charge.phase) : -1, e.charge ? r2(e.charge.t) : 0,
-        // 25~31：遊俠精靈（其他精靈不送）
-        ...(rg ? [rg.charges, r2(rg.recharge), r2(rg.cd.arrow), r2(rg.cd.leap), rg.draw ? r2(rg.draw.t) : -1, r2(rg.plant), rg.leap ? r2(rg.leap.t) : -1] : []),
+        // 25~32：遊俠精靈（其他精靈不送）
+        ...(rg ? [rg.charges, r2(rg.recharge), r2(rg.cd.arrow), r2(rg.cd.leap), rg.draw ? r2(rg.draw.t) : -1, r2(rg.plant), rg.leap ? r2(rg.leap.t) : -1, r2(rg.haste)] : []),
       ],
       g: this.goblins.map((g) => [
         r2(g.pos.x), r2(g.pos.z), r2(g.yaw), r2(g.vel.x), r2(g.vel.z),
@@ -2031,7 +2095,7 @@ export class Game {
         // 16~19：遊俠精靈的受困 / 標記 / 減速 / 小地圖顯示
         ...(rg ? [r2(g.snare), r2(g.mark), r2(g.slow), r2(g.reveal)] : []),
       ]),
-      ...(rg ? { tr: rg.traps.map((x) => [x.id, r2(x.pos.x), r2(x.pos.z), r2(x.arm), r2(x.life)]) } : {}),
+      ...(rg ? { tr: rg.traps.map((x) => [x.id, r2(x.pos.x), r2(x.pos.z), r2(x.arm)]) } : {}),
     }
   }
 
@@ -2075,6 +2139,7 @@ export class Game {
       rg.recharge = E[26]
       rg.cd.arrow = E[27]
       rg.cd.leap = E[28]
+      rg.haste = E[32] ?? 0
       // 吹笛 / 後躍由事件驅動；房主已經結束、本機卻還停著（漏掉事件）才清掉
       if (E[29] < 0 && rg.draw && rg.draw.t > CONFIG.ranger.arrow.draw / CONFIG.ranger.pressureRate + STALE_RANGER) rg.draw = null
       if (E[30] < 0 && rg.plant > CONFIG.ranger.trap.castTime + STALE_RANGER) rg.plant = -1
@@ -2082,9 +2147,8 @@ export class Game {
       if (Array.isArray(m.tr)) {
         const old = new Map(rg.traps.map((x) => [x.id, x]))
         rg.traps = m.tr.filter((x) => Array.isArray(x) && x.every(Number.isFinite)).map((x) => {
-          const tr = old.get(x[0]) ?? { id: x[0], pos: new THREE.Vector3(x[1], 0, x[2]), arm: x[3], life: x[4], region: this.world.regionOf(v1.set(x[1], 0, x[2])) }
+          const tr = old.get(x[0]) ?? { id: x[0], pos: new THREE.Vector3(x[1], 0, x[2]), arm: x[3], region: this.world.regionOf(v1.set(x[1], 0, x[2])) }
           tr.arm = x[3]
-          tr.life = x[4]
           return tr
         })
       }
@@ -2531,7 +2595,9 @@ export class Game {
     }
 
     // 移動
-    const elfSpeed = elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : elf.kind === 'violin' ? CONFIG.violin.aiSpeed : elf.kind === 'ranger' ? CONFIG.ranger.aiSpeed : CONFIG.elf.aiSpeed
+    const elfSpeed =
+      (elf.isPlayer || elf.netDriven ? CONFIG.elf.speed : elf.kind === 'violin' ? CONFIG.violin.aiSpeed : elf.kind === 'ranger' ? CONFIG.ranger.aiSpeed : CONFIG.elf.aiSpeed) *
+      (elf.ranger && elf.ranger.haste > 0 ? CONFIG.ranger.chain.haste : 1)
     if (elf.charge && (auth || elf.isPlayer)) {
       // 衝鋒的位移在 updateCharge 處理
       elf.wish.set(0, 0, 0)
@@ -2872,7 +2938,7 @@ export class Game {
       const rg = elf.ranger
       const cut = !!rg && !!elf.packing && elf.packing.g !== g
       const cutNear = cut && d2(g.pos, elf.packing!.g.pos) < CONFIG.ranger.reel.cutRange
-      const trapNear = !!rg && !g.captured && !cutNear && rg.traps.some((x) => d2(x.pos, g.pos) < CONFIG.ranger.trap.disarmRange)
+      const trapNear = !!rg && !g.captured && !cutNear && !!this.disarmTarget(g.pos)
       h.skills = [
         { key: keyLabel(b.dash), code: b.dash, name: t('skillDash'), icon: 'skill-dash', cd: g.dashCd, max: G.dashCooldown, active: g.dashT > 0, usable: !g.disabled },
         { key: keyLabel(b.interfere), code: b.interfere, name: cut ? t('skillCut') : trapNear ? t('skillDisarm') : t('skillInterfere'), icon: 'skill-interfere', cd: g.interfereCd, max: G.interfereCooldown, active: false, usable: (trapNear || (!!elf.packing && elf.packing.g !== g)) && g.canInterfere },
@@ -3052,8 +3118,28 @@ export class Game {
     g.fillStyle = '#c9a36a'
     g.fillRect(tx(-3), tz(-3), 6 * sc, 6 * sc)
     const elf = this.elf
-    // 遊俠的陷阱：精靈玩家都看得到；哥布林只看得到身邊的
-    if (elf.ranger)
+    // 遊俠的陷阱與藤蔓連鎖：精靈玩家都看得到；哥布林只看得到身邊的
+    if (elf.ranger) {
+      for (const ch of this.trapChains()) {
+        if (ch.traps.length < 2 || !this.chainVisible(ch)) continue
+        g.fillStyle = 'rgba(125,255,90,0.22)'
+        for (const [a, b, c] of ch.faces) {
+          g.beginPath()
+          g.moveTo(tx(a.pos.x), tz(a.pos.z))
+          g.lineTo(tx(b.pos.x), tz(b.pos.z))
+          g.lineTo(tx(c.pos.x), tz(c.pos.z))
+          g.closePath()
+          g.fill()
+        }
+        g.strokeStyle = 'rgba(125,255,90,0.85)'
+        g.lineWidth = 1.4
+        for (const [a, b] of ch.links) {
+          g.beginPath()
+          g.moveTo(tx(a.pos.x), tz(a.pos.z))
+          g.lineTo(tx(b.pos.x), tz(b.pos.z))
+          g.stroke()
+        }
+      }
       for (const tr of elf.ranger.traps) {
         if (!this.trapVisible(tr.pos)) continue
         g.beginPath()
@@ -3062,6 +3148,7 @@ export class Game {
         g.lineWidth = 1.6
         g.stroke()
       }
+    }
     const dot = (p: THREE.Vector3, color: string, r: number) => {
       g.beginPath()
       g.arc(tx(p.x), tz(p.z), r, 0, Math.PI * 2)
